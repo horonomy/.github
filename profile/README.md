@@ -12,11 +12,21 @@ Our namesake does not create the sky. It observes it, understands it, records it
 
 ## Products
 
-| Product | What it is | Status | Where |
-| --- | --- | --- | --- |
-| **AI Agent Assembly** | Governance platform for AI agents — assemble autonomous agents with explicit roles, tools, policies, and operating boundaries, enforced across three interception layers (SDK, sidecar proxy, eBPF). | In development | [github.com/ai-agent-assembly](https://github.com/ai-agent-assembly) |
-| **ArcheWeave** | — | Coming soon | — |
-| **Harbinger** | — | Coming soon | — |
+### 🤖 AI Agent Assembly
+
+[![release](https://img.shields.io/github/v/release/ai-agent-assembly/agent-assembly?include_prereleases&sort=semver&label=release&logo=github)](https://github.com/ai-agent-assembly/agent-assembly/releases) [![CI](https://github.com/ai-agent-assembly/agent-assembly/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/ai-agent-assembly/agent-assembly/actions/workflows/ci.yml?query=branch%3Amaster) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+Governance platform for AI agents — assemble autonomous agents with explicit roles, tools, policies, and operating boundaries, enforced across three interception layers (SDK, sidecar proxy, eBPF).
+
+🌐 [agent-assembly.com](https://agent-assembly.com) · 📚 [docs](https://docs.agent-assembly.com) · 💻 [github.com/ai-agent-assembly](https://github.com/ai-agent-assembly)
+
+### 🧩 ArcheWeave · _coming soon_
+
+Public repository and website not yet available.
+
+### 🛰️ Harbinger · _coming soon_
+
+Public repository and website not yet available.
 
 > More systems are awaiting stars. Additional research tracks — governance runtimes, change intelligence, and workflow primitives for autonomous software — are uncharted for now.
 
