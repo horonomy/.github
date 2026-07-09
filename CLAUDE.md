@@ -27,7 +27,7 @@ composable rather than monolithic, and auditable from the start.
 | **ArcheWeave** | Future product — not yet public. Details to be confirmed. |
 | **Harbinger** | Future product — not yet public. Details to be confirmed. |
 | `official-website` | The `horonomy.dev` marketing site (Docusaurus + TypeScript). |
-| `inner-document` | Internal documentation site (private). |
+| `internal-docs` | Internal documentation site (private). |
 | `.github` | This repo — org profile (`profile/README.md`), community-health files, and this baseline. |
 
 ## Universal conventions (each repo's CONTRIBUTING.md is authoritative)
