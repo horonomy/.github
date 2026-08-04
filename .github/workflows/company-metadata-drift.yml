@@ -1,0 +1,50 @@
+# metadata/company.yaml is the single public source of truth for Horonomy
+# mother-company facts (AAASM-5520). scripts/generate_company_metadata.py derives
+# metadata/generated/company.json (the projection cross-repo consumers read),
+# and the bounded contact regions of SECURITY.md and profile/README.md. This
+# gate fails if any derived artifact drifted from what the generator would
+# produce — on any PR/push that touches the registry, generator, or a generated
+# artifact, and weekly to catch stealth hand-edits.
+name: Company metadata drift check
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - metadata/company.yaml
+      - metadata/generated/company.json
+      - scripts/generate_company_metadata.py
+      - SECURITY.md
+      - profile/README.md
+      - .github/workflows/company-metadata-drift.yml
+  push:
+    branches: [main]
+    paths:
+      - metadata/company.yaml
+      - metadata/generated/company.json
+      - scripts/generate_company_metadata.py
+      - SECURITY.md
+      - profile/README.md
+      - .github/workflows/company-metadata-drift.yml
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    name: generated company metadata matches the registry
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: Show Python version
+        run: python3 --version
+      - name: Run generator in --check mode
+        run: python3 scripts/generate_company_metadata.py --check
