@@ -1,0 +1,77 @@
+# Horonomy company metadata — the single public source of truth for
+# MOTHER-COMPANY facts (AAASM-5520).
+#
+# SCOPE / OWNERSHIP BOUNDARY
+# --------------------------
+# This file owns ONLY company-level facts: the company display name, the
+# canonical company website, the public company contact addresses that Horonomy
+# intentionally publishes, the company's own security-response targets, and a
+# product CATALOG (name / website / GitHub org / lifecycle) that references each
+# product at catalog level.
+#
+# It deliberately DOES NOT redefine any AI Agent Assembly product detail —
+# product contact addresses, mail domains, sender identities, security SLAs, SDK
+# URLs, or package identifiers. Those are owned by the AI Agent Assembly product
+# registry in ai-agent-assembly/.github (metadata/org-profile.yaml, ADR 0014 /
+# AAASM-5519). The catalog here points at the product; it does not re-decide it.
+#
+# Private operational facts (recovery/admin identities, account IDs, secrets)
+# never belong here — they live in the private runbook / secret manager.
+#
+# Regenerate the projection + generated consumers after editing:
+#     python3 scripts/generate_company_metadata.py
+# and commit the registry change together with the regenerated artifacts. CI
+# (.github/workflows/company-metadata-drift.yml) enforces this in --check mode.
+
+# Schema version for the company metadata blocks. Consumers read this to fail
+# clearly (not silently misrender) on an incompatible bump. Validated present
+# and an integer >= 1.
+schema_version: 1
+
+company:
+  name: "Horonomy"
+  # Horonomy's own canonical company website. This is the mother company's
+  # domain and is unrelated to the AI Agent Assembly product's agent-assembly.com
+  # host — do not "migrate" it. `.dev` here is Horonomy's live company domain.
+  website: "https://horonomy.dev"
+
+# Public company contact addresses that Horonomy intentionally publishes today.
+# Only addresses actually published on a public surface are listed — nothing is
+# invented. `hello` is published in the website footer; `security` is published
+# in this repo's SECURITY.md.
+contacts:
+  hello: "hello@horonomy.dev"
+  security: "security@horonomy.dev"
+
+# Horonomy's company-level security-response targets, structured as value/unit
+# pairs (not English prose). These are the company org policy's own targets and
+# are content-equivalent to what SECURITY.md publishes today; a product with its
+# own SECURITY.md keeps its own product-level targets. Units validated against
+# {business_days, calendar_days, hours}.
+security_policy:
+  acknowledgement:
+    value: 72
+    unit: "hours"
+  initial_assessment:
+    value: 7
+    unit: "calendar_days"
+
+# Public product catalog — one entry per Horonomy product, referenced at CATALOG
+# level only. `lifecycle` vocabulary: {available, beta, coming_soon}. `website`
+# and `github_org` may be null for a product without a public presence yet.
+products:
+  - id: "ai-agent-assembly"
+    name: "AI Agent Assembly"
+    website: "https://agent-assembly.com"
+    github_org: "https://github.com/ai-agent-assembly"
+    lifecycle: "beta"
+  - id: "archeweave"
+    name: "ArcheWeave"
+    website: null
+    github_org: null
+    lifecycle: "coming_soon"
+  - id: "harbinger"
+    name: "Harbinger"
+    website: null
+    github_org: null
+    lifecycle: "coming_soon"
