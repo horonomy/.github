@@ -43,7 +43,7 @@ PROFILE_README_PATH = REPO_ROOT / "profile" / "README.md"
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._%+-]*@([A-Za-z0-9-]+\.)+[A-Za-z]{2,}$")
 _URL_RE = re.compile(r"^https://([A-Za-z0-9-]+\.)+[A-Za-z]{2,}(/\S*)?$")
 _SLA_UNITS = frozenset({"business_days", "calendar_days", "hours"})
-_LIFECYCLES = frozenset({"available", "beta", "coming_soon"})
+_LIFECYCLES = frozenset({"available", "beta", "release_candidate", "coming_soon"})
 
 # Forbidden private/secret patterns — the public company registry must never
 # carry operational or secret data. Mirrors the AA registry's guard.

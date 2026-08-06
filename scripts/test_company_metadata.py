@@ -46,6 +46,18 @@ class ValidTest(unittest.TestCase):
         self.assertEqual(proj["security_policy"]["acknowledgement"], {"value": 72, "unit": "hours"})
         self.assertEqual([p["id"] for p in proj["products"]], ["ai-agent-assembly", "archeweave"])
 
+    def test_every_lifecycle_validates_and_survives_projection(self) -> None:
+        # The vocabulary is a published contract: a consumer switch-mapping it
+        # must be able to trust that each member both validates here and
+        # reaches the projection verbatim.
+        for lifecycle in ("coming_soon", "beta", "release_candidate", "available"):
+            with self.subTest(lifecycle=lifecycle):
+                data = _valid()
+                data["products"][0]["lifecycle"] = lifecycle
+                gen.validate(data)
+                proj = json.loads(gen.render_company_json(data))
+                self.assertEqual(proj["products"][0]["lifecycle"], lifecycle)
+
     def test_security_block_renders_shared_sla(self) -> None:
         block = gen.render_security_block(_valid())
         self.assertIn("security@horonomy.dev", block)

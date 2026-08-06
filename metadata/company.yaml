@@ -57,8 +57,18 @@ security_policy:
     unit: "calendar_days"
 
 # Public product catalog — one entry per Horonomy product, referenced at CATALOG
-# level only. `lifecycle` vocabulary: {available, beta, coming_soon}. `website`
-# and `github_org` may be null for a product without a public presence yet.
+# level only. `website` and `github_org` may be null for a product without a
+# public presence yet.
+#
+# `lifecycle` vocabulary, in maturity order:
+#   coming_soon        — in design/estimation, nothing shipped
+#   beta               — shipped, still taking breaking changes
+#   release_candidate  — a tagged `-rc` build, feature-frozen, awaiting GA
+#   available          — generally available
+#
+# Pick the entry that matches what the product's own docs publish today, not
+# the most conservative one available: understating maturity misrepresents a
+# product just as much as overstating it.
 products:
   - id: "ai-agent-assembly"
     name: "AI Agent Assembly"
