@@ -25,7 +25,7 @@
       "name": "AI Agent Assembly",
       "website": "https://agent-assembly.com",
       "github_org": "https://github.com/ai-agent-assembly",
-      "lifecycle": "beta"
+      "lifecycle": "release_candidate"
     },
     {
       "id": "archeweave",

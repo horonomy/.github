@@ -74,7 +74,10 @@ products:
     name: "AI Agent Assembly"
     website: "https://agent-assembly.com"
     github_org: "https://github.com/ai-agent-assembly"
-    lifecycle: "beta"
+    # The product ships `v0.0.1-rc` builds and its own Docs Hub publishes
+    # "Release candidate" (ai-agent-assembly/docs, docs/src/source-of-truth.md).
+    # `beta` here contradicted that by understating it.
+    lifecycle: "release_candidate"
   - id: "archeweave"
     name: "ArcheWeave"
     website: null
