@@ -1,0 +1,7 @@
+# Python bytecode from running scripts/generate_company_metadata.py or its
+# tests. The cache filename is interpreter-pinned (e.g. `.cpython-314.pyc`), so
+# committing it means every contributor on a different Python emits a different
+# file and any generator run produces a spurious binary diff — in the one repo
+# where a clean, reviewable diff matters most.
+__pycache__/
+*.pyc
