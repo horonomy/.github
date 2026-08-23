@@ -1,10 +1,10 @@
-# Contributing to Horonomy
+# Contributing to Horonom
 
-Thank you for your interest in contributing! Horonomy builds infrastructure products for autonomous software systems, and we welcome contributions of all sizes — bug reports, documentation fixes, new features, performance improvements, and more.
+Thank you for your interest in contributing! Horonom builds infrastructure products for autonomous software systems, and we welcome contributions of all sizes — bug reports, documentation fixes, new features, performance improvements, and more.
 
 This guide describes the org-wide conventions that apply across all repositories under [horonomy](https://github.com/horonomy). For repo-specific setup (build commands, test runners, language toolchains), see the `CONTRIBUTING.md` in each individual repo — it takes precedence over this file where they differ.
 
-> Some Horonomy products live in their own GitHub organizations (for example, **AI Agent Assembly** at [github.com/ai-agent-assembly](https://github.com/ai-agent-assembly)) and carry their own contribution guides. Those product-level guides are authoritative for their repositories.
+> Some Horonom products live in their own GitHub organizations (for example, **AI Agent Assembly** at [github.com/ai-agent-assembly](https://github.com/ai-agent-assembly)) and carry their own contribution guides. Those product-level guides are authoritative for their repositories.
 
 ## Prerequisites
 
@@ -93,7 +93,7 @@ Each repo provides a `.github/pull_request_template.md`. Fill it out completely;
 
 ### Base branch
 
-PRs target the repository's default branch (most Horonomy repos use `main`). Confirm the default branch before opening a PR.
+PRs target the repository's default branch (most Horonom repos use `main`). Confirm the default branch before opening a PR.
 
 ### Scope
 
@@ -109,7 +109,7 @@ Keep PRs focused. One concern per PR — don't bundle unrelated changes. If a si
 
 ## Developer Certificate of Origin
 
-By contributing to Horonomy, you certify that:
+By contributing to Horonom, you certify that:
 
 1. The contribution was created in whole or in part by you, **or**
 2. The contribution is based on work that is licensed under an appropriate open-source license, **or**

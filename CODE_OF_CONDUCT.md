@@ -1,10 +1,10 @@
 # Code of Conduct
 
-Horonomy has adopted the [Contributor Covenant Code of Conduct, version 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/). By participating in any Horonomy project — contributing code, opening issues, joining Discussions, or interacting in any community space — you agree to abide by its terms.
+Horonom has adopted the [Contributor Covenant Code of Conduct, version 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/). By participating in any Horonom project — contributing code, opening issues, joining Discussions, or interacting in any community space — you agree to abide by its terms.
 
 ## Reporting
 
-Concerns about contributor conduct may be reported to the Horonomy team at **conduct@horonomy.dev**. All reports will be reviewed promptly and fairly, and the privacy of the reporter will be respected.
+Concerns about contributor conduct may be reported to the Horonom team at **conduct@horonomy.dev**. All reports will be reviewed promptly and fairly, and the privacy of the reporter will be respected.
 
 ## Enforcement
 

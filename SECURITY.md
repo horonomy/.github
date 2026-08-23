@@ -3,7 +3,7 @@
 ## Reporting a Vulnerability
 
 <!-- BEGIN GENERATED: company_contact -->
-If you discover a security vulnerability in any Horonomy repository, please report it **privately** by emailing **security@horonomy.dev**. Do not open a public GitHub issue or discussion for security issues.
+If you discover a security vulnerability in any Horonom repository, please report it **privately** by emailing **security@horonomy.dev**. Do not open a public GitHub issue or discussion for security issues.
 
 | Response stage | Target |
 | --- | --- |
@@ -11,11 +11,11 @@ If you discover a security vulnerability in any Horonomy repository, please repo
 | Initial assessment | Within 7 calendar days |
 <!-- END GENERATED: company_contact -->
 
-Where a Horonomy product maintains its own `SECURITY.md`, that product's policy takes precedence for reports specific to that product.
+Where a Horonom product maintains its own `SECURITY.md`, that product's policy takes precedence for reports specific to that product.
 
 ## Supported Versions
 
-Each Horonomy product publishes its own supported-version window in its repository. As a general rule we support the latest released version of each product; pre-1.0 products support only their most recent release. See the individual product's repository for specifics.
+Each Horonom product publishes its own supported-version window in its repository. As a general rule we support the latest released version of each product; pre-1.0 products support only their most recent release. See the individual product's repository for specifics.
 
 ## Disclosure
 

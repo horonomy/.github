@@ -13,9 +13,9 @@ files **reference this baseline** instead of repeating it.
 
 ## The company in one paragraph
 
-Horonomy builds infrastructure products for autonomous software systems —
+Horonom builds infrastructure products for autonomous software systems —
 assembled, governed, and auditable. Software is becoming autonomous, but autonomy
-without boundaries becomes drift; Horonomy builds the systems that make autonomy
+without boundaries becomes drift; Horonom builds the systems that make autonomy
 explicit, governable, and safe to scale. The design ethos is boundary-aware,
 composable rather than monolithic, and auditable from the start.
 
@@ -53,7 +53,7 @@ composable rather than monolithic, and auditable from the start.
 
 ## JIRA (project HORO)
 
-Track work in the Horonomy Jira project (**HORO**). Hierarchy is Epic → Story →
+Track work in the Horonom Jira project (**HORO**). Hierarchy is Epic → Story →
 Subtask (one Subtask ≈ one commit), with a `Verify …` subtask per Story. Set the
 Component on every ticket to the GitHub repo it targets.
 
