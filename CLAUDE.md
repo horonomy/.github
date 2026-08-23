@@ -47,7 +47,7 @@ composable rather than monolithic, and auditable from the start.
 - Run `git remote -v` and push to the remote pointing at `horonomy/<repo>`. A local
   `origin` may be a personal fork in some checkouts — **never assume `origin`**.
 - **Default branch varies:** confirm with `git ls-remote --symref <remote> HEAD`.
-  Most Horonomy web/docs repos use `main`.
+  Most Horonom web/docs repos use `main`.
 - The org id is lowercase `horonomy` everywhere. Product orgs carry their own id
   (e.g. lowercase `ai-agent-assembly`).
 
