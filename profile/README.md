@@ -38,3 +38,4 @@ Public repository and website not yet available.
 - 🤝 [Contributing](https://github.com/horonomy/.github/blob/main/CONTRIBUTING.md)
 - 🔒 [Security policy](https://github.com/horonomy/.github/blob/main/SECURITY.md) — report privately to `security@horonomy.dev`
 <!-- END GENERATED: company_footer -->
+
