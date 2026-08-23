@@ -1,10 +1,10 @@
-# Horonomy
+# Horonom
 
 [![Website](https://img.shields.io/badge/horonomy.dev-visit-00B2FF)](https://horonomy.dev)
 
 **Defining the boundaries of autonomy.**
 
-Horonomy builds infrastructure products for autonomous software systems — assembled, governed, and auditable. Software is becoming autonomous, but autonomy without boundaries becomes drift. We build the systems that make autonomy explicit, governable, and safe to scale.
+Horonom builds infrastructure products for autonomous software systems — assembled, governed, and auditable. Software is becoming autonomous, but autonomy without boundaries becomes drift. We build the systems that make autonomy explicit, governable, and safe to scale.
 
 ## The First Horologer
 
@@ -38,4 +38,3 @@ Public repository and website not yet available.
 - 🤝 [Contributing](https://github.com/horonomy/.github/blob/main/CONTRIBUTING.md)
 - 🔒 [Security policy](https://github.com/horonomy/.github/blob/main/SECURITY.md) — report privately to `security@horonomy.dev`
 <!-- END GENERATED: company_footer -->
-
