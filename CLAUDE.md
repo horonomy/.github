@@ -13,9 +13,9 @@ files **reference this baseline** instead of repeating it.
 
 ## The company in one paragraph
 
-Horonomy builds infrastructure products for autonomous software systems —
+Horonom builds infrastructure products for autonomous software systems —
 assembled, governed, and auditable. Software is becoming autonomous, but autonomy
-without boundaries becomes drift; Horonomy builds the systems that make autonomy
+without boundaries becomes drift; Horonom builds the systems that make autonomy
 explicit, governable, and safe to scale. The design ethos is boundary-aware,
 composable rather than monolithic, and auditable from the start.
 
@@ -47,13 +47,13 @@ composable rather than monolithic, and auditable from the start.
 - Run `git remote -v` and push to the remote pointing at `horonomy/<repo>`. A local
   `origin` may be a personal fork in some checkouts — **never assume `origin`**.
 - **Default branch varies:** confirm with `git ls-remote --symref <remote> HEAD`.
-  Most Horonomy web/docs repos use `main`.
+  Most Horonom web/docs repos use `main`.
 - The org id is lowercase `horonomy` everywhere. Product orgs carry their own id
   (e.g. lowercase `ai-agent-assembly`).
 
 ## JIRA (project HORO)
 
-Track work in the Horonomy Jira project (**HORO**). Hierarchy is Epic → Story →
+Track work in the Horonom Jira project (**HORO**). Hierarchy is Epic → Story →
 Subtask (one Subtask ≈ one commit), with a `Verify …` subtask per Story. Set the
 Component on every ticket to the GitHub repo it targets.
 
