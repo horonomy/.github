@@ -33,7 +33,7 @@ Public repository and website not yet available.
 ## Learn more
 
 <!-- BEGIN GENERATED: company_footer -->
-- 🌐 Company site — <https://horonomy.dev>
+- 🌐 Company site — <https://horonom.com>
 - 🤖 AI Agent Assembly org — <https://github.com/ai-agent-assembly>
 - 🤝 [Contributing](https://github.com/horonomy/.github/blob/main/CONTRIBUTING.md)
 - 🔒 [Security policy](https://github.com/horonomy/.github/blob/main/SECURITY.md) — report privately to `security@horonomy.dev`
