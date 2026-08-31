@@ -11,4 +11,4 @@ organization profile.
 - [`CLAUDE.md`](CLAUDE.md) — org-wide baseline context for Claude Code
 
 Files here serve as org-wide defaults: GitHub applies them to any Horonom repo
-that doesn't provide its own. Learn more about Horonom at <https://horonomy.dev>.
+that doesn't provide its own. Learn more about Horonom at <https://horonom.com>.
