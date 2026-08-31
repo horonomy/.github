@@ -113,6 +113,11 @@ Starting a new Horonom repository (HORO-290)? Beyond the usual scaffolding
 (license, `.gitignore`, CI), check these rebrand-era conventions before the
 first PR merges:
 
+> For the CI workflow shape, CODEOWNERS convention, default branch, branch
+> protection, and repo-level `.claude/CLAUDE.md` placement, see
+> [`NEW_REPO_CHECKLIST.md`](NEW_REPO_CHECKLIST.md) — this section covers
+> naming/domain/Product Registry rules only.
+
 - **Company/product identity** — the company is **Horonom**, not Horonomy.
   `github.com/horonomy` is a permanent technical namespace exception (the
   exact-match slug is squatted, see ADR-0001) — do not "fix" it to
