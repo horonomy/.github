@@ -1,10 +1,10 @@
-# Horonomy company metadata — the single public source of truth for
+# Horonom company metadata — the single public source of truth for
 # MOTHER-COMPANY facts (AAASM-5520).
 #
 # SCOPE / OWNERSHIP BOUNDARY
 # --------------------------
 # This file owns ONLY company-level facts: the company display name, the
-# canonical company website, the public company contact addresses that Horonomy
+# canonical company website, the public company contact addresses that Horonom
 # intentionally publishes, the company's own security-response targets, and a
 # product CATALOG (name / website / GitHub org / lifecycle) that references each
 # product at catalog level.
@@ -29,21 +29,27 @@
 schema_version: 1
 
 company:
-  name: "Horonomy"
-  # Horonomy's own canonical company website. This is the mother company's
-  # domain and is unrelated to the AI Agent Assembly product's agent-assembly.com
-  # host — do not "migrate" it. `.dev` here is Horonomy's live company domain.
-  website: "https://horonomy.dev"
+  name: "Horonom"
+  # Horonom's own canonical company website (HORO-281 domain cutover).
+  # This is the mother company's domain and is unrelated to the AI Agent
+  # Assembly product's agent-assembly.com host — do not "migrate" it.
+  website: "https://horonom.com"
 
-# Public company contact addresses that Horonomy intentionally publishes today.
+# Public company contact addresses that Horonom intentionally publishes today.
 # Only addresses actually published on a public surface are listed — nothing is
 # invented. `hello` is published in the website footer; `security` is published
 # in this repo's SECURITY.md.
+#
+# Still @horonomy.dev, deliberately: HORO-288 (production email/MX/DKIM/SPF
+# migration to horonom.com) has not landed. Publishing a @horonom.com address
+# before mail routing exists there would silently swallow mail (no MX = no
+# bounce, just loss) — worse than the current, working @horonomy.dev
+# addresses. Re-pin these only once HORO-288 confirms horonom.com mail is live.
 contacts:
   hello: "hello@horonomy.dev"
   security: "security@horonomy.dev"
 
-# Horonomy's company-level security-response targets, structured as value/unit
+# Horonom's company-level security-response targets, structured as value/unit
 # pairs (not English prose). These are the company org policy's own targets and
 # are content-equivalent to what SECURITY.md publishes today; a product with its
 # own SECURITY.md keeps its own product-level targets. Units validated against
@@ -56,7 +62,7 @@ security_policy:
     value: 7
     unit: "calendar_days"
 
-# Public product catalog — one entry per Horonomy product, referenced at CATALOG
+# Public product catalog — one entry per Horonom product, referenced at CATALOG
 # level only. `website` and `github_org` may be null for a product without a
 # public presence yet.
 #
