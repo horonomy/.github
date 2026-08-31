@@ -1,6 +1,7 @@
 # Horonom
 
 [![Website](https://img.shields.io/badge/horonom.com-visit-00B2FF)](https://horonom.com)
+[![Product Atlas](https://img.shields.io/badge/horo.run-product_atlas-C9A45C)](https://horo.run)
 
 **Defining the boundaries of autonomy.**
 
@@ -12,7 +13,14 @@ Our namesake does not create the sky. It observes it, understands it, records it
 
 ## Products
 
-### 🤖 AI Agent Assembly
+The current public product portfolio — see the [Product Atlas](https://horo.run)
+for the full system map and how these relate. Source of truth:
+`horonomy/official-website`'s
+[Product Registry](https://github.com/horonomy/official-website/blob/main/src/data/productRegistry.ts)
+(HORO-282) — this list is kept in step with it by hand; if the two ever
+disagree, the Registry is correct.
+
+### 🤖 AI Agent Assembly — Beta
 
 [![release](https://img.shields.io/github/v/release/ai-agent-assembly/agent-assembly?include_prereleases&sort=semver&label=release&logo=github)](https://github.com/ai-agent-assembly/agent-assembly/releases) [![CI](https://github.com/ai-agent-assembly/agent-assembly/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/ai-agent-assembly/agent-assembly/actions/workflows/ci.yml?query=branch%3Amaster) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
@@ -20,13 +28,23 @@ Governance platform for AI agents — assemble autonomous agents with explicit r
 
 🌐 [agent-assembly.com](https://agent-assembly.com) · 📚 [docs](https://docs.agent-assembly.com) · 💻 [github.com/ai-agent-assembly](https://github.com/ai-agent-assembly)
 
-### 🧩 ArcheWeave · _coming soon_
+### 🧭 Octans — Experimental
 
-Public repository and website not yet available.
+Change safety — verifies a change is safe to ship before it reaches production, across distributed services. Standalone; usable without any other Horonom product.
 
-### 🛰️ Harbinger · _coming soon_
+🌐 [octans.horo.run](https://octans.horo.run)
 
-Public repository and website not yet available.
+### 📐 Circinus — Experimental
+
+Provenance & authority — establishes who or what is authorized to take a sensitive action, and proves it after the fact. Standalone; usable without any other Horonom product.
+
+🌐 [circinus.horo.run](https://circinus.horo.run)
+
+### 🐍 Ophiuchus — Experimental
+
+Context continuity — carries context across machine, tool, and user boundaries so it is not re-derived or lost at each hop. Standalone; usable without any other Horonom product.
+
+🌐 [ophiuchus.horo.run](https://ophiuchus.horo.run)
 
 > More systems are awaiting stars. Additional research tracks — governance runtimes, change intelligence, and workflow primitives for autonomous software — are uncharted for now.
 
