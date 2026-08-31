@@ -26,7 +26,7 @@ composable rather than monolithic, and auditable from the start.
 | **AI Agent Assembly** | Governance platform for AI agents. Lives in its own org, [`ai-agent-assembly`](https://github.com/ai-agent-assembly), with its own org-baseline CLAUDE.md. |
 | **ArcheWeave** | Future product — not yet public. Details to be confirmed. |
 | **Harbinger** | Future product — not yet public. Details to be confirmed. |
-| `official-website` | The `horonomy.dev` marketing site (Docusaurus + TypeScript). |
+| `official-website` | The `horonom.com` marketing site (Docusaurus + TypeScript). |
 | `internal-docs` | Internal documentation site (private). |
 | `.github` | This repo — org profile (`profile/README.md`), community-health files, and this baseline. |
 
