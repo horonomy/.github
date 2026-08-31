@@ -107,6 +107,38 @@ Keep PRs focused. One concern per PR — don't bundle unrelated changes. If a si
 - CI must be green before merge. Don't bypass with `--no-verify` or by disabling checks.
 - The reviewer or assignee picks the merge strategy (typically squash or rebase). The repo's default reflects the team's preference.
 
+## New-repository checklist
+
+Starting a new Horonom repository (HORO-290)? Beyond the usual scaffolding
+(license, `.gitignore`, CI), check these rebrand-era conventions before the
+first PR merges:
+
+- **Company/product identity** — the company is **Horonom**, not Horonomy.
+  `github.com/horonomy` is a permanent technical namespace exception (the
+  exact-match slug is squatted, see ADR-0001) — do not "fix" it to
+  `horonom` anywhere in the new repo.
+- **Canonical domains** — corporate site is `https://horonom.com`; the
+  public product family lives under `*.horo.run` (ADR-0002) unless the
+  product already has a standalone canonical domain for a documented reason
+  (e.g. `agent-assembly.com`). `horonom.dev` is reserved for a future
+  Developer Platform and stays out of a new product's canonical URL set
+  unless that platform has actually been activated (see policy-0001 in
+  `horonomy/internal-docs`).
+- **Product Registry** — if the new repository is a public-facing Horonom
+  product, add one entry to the canonical
+  [Product Registry](https://github.com/horonomy/official-website/blob/main/src/data/productRegistry.ts)
+  (HORO-282) rather than hand-writing product facts (name, category,
+  maturity, canonical URL) anywhere else — `horonom.com`'s System Map and
+  `horo.run`'s Atlas both render straight from it, and a second
+  hand-maintained copy of the same facts is exactly the drift this
+  registry exists to prevent.
+- **Maturity labels** — use the Registry's controlled vocabulary
+  (`experimental` / `beta` / `release_candidate` / `available`). Never mark
+  a product `available` unless it is genuinely generally available.
+- **Machine identifiers** — package names, CLIs, and API identifiers are
+  not renamed for cosmetic consistency alone; only rename one for a real
+  compatibility reason.
+
 ## Developer Certificate of Origin
 
 By contributing to Horonom, you certify that:
