@@ -1,6 +1,6 @@
 # Horonom
 
-[![Website](https://img.shields.io/badge/horonomy.dev-visit-00B2FF)](https://horonomy.dev)
+[![Website](https://img.shields.io/badge/horonom.com-visit-00B2FF)](https://horonom.com)
 
 **Defining the boundaries of autonomy.**
 
