@@ -28,9 +28,12 @@ invariant. It may never **weaken or silently override** a company-level
 ([`engineering/git-pr-merge.md`](./engineering/git-pr-merge.md)), the
 secrets-handling boundary
 ([`engineering/security.md`](./engineering/security.md)), the ADR-vs-doc
-boundary ([`engineering/docs-adr.md`](./engineering/docs-adr.md)), and the
+boundary ([`engineering/docs-adr.md`](./engineering/docs-adr.md)), the
 public-release truthfulness rules
-([`releases/public-surfaces.md`](./releases/public-surfaces.md)). This
+([`releases/public-surfaces.md`](./releases/public-surfaces.md)), and the
+domain surface / public analytics convention
+([`engineering/domains-analytics.md`](./engineering/domains-analytics.md)).
+This
 precedence rule, the full architecture rationale, and the ownership matrix
 below are decided in
 [ADR-0005](https://github.com/horonomy/internal-docs/blob/main/docs/engineering/adr-0005-horonom-governance-and-agent-workspace-architecture.md)
@@ -57,7 +60,9 @@ see [`engineering/security.md`](./engineering/security.md).
 ## Structure
 
 - [`engineering/`](./engineering/) — Git/PR/merge, Jira delivery,
-  testing/review, security, and docs/ADR invariants.
+  testing/review, security, docs/ADR, and domain/analytics invariants
+  ([`engineering/domains-analytics.md`](./engineering/domains-analytics.md);
+  full constitution at ADR-0006, HORO-566).
 - [`releases/`](./releases/) — release and public-surface invariants, plus
   the [Public Release Surface Contract](./releases/public-release-contract.md)
   (7-state model, per-surface derivation rules; implementation at

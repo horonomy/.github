@@ -42,6 +42,23 @@ Jira delivery, releases, autonomous-execution) lives in
 architecture decisions are recorded as ADRs in
 [`horonomy/internal-docs`](https://github.com/horonomy/internal-docs/tree/main/docs/engineering).
 
+## Domain and analytics convention (non-waivable)
+
+**Horonomy lives on `.com`. Horonomy products run on `.run`.**
+`<product>.horonom.com` is the canonical public product/marketing site;
+`docs.<product>.horonom.com` is the canonical docs surface once dedicated
+docs exist; `app/api/ingest.<product>.horo.run` are executable/runtime
+boundaries only, provisioned only when the real service exists —
+`<product>.horo.run` is not the default marketing hostname after
+migration. GA4 is allowed only on approved public marketing/docs surfaces
+and never carries prompt/agent/repo/tenant/PII/credential/authenticated-
+SaaS content; authenticated product telemetry is a separate privacy
+domain. Full constitution, security checklist, and precedence:
+[`governance/engineering/domains-analytics.md`](governance/engineering/domains-analytics.md)
+→ [ADR-0006](https://github.com/horonomy/internal-docs/blob/main/docs/engineering/adr-0006-horonom-domain-surface-and-analytics-constitution.md)
+(HORO-566). Product-specific domain/DNS/analytics implementation is
+product-owned, not centralized here.
+
 ## Universal conventions
 
 Commit/branch/PR format and worktree workflow are defined once, in
