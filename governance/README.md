@@ -61,8 +61,10 @@ see [`engineering/security.md`](./engineering/security.md).
 - [`releases/`](./releases/) — release and public-surface invariants (the
   Public Release Surface Contract lives here once HORO-512 lands it).
 - [`workspace/`](./workspace/) — local agent workspace and autonomous-
-  execution invariants that HORO-506 and later tickets build the actual
-  tooling against.
+  execution invariants, the workspace repository manifest
+  ([`workspace/manifest.yaml`](./workspace/manifest.yaml)), and the
+  bootstrap tool's usage doc ([`workspace/bootstrap.md`](./workspace/bootstrap.md);
+  implementation at `scripts/horonom_workspace.py`, HORO-506).
 - `skills/` — shared skill canonical content (added by HORO-509).
 
 ## Governance version
