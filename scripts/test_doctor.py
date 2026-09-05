@@ -29,6 +29,18 @@ class SkillAdapterMarkersTest(unittest.TestCase):
         result = checks.check_skill_adapter_markers(_tmp_repo())
         self.assertEqual(result.status, checks.NOT_APPLICABLE)
 
+    def test_warn_when_canonical_skill_names_cannot_be_determined(self) -> None:
+        """Independent review (HORO-533): a genuinely broken governance
+        checkout (missing/misconfigured agents/skills/) must not be
+        indistinguishable from the ordinary "not adopted here"
+        NOT_APPLICABLE case — that's a fault in the .github checkout doctor
+        is running from, not in the repo being audited."""
+        with mock.patch.object(
+            checks.project_skills, "discover_skills", side_effect=checks.project_skills.SkillProjectionError("boom")
+        ):
+            result = checks.check_skill_adapter_markers(_tmp_repo())
+        self.assertEqual(result.status, checks.WARN)
+
     def test_pass_when_all_files_marked(self) -> None:
         repo = _tmp_repo()
         skill = repo / ".claude" / "skills" / "jira-delivery"
@@ -212,6 +224,55 @@ class SecretScanTest(unittest.TestCase):
         result = checks.check_no_secrets_in_generated_files([f])
         self.assertEqual(result.status, checks.FAIL)
 
+    def test_fail_on_github_fine_grained_pat(self) -> None:
+        repo = _tmp_repo()
+        f = repo / "CLAUDE.md"
+        f.write_text("token: github_pat_" + "A" * 22 + "_" + "b" * 59 + "\n", encoding="utf-8")
+        result = checks.check_no_secrets_in_generated_files([f])
+        self.assertEqual(result.status, checks.FAIL)
+
+    def test_fail_on_aws_temporary_access_key(self) -> None:
+        """ASIA-prefixed temporary/STS keys, not just long-term AKIA ones."""
+        repo = _tmp_repo()
+        f = repo / "CLAUDE.md"
+        f.write_text("key: ASIA" + "A" * 16 + "\n", encoding="utf-8")
+        result = checks.check_no_secrets_in_generated_files([f])
+        self.assertEqual(result.status, checks.FAIL)
+
+    def test_fail_on_slack_refresh_token(self) -> None:
+        """xoxe- refresh/exchange tokens, not just xoxb/xoxp/xoxa/xoxr/xoxs."""
+        repo = _tmp_repo()
+        f = repo / "CLAUDE.md"
+        f.write_text("token: xoxe-" + "1" * 20 + "\n", encoding="utf-8")
+        result = checks.check_no_secrets_in_generated_files([f])
+        self.assertEqual(result.status, checks.FAIL)
+
+    def test_fail_on_openai_project_scoped_key(self) -> None:
+        """HORO-533 independent review: the original sk-[A-Za-z0-9]{20,}
+        pattern required 20+ consecutive alphanumeric chars right after
+        `sk-`, but the sk-proj- format inserts a hyphen a few chars in,
+        breaking that run — constructed a value that slipped past it and
+        the generic base64/hex fallbacks."""
+        repo = _tmp_repo()
+        f = repo / "CLAUDE.md"
+        f.write_text("key: sk-proj-" + "a" * 20 + "B1-cccccccccc\n", encoding="utf-8")
+        result = checks.check_no_secrets_in_generated_files([f])
+        self.assertEqual(result.status, checks.FAIL)
+
+    def test_pass_on_benign_lookalike_text(self) -> None:
+        """The named-prefix patterns must not false-positive on ordinary
+        text that merely starts with the same few characters."""
+        repo = _tmp_repo()
+        f = repo / "CLAUDE.md"
+        f.write_text(
+            "a normal sentence about skiing sk-8 grade slopes, "
+            "a link to https://example.com/xoxo-fun-page, "
+            "and someone named Akiane.\n",
+            encoding="utf-8",
+        )
+        result = checks.check_no_secrets_in_generated_files([f])
+        self.assertEqual(result.status, checks.PASS)
+
 
 class WorkspaceBootstrapCheckTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -286,6 +347,25 @@ class ResolveEvidencePathTest(unittest.TestCase):
             with mock.patch.object(doctor.hw, "load_manifest", return_value=[manifest_entry]):
                 result = doctor._resolve_evidence_path(product_repo, root, "widget")
             self.assertEqual(result.resolve(), (evidence_dir / "widget.yaml").resolve())
+        finally:
+            tmp.cleanup()
+
+    def test_repo_path_error_falls_back_gracefully(self) -> None:
+        """Independent review (HORO-533): hw._repo_path can itself raise
+        WorkspaceError (its own escape-guard) — this must degrade to the
+        repo-local candidate like every other failure mode here, not
+        propagate an uncaught exception out of `doctor`."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = Path(tmp.name)
+            product_repo = root / "products" / "widget"
+            product_repo.mkdir(parents=True)
+            manifest_entry = {"name": "governance", "org": "horonomy", "repo": ".github", "category": "company"}
+            with mock.patch.object(doctor.hw, "load_manifest", return_value=[manifest_entry]), mock.patch.object(
+                doctor.hw, "_repo_path", side_effect=doctor.hw.WorkspaceError("escapes workspace root")
+            ):
+                result = doctor._resolve_evidence_path(product_repo, root, "widget")
+            self.assertEqual(result, product_repo / "metadata" / "release-evidence" / "widget.yaml")
         finally:
             tmp.cleanup()
 
