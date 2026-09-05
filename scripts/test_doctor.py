@@ -200,6 +200,18 @@ class SecretScanTest(unittest.TestCase):
         result = checks.check_no_secrets_in_generated_files([Path("/does/not/exist.md")])
         self.assertEqual(result.status, checks.PASS)
 
+    def test_fail_on_named_prefix_tokens(self) -> None:
+        """HORO-533: the two generic patterns (long base64/hex runs) miss
+        common named-prefix credential formats — a `_` separator or
+        mixed-case non-hex letters break their charsets. A planted
+        GitHub-PAT-shaped string sailed straight through both and was
+        reported PASS before this fix."""
+        repo = _tmp_repo()
+        f = repo / "CLAUDE.md"
+        f.write_text("token: ghp_1234567890abcdefghijklmnopqrstuvwxyz12\n", encoding="utf-8")
+        result = checks.check_no_secrets_in_generated_files([f])
+        self.assertEqual(result.status, checks.FAIL)
+
 
 class WorkspaceBootstrapCheckTest(unittest.TestCase):
     def setUp(self) -> None:
