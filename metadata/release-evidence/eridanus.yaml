@@ -1,0 +1,15 @@
+# Public Release Surface Contract evidence for Eridanus (HORO-512).
+#
+# GitHub repo description: "private validation/research repo for
+# post-transformation leak attribution" — zero tags, zero releases. This is
+# the AC's "Eridanus can be represented as NOT_YET_PUBLIC without creating
+# public entries" case: governance adoption (HORO-517) must not itself make
+# Eridanus public, and this fixture proves the contract agrees on its own.
+product: eridanus
+claimed_lifecycle: not_yet_public
+github:
+  org: horonomy
+  repo: eridanus
+website: null
+docs: null
+hosted_service: null

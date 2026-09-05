@@ -58,8 +58,11 @@ see [`engineering/security.md`](./engineering/security.md).
 
 - [`engineering/`](./engineering/) — Git/PR/merge, Jira delivery,
   testing/review, security, and docs/ADR invariants.
-- [`releases/`](./releases/) — release and public-surface invariants (the
-  Public Release Surface Contract lives here once HORO-512 lands it).
+- [`releases/`](./releases/) — release and public-surface invariants, plus
+  the [Public Release Surface Contract](./releases/public-release-contract.md)
+  (7-state model, per-surface derivation rules; implementation at
+  `scripts/public_release_reconcile.py`, evidence configs at
+  `metadata/release-evidence/`, HORO-512).
 - [`workspace/`](./workspace/) — local agent workspace and autonomous-
   execution invariants, the workspace repository manifest
   ([`workspace/manifest.yaml`](./workspace/manifest.yaml)), and the
