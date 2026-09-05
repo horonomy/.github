@@ -65,9 +65,12 @@ see [`engineering/security.md`](./engineering/security.md).
   `metadata/release-evidence/`, HORO-512).
 - [`workspace/`](./workspace/) — local agent workspace and autonomous-
   execution invariants, the workspace repository manifest
-  ([`workspace/manifest.yaml`](./workspace/manifest.yaml)), and the
+  ([`workspace/manifest.yaml`](./workspace/manifest.yaml)), the
   bootstrap tool's usage doc ([`workspace/bootstrap.md`](./workspace/bootstrap.md);
-  implementation at `scripts/horonom_workspace.py`, HORO-506).
+  implementation at `scripts/horonom_workspace.py`, HORO-506), and
+  `horonom doctor`'s usage doc ([`workspace/doctor.md`](./workspace/doctor.md);
+  implementation at `scripts/doctor.py` + `scripts/doctor_checks.py`,
+  HORO-510).
 - `../agents/skills/` and `../agents/common/` (repo root, not under
   `governance/`) — shared skill canonical content (added by HORO-509). Kept
   outside `governance/` because it's consumed content (SKILL.md + scripts),

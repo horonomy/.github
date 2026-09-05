@@ -44,3 +44,5 @@ jobs:
         run: python3 -m unittest discover -s agents/common
       - name: Run agents/adapters/codex/ tests
         run: python3 -m unittest discover -s agents/adapters/codex
+      - name: Real doctor run against this repo (dogfood)
+        run: python3 scripts/doctor.py --repo . --expected-org horonomy

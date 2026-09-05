@@ -28,8 +28,10 @@ or `.codex/` projection, or a workspace-root `CLAUDE.md`/`AGENTS.md`).
 
 ## Procedure
 
-1. Run `horonom doctor` (HORO-510) if available in the target repo/
-   workspace; otherwise fall back to the manual checks below.
+1. Run `python3 scripts/doctor.py --repo <path> [--workspace-root <path>] [--product <name>]`
+   from a `horonomy/.github` checkout (HORO-510). It reports PASS/WARN/FAIL/
+   NOT_APPLICABLE per check with an actionable `fix` hint — read the `fix`
+   field before doing any manual investigation.
 2. Compare each generated file's provenance header
    (`governance_version=<N>`) against `metadata/governance.yaml`'s current
    `governance_version` in `horonomy/.github`.
@@ -52,6 +54,7 @@ or `.codex/` projection, or a workspace-root `CLAUDE.md`/`AGENTS.md`).
   ADR-0005).
 - `governance/engineering/security.md` — the mechanical enforcement bar
   for a "non-waivable" claim.
+- `scripts/doctor.py` + `scripts/doctor_checks.py` — the real implementation
+  (HORO-510); see `governance/workspace/doctor.md` for the full check list.
 - `scripts/horonom_workspace.py status` — the workspace-root half of this
-  check (HORO-506); `horonom doctor` (HORO-510) generalizes it to any
-  adopted repo.
+  check (HORO-506), which `doctor.py` delegates to.
