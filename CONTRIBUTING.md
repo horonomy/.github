@@ -2,7 +2,7 @@
 
 Thank you for your interest in contributing! Horonom builds infrastructure products for autonomous software systems, and we welcome contributions of all sizes — bug reports, documentation fixes, new features, performance improvements, and more.
 
-This guide describes the org-wide conventions that apply across all repositories under [horonomy](https://github.com/horonomy). For repo-specific setup (build commands, test runners, language toolchains), see the `CONTRIBUTING.md` in each individual repo — it takes precedence over this file where they differ.
+This guide describes the org-wide conventions that apply across all repositories under [horonomy](https://github.com/horonomy). For repo-specific setup (build commands, test runners, language toolchains), see the `CONTRIBUTING.md` in each individual repo — it may add to or strengthen these conventions, but never weaken a company-wide non-waivable invariant (see [`governance/README.md`](governance/README.md) for the full precedence rule and where each detailed rule actually lives).
 
 > Some Horonom products live in their own GitHub organizations (for example, **AI Agent Assembly** at [github.com/ai-agent-assembly](https://github.com/ai-agent-assembly)) and carry their own contribution guides. Those product-level guides are authoritative for their repositories.
 
@@ -105,7 +105,7 @@ Keep PRs focused. One concern per PR — don't bundle unrelated changes. If a si
 - Address every reviewer comment before requesting re-review.
 - Don't force-push during an active review (only allowed when rebasing onto the latest base branch — never to rewrite review history).
 - CI must be green before merge. Don't bypass with `--no-verify` or by disabling checks.
-- The reviewer or assignee picks the merge strategy (typically squash or rebase). The repo's default reflects the team's preference.
+- **Merge strategy is company-wide, not a per-repo or per-reviewer choice: "Create a merge commit."** Squash and rebase-merge are disabled — see [`governance/engineering/git-pr-merge.md`](governance/engineering/git-pr-merge.md) for the full rule and its narrow admin-bypass exception.
 
 ## New-repository checklist
 
