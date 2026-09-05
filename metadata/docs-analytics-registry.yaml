@@ -1,0 +1,142 @@
+# Horonom documentation analytics registry (HORO-587/HORO-588).
+#
+# Machine-readable mirror of horonomy/internal-docs's
+# docs/registers/docs-analytics-migration.md — that file is the narrative/
+# evidence copy (full curl/dig/grep evidence, rationale prose); this file is
+# the structured copy for tooling (HORO-592's reconciliation pass reads
+# this rather than re-parsing prose). Update both together.
+#
+# Built from live DNS/HTTP inspection (2026-09-06), not from Jira
+# descriptions or GA stream URLs alone — a Documentation stream URL
+# existing does not by itself prove the corresponding docs DNS/site
+# exists. See the narrative register for the specific evidence behind
+# each value.
+#
+# Schema:
+#   product: canonical product id
+#   parent_epic: HORO-587
+#   implementation_ticket: product-owned HORO-xx/FORNX-xx ticket, or null
+#                          if no public docs surface exists to instrument
+#   docs_surface_current: the live docs URL/path today, or null
+#   docs_surface_target: the intended canonical docs URL/path, or null
+#   docs_dns_status: not_provisioned | provisioned_live | path_based_no_subdomain
+#   documentation_stream:
+#     name: GA4 stream display name ("Documentation"), or null
+#     stream_id: GA4 Stream ID, or null
+#     measurement_id: GA4 Measurement ID, or null
+#   marketing_stream_note: free text distinguishing the docs stream from
+#                          any known marketing/application stream for the
+#                          same product (see domain-migration-inventory.yaml)
+#   property_relationship_verified: true | false — whether the docs
+#                                    stream was confirmed to belong to the
+#                                    product's intended GA4 property
+#   implementation_status: not_started | in_progress | complete | not_applicable
+#   live_browser_verification_status: not_performed | partial | complete
+#   privacy_notes: free text, or null
+#   blockers: free text, or null
+
+schema_version: 1
+reviewed_at: "2026-09-06"
+
+products:
+  - product: ophiuchus
+    parent_epic: HORO-587
+    implementation_ticket: HORO-589
+    docs_surface_current: "https://ophiuchus.horo.run/docs"
+    docs_surface_target: null
+    docs_dns_status: path_based_no_subdomain
+    documentation_stream:
+      name: "Documentation"
+      stream_id: "15725289372"
+      measurement_id: "G-2X3VEZ2SG4"
+    marketing_stream_note: "Distinct from marketing streams G-RE2P2Q3J08 (live, old domain) and G-SK9BL6R66J (founder target, new domain) — see domain-migration-inventory.yaml."
+    property_relationship_verified: false
+    implementation_status: not_started
+    live_browser_verification_status: not_performed
+    privacy_notes: null
+    blockers: "Canonical docs architecture (subdomain vs. path) not yet decided by HORO-589."
+
+  - product: circinus
+    parent_epic: HORO-587
+    implementation_ticket: HORO-590
+    docs_surface_current: "https://circinus.horo.run/docs"
+    docs_surface_target: null
+    docs_dns_status: path_based_no_subdomain
+    documentation_stream:
+      name: "Documentation"
+      stream_id: "15725295444"
+      measurement_id: "G-436F4XKVHD"
+    marketing_stream_note: "Distinct from marketing streams G-Z2D86YKMMH (live, old domain) and G-WYMPBC7Q9C (founder target, new domain) — see domain-migration-inventory.yaml."
+    property_relationship_verified: false
+    implementation_status: not_started
+    live_browser_verification_status: not_performed
+    privacy_notes: "Do not weaken Circinus's existing CSP/CORS/cookie-scope authority boundary for docs instrumentation."
+    blockers: "Canonical docs architecture not yet decided by HORO-590."
+
+  - product: fornax
+    parent_epic: HORO-587
+    implementation_ticket: FORNX-330
+    docs_surface_current: "https://docs.fornax.horonom.com"
+    docs_surface_target: "https://docs.fornax.horonom.com"
+    docs_dns_status: provisioned_live
+    documentation_stream:
+      name: "Documentation"
+      stream_id: "15725260666"
+      measurement_id: "G-43BPHKSX8H"
+    marketing_stream_note: "Distinct from marketing target G-YD29L01E89 (fornax.horonom.com); no old marketing stream exists to conflict with."
+    property_relationship_verified: false
+    implementation_status: not_started
+    live_browser_verification_status: not_performed
+    privacy_notes: null
+    blockers: null
+
+  - product: horologium
+    parent_epic: HORO-587
+    implementation_ticket: HORO-591
+    docs_surface_current: "https://horologium.horonom.com/docs"
+    docs_surface_target: "https://horologium.horonom.com/docs"
+    docs_dns_status: path_based_no_subdomain
+    documentation_stream:
+      name: "Documentation"
+      stream_id: "15725286483"
+      measurement_id: "G-46CVCDFC4G"
+    marketing_stream_note: "Third distinct ID alongside marketing G-R4QEL954T0 and application G-YHE60HB2FV — see domain-migration-inventory.yaml. Marketing stream currently covers nested /docs/* by virtue of nesting; must not double-fire once the Documentation stream is wired."
+    property_relationship_verified: false
+    implementation_status: not_started
+    live_browser_verification_status: not_performed
+    privacy_notes: "Product Truth / Public Alpha security constraints apply unchanged; forbidden-payload list explicitly includes Product Truth content."
+    blockers: "A dedicated docs.horologium.horonom.com subdomain was already attempted and reverted (Cloudflare Universal SSL does not cover this second-level subdomain on the current plan) — do not re-attempt without a separate, already-approved TLS/domain change."
+
+  - product: eridanus
+    parent_epic: HORO-587
+    implementation_ticket: null
+    docs_surface_current: null
+    docs_surface_target: null
+    docs_dns_status: not_provisioned
+    documentation_stream:
+      name: null
+      stream_id: null
+      measurement_id: null
+    marketing_stream_note: null
+    property_relationship_verified: false
+    implementation_status: not_applicable
+    live_browser_verification_status: not_performed
+    privacy_notes: null
+    blockers: "Product remains intentionally not-yet-public — no public docs surface to instrument."
+
+  - product: pet-life-simulator
+    parent_epic: HORO-587
+    implementation_ticket: null
+    docs_surface_current: null
+    docs_surface_target: null
+    docs_dns_status: not_provisioned
+    documentation_stream:
+      name: null
+      stream_id: null
+      measurement_id: null
+    marketing_stream_note: null
+    property_relationship_verified: false
+    implementation_status: not_applicable
+    live_browser_verification_status: not_performed
+    privacy_notes: null
+    blockers: "No public web surface exists at all (iOS-first prototype/fake-door experiment). Do not create decorative DNS or a docs stream to complete this inventory."

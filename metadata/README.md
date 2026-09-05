@@ -62,6 +62,18 @@ migration program. Structured mirror of `horonomy/internal-docs`'s
 machine-readable copy for tooling. See
 [`../governance/engineering/domains-analytics.md`](../governance/engineering/domains-analytics.md).
 
+## `docs-analytics-registry.yaml`
+
+Separate from the company registry above: tracks per-product
+Documentation GA4 stream state (stream ID, Measurement ID, reconciled
+docs surface, property-relationship verification, live-browser
+verification status, blockers) for the HORO-587 documentation analytics
+program. Structured mirror of `horonomy/internal-docs`'s
+[Documentation analytics migration register](https://github.com/horonomy/internal-docs/blob/main/docs/registers/docs-analytics-migration.md)
+— that file carries the full evidence/rationale prose, this file is the
+machine-readable copy for tooling. See
+[`../governance/engineering/docs-analytics.md`](../governance/engineering/docs-analytics.md).
+
 ## `governance.yaml`
 
 Separate from the company registry above: `governance.yaml` carries a
