@@ -341,6 +341,35 @@ class OverallPrecedenceTest(unittest.TestCase):
         self.assertEqual(result["overall"], prr.REQUIRED)
 
 
+class RealHttpGetReadLimitTest(unittest.TestCase):
+    """HORO-533 audit Finding-02: the fetch cap governs how much of a live
+    page check_horonom_com/check_docs can see — too small silently turns a
+    premature-exposure FAILED into a false 'correctly absent' once a page
+    grows past it. Not a live-network test (this repo's tests stay fully
+    offline) — mocks urllib.request.urlopen to confirm the cap itself was
+    raised, not the live fetch behavior."""
+
+    def test_reads_more_than_the_old_64kb_cap(self) -> None:
+        body = b"x" * 200_000  # bigger than the old 65536-byte cap
+
+        class _FakeResp:
+            status = 200
+
+            def read(self, n):
+                return body[:n]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        with mock.patch.object(prr.urllib.request, "urlopen", return_value=_FakeResp()):
+            status, text = prr.real_http_get("https://example.com")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(text), 200_000)
+
+
 class MainCLITest(unittest.TestCase):
     def test_main_returns_nonzero_when_evidence_file_invalid(self) -> None:
         d = Path(tempfile.mkdtemp())
