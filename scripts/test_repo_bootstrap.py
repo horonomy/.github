@@ -198,26 +198,40 @@ class AdoptSymlinkGuardTest(unittest.TestCase):
         self._patch.stop()
 
     def test_dangling_marker_symlink_is_refused_not_written_through(self) -> None:
-        outside = self.repo.parent / "escape.txt"
+        outside = Path(tempfile.mkdtemp()) / "escape.txt"
         (self.repo / rb.ADOPTION_MARKER_FILENAME).symlink_to(outside)
         with self.assertRaises(rb.AdoptionError):
             rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
         self.assertFalse(outside.exists())
 
     def test_dangling_agents_md_symlink_is_refused_not_written_through(self) -> None:
-        outside = self.repo.parent / "escape_agents.md"
+        outside = Path(tempfile.mkdtemp()) / "escape_agents.md"
         (self.repo / "AGENTS.md").symlink_to(outside)
         with self.assertRaises(rb.AdoptionError):
             rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
         self.assertFalse(outside.exists())
 
     def test_symlink_escaping_repo_to_a_real_file_is_refused(self) -> None:
-        outside = self.repo.parent / "real_outside_file.yaml"
+        outside = Path(tempfile.mkdtemp()) / "real_outside_file.yaml"
         outside.write_text("pre-existing content\n", encoding="utf-8")
         (self.repo / rb.ADOPTION_MARKER_FILENAME).symlink_to(outside)
         with self.assertRaises(rb.AdoptionError):
             rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
         self.assertEqual(outside.read_text(encoding="utf-8"), "pre-existing content\n")
+
+    def test_symlinked_ancestor_directory_is_refused_not_written_through(self) -> None:
+        """Independent review (HORO-533) found the first version of this
+        guard only checked `path.is_symlink()` on the leaf file — fully
+        bypassable by making an ANCESTOR directory (e.g. `.claude`) the
+        symlink instead, since the leaf itself is then never a symlink and
+        the check short-circuited before ever resolving the real write
+        location. Confirmed live: this wrote CLAUDE.md straight into the
+        symlinked-to directory before the fix."""
+        outside = Path(tempfile.mkdtemp())
+        (self.repo / ".claude").symlink_to(outside)
+        with self.assertRaises(rb.AdoptionError):
+            rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        self.assertEqual(list(outside.iterdir()), [])
 
     def test_symlink_pointing_inside_repo_is_treated_as_hand_authored(self) -> None:
         """The Eridanus case (ADR-0001): AGENTS.md is a real symlink to
