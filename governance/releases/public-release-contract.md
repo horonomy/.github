@@ -34,7 +34,7 @@ majority vote — one genuinely failed surface fails the whole reconciliation.
 | Surface | What it checks | How |
 |---|---|---|
 | `repo_metadata` | The product's GitHub repo exists and is reachable | `gh api repos/<org>/<repo>` |
-| `tags_releases` | GitHub tags/Releases exist **iff** the claimed lifecycle implies a release happened | `gh api repos/<org>/<repo>/releases` — a `beta`/`release_candidate`/`available` claim with zero releases is `FAILED` (claim wider than evidence), not just missing |
+| `tags_releases` | GitHub tags/Releases exist **iff** the claimed lifecycle implies a release happened | `gh api repos/<org>/<repo>/releases` — a `beta`/`release_candidate`/`available` claim with zero releases is `FAILED` (claim wider than evidence), not just missing. A release on a **private** repo does not contradict an `experimental`/`not_yet_public` claim — it isn't visible outside the org, so it's not public exposure; visibility is unknown/unreachable defaults to "public" so drift is never silently hidden |
 | `website` / `docs` / `hosted_service` | The configured URL, if any, responds successfully over HTTPS | live HTTP(S) request; connection failure classifies as `BLOCKED_EXTERNAL`, a non-2xx/3xx response as `FAILED` |
 | `domain_tls` | TLS handshake succeeds for any configured HTTPS surface | folded into the website/docs/hosted_service checks |
 | `company_registry` | `metadata/company.yaml`'s catalog entry, if any, matches the claimed lifecycle | direct read of `metadata/company.yaml` — a mismatched or stale entry is `FAILED`, a genuinely absent entry for a not-yet-warranted product is `DEFERRED` |
