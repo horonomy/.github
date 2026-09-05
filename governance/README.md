@@ -50,7 +50,7 @@ see [`engineering/security.md`](./engineering/security.md).
 | Product capability truth, maturity, security semantics | The product's own repo | Company-catalog-level facts |
 | Company catalog (name, website, product list at catalog level) | `metadata/company.yaml` (this repo) | Product capability detail — see [`releases/public-surfaces.md`](./releases/public-surfaces.md) |
 | Local agent workspace layout, bootstrap, drift-doctor | `$HORONOM_WORKSPACE_ROOT` tooling (HORO-506/HORO-510) | Product build/test, which stays standalone-clone-usable |
-| Claude adapter | `.claude/` in each adopting repo (HORO-507) | Policy content itself — the adapter points at/consumes canonical content, never forks a copy |
+| Claude adapter | `.claude/` in each adopting repo, doc at [`agents/adapters/claude/`](../agents/adapters/claude/) (HORO-507) | Policy content itself — the adapter points at/consumes canonical content, never forks a copy |
 | Codex adapter | `.codex/` in each adopting repo, launcher/sync at [`agents/adapters/codex/`](../agents/adapters/codex/) (HORO-508) | Same as above |
 | Shared skills | [`agents/skills/`](../agents/skills/) + [`agents/common/`](../agents/common/) in this repo, consumed by both adapters (HORO-509) | Product-specific skill logic, which stays in the product repo |
 
