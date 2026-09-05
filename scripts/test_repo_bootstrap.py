@@ -59,6 +59,26 @@ class ResolveRepoNameTest(unittest.TestCase):
         name = rb.resolve_repo_name(Path("/some/dir"), run_git=fake)
         self.assertEqual(name, "dir")
 
+    def test_shell_metacharacters_in_remote_url_do_not_leak_into_name(self) -> None:
+        """HORO-533: a `git remote -v` value is attacker-influenced (whoever
+        controls the repo's remote config), and the resolved name lands
+        unescaped in generated content — including a copy-pasteable
+        `adopt <name> --org ...` command line. The original regex excluded
+        only `/`, whitespace, and `.`, so a remote crafted with a
+        `;$(touch ...)` suffix produced a generated regenerate-command
+        containing that exact injection payload — confirmed live before
+        this fix. The positive allowlist must reject it and fall back to
+        the safe directory-name default instead of capturing a truncated,
+        still-dangerous fragment."""
+        fake = lambda args: mock.Mock(  # noqa: E731
+            returncode=0,
+            stdout="origin\thttps://github.com/horonomy/foo;$(touch /tmp/pwn) (fetch)\n",
+        )
+        name = rb.resolve_repo_name(Path("/some/dir/safe-fallback-name"), run_git=fake)
+        self.assertEqual(name, "safe-fallback-name")
+        self.assertNotIn(";", name)
+        self.assertNotIn("$", name)
+
 
 class ValidateTargetRepoTest(unittest.TestCase):
     """SonarQube python:S2083 flagged scripts/repo_bootstrap.py's write path
