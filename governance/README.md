@@ -70,7 +70,9 @@ see [`engineering/security.md`](./engineering/security.md).
   implementation at `scripts/horonom_workspace.py`, HORO-506), and
   `horonom doctor`'s usage doc ([`workspace/doctor.md`](./workspace/doctor.md);
   implementation at `scripts/doctor.py` + `scripts/doctor_checks.py`,
-  HORO-510).
+  HORO-510), and the repo-adoption tool's usage doc
+  ([`workspace/repo-bootstrap.md`](./workspace/repo-bootstrap.md);
+  implementation at `scripts/repo_bootstrap.py`, HORO-511).
 - `../agents/skills/` and `../agents/common/` (repo root, not under
   `governance/`) — shared skill canonical content (added by HORO-509). Kept
   outside `governance/` because it's consumed content (SKILL.md + scripts),

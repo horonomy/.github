@@ -32,6 +32,7 @@ sys.path.insert(0, str(SCRIPTS_DIR.parent / "agents" / "adapters" / "codex"))
 import generate_company_metadata as company_meta  # noqa: E402  (reuse secret-pattern guard)
 import horonom_workspace as hw  # noqa: E402
 import public_release_reconcile as prr  # noqa: E402
+import repo_bootstrap as rb  # noqa: E402
 
 PASS = "PASS"
 WARN = "WARN"
@@ -80,6 +81,38 @@ def check_skill_adapter_markers(repo: Path) -> CheckResult:
             fix="these were hand-edited — restore from horonomy/.github's canonical agents/skills/ and rerun project_skills.py",
         )
     return CheckResult("skill_adapter_markers", PASS, f"{len(files)} projected skill file(s), all carry the generated marker")
+
+
+def check_repo_adoption(repo: Path) -> CheckResult:
+    """Delegates to scripts/repo_bootstrap.py check — a repo that has never
+    been adopted (no .horonom-adoption.yaml) is NOT_APPLICABLE, not FAIL:
+    plenty of repos haven't adopted governance yet, and that's a
+    repo-bootstrap job, not a doctor finding."""
+    if not (repo / rb.ADOPTION_MARKER_FILENAME).is_file():
+        return CheckResult(
+            "repo_adoption",
+            NOT_APPLICABLE,
+            "not adopted (no .horonom-adoption.yaml) — this is fine, not every repo has adopted governance yet",
+            fix="run scripts/repo_bootstrap.py adopt <this repo> if it should be adopted",
+        )
+    try:
+        results = rb.check(repo)
+    except Exception as exc:  # noqa: BLE001 — surface as a doctor FAIL, never crash the whole run
+        return CheckResult("repo_adoption", FAIL, f"repo_bootstrap check() raised: {exc}")
+    worst = PASS
+    details = []
+    for name, status, detail in results:
+        details.append(f"{name}={status}")
+        if status == "FAIL":
+            worst = FAIL
+        elif status == "WARN" and worst != FAIL:
+            worst = WARN
+    return CheckResult(
+        "repo_adoption",
+        worst,
+        "; ".join(details),
+        fix=None if worst == PASS else "run scripts/repo_bootstrap.py check <repo> for per-item detail",
+    )
 
 
 def check_contributing_present(repo: Path) -> CheckResult:

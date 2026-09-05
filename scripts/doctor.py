@@ -49,6 +49,7 @@ def run_checks(
     results: list[checks.CheckResult] = []
 
     if repo is not None:
+        results.append(checks.check_repo_adoption(repo))
         results.append(checks.check_skill_adapter_markers(repo))
         results.append(checks.check_contributing_present(repo))
         results.append(checks.check_pr_template_present(repo))
