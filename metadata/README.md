@@ -51,6 +51,17 @@ leakage-prone input; the drift gate
 (`.github/workflows/company-metadata-drift.yml`) runs it in `--check` mode.
 Unit tests live in `scripts/test_company_metadata.py`.
 
+## `domain-migration-inventory.yaml`
+
+Separate from the company registry above: tracks per-product
+`horo.run` → `horonom.com` domain migration state (current/target
+hostnames, DNS status, GA4 Measurement IDs, blockers) for the HORO-566
+migration program. Structured mirror of `horonomy/internal-docs`'s
+[Product domain migration register](https://github.com/horonomy/internal-docs/blob/main/docs/registers/product-domain-migration.md)
+— that file carries the full evidence/rationale prose, this file is the
+machine-readable copy for tooling. See
+[`../governance/engineering/domains-analytics.md`](../governance/engineering/domains-analytics.md).
+
 ## `governance.yaml`
 
 Separate from the company registry above: `governance.yaml` carries a

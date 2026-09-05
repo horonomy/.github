@@ -1,0 +1,122 @@
+# Horonom product domain migration inventory (HORO-566/HORO-567).
+#
+# Machine-readable mirror of horonomy/internal-docs's
+# docs/registers/product-domain-migration.md — that file is the narrative/
+# evidence copy (full curl/dig/grep evidence, rationale prose); this file is
+# the structured copy for tooling (HORO-572's reconciliation pass reads
+# this rather than re-parsing prose). Update both together.
+#
+# Built from live DNS/HTTP inspection and repository greps (2026-09-05),
+# not from Jira descriptions alone — see the narrative register for the
+# specific evidence behind each value.
+#
+# Schema:
+#   product: canonical product id (matches metadata/release-evidence/<id>.yaml
+#            where one exists)
+#   discovery_ticket: HVDL-xx idea/discovery ticket
+#   migration_ticket: product-owned HORO-xx/FORNX-xx implementation ticket,
+#                      or null if no public surface exists to migrate
+#   current_site / target_site: null if no public surface exists
+#   current_docs / target_docs: null if not applicable
+#   dns_status: not_provisioned | provisioned | redirect_only
+#   ga4:
+#     current_id: a GA4 Measurement ID found live/configured today, or null
+#     target_id: the founder-provided or otherwise approved target ID, or
+#                null if not yet known (never invented — see HORO-566)
+#     status: not_installed | live_old_domain | live_new_domain | blocked_on_founder_input
+#   migration_status: not_started | in_progress | complete | not_applicable
+#   blockers: free text, or null
+
+schema_version: 1
+reviewed_at: "2026-09-05"
+
+products:
+  - product: circinus
+    discovery_ticket: HVDL-13
+    migration_ticket: HORO-569
+    current_site: "https://circinus.horo.run"
+    target_site: "https://circinus.horonom.com"
+    current_docs: "https://circinus.horo.run/docs"
+    target_docs: "docs.circinus.horonom.com (if warranted) or circinus.horonom.com/docs"
+    dns_status: not_provisioned
+    ga4:
+      current_id: "G-Z2D86YKMMH"
+      target_id: "G-WYMPBC7Q9C"
+      status: live_old_domain
+    migration_status: not_started
+    blockers: null
+
+  - product: ophiuchus
+    discovery_ticket: HVDL-14
+    migration_ticket: HORO-568
+    current_site: "https://ophiuchus.horo.run"
+    target_site: "https://ophiuchus.horonom.com"
+    current_docs: "https://ophiuchus.horo.run/docs"
+    target_docs: "docs.ophiuchus.horonom.com (if warranted) or ophiuchus.horonom.com/docs"
+    dns_status: not_provisioned
+    ga4:
+      current_id: "G-RE2P2Q3J08"
+      target_id: "G-SK9BL6R66J"
+      status: live_old_domain
+    migration_status: not_started
+    blockers: null
+
+  - product: fornax
+    discovery_ticket: HVDL-15
+    migration_ticket: FORNX-328
+    current_site: "https://fornax.horo.run"
+    target_site: "https://fornax.horonom.com"
+    current_docs: "https://fornax.horo.run/docs"
+    target_docs: "docs.fornax.horonom.com (if warranted) or fornax.horonom.com/docs"
+    dns_status: not_provisioned
+    ga4:
+      current_id: null
+      target_id: "G-YD29L01E89"
+      status: not_installed
+    migration_status: not_started
+    blockers: null
+
+  - product: eridanus
+    discovery_ticket: HVDL-16
+    migration_ticket: HORO-570
+    current_site: null
+    target_site: null
+    current_docs: null
+    target_docs: null
+    dns_status: not_provisioned
+    ga4:
+      current_id: null
+      target_id: null
+      status: not_installed
+    migration_status: not_applicable
+    blockers: "Product remains intentionally not-yet-public (HORO-517/HORO-503) — no public surface to migrate, no DNS or GA4 to add."
+
+  - product: horologium
+    discovery_ticket: HVDL-17
+    migration_ticket: HORO-571
+    current_site: "https://horologium.horo.run"
+    target_site: "https://horologium.horonom.com"
+    current_docs: null
+    target_docs: "docs.horologium.horonom.com (if warranted) or horologium.horonom.com/docs"
+    dns_status: not_provisioned
+    ga4:
+      current_id: null
+      target_id: null
+      status: blocked_on_founder_input
+    migration_status: not_started
+    blockers: "GA4 Measurement ID not yet provided by founder — do not invent one."
+
+  - product: pet-life-simulator
+    discovery_ticket: HVDL-18
+    migration_ticket: null
+    current_site: null
+    target_site: null
+    current_docs: null
+    target_docs: null
+    dns_status: not_provisioned
+    ga4:
+      current_id: null
+      target_id: null
+      status: not_installed
+    migration_status: not_applicable
+    blockers: "No public web surface exists (iOS-first prototype/fake-door experiment, HVDL-18 status: Experimenting). Do not create decorative DNS to complete this inventory."
