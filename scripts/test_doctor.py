@@ -37,6 +37,31 @@ class SkillAdapterMarkersTest(unittest.TestCase):
         result = checks.check_skill_adapter_markers(repo)
         self.assertEqual(result.status, checks.PASS)
 
+    def test_project_local_skill_without_marker_is_ignored(self) -> None:
+        """HORO-533: dogfooding this check against the real Eridanus repo
+        found it flagging Eridanus's own pre-existing, ADR-governed project
+        skills (jira-ticket-lifecycle, adr-management, etc.) as "hand-edited"
+        and telling the operator to restore them from horonomy/.github's
+        canonical set — which doesn't contain those names at all. Only
+        canonical company-projected skill names should ever be checked."""
+        repo = _tmp_repo()
+        local_skill = repo / ".claude" / "skills" / "jira-ticket-lifecycle"
+        local_skill.mkdir(parents=True)
+        (local_skill / "SKILL.md").write_text("hand-authored, no marker — this is correct\n", encoding="utf-8")
+        canonical_skill = repo / ".claude" / "skills" / "jira-delivery"
+        canonical_skill.mkdir(parents=True)
+        (canonical_skill / "SKILL.md").write_text("<!-- horonom:generated -->\ncontent\n", encoding="utf-8")
+        result = checks.check_skill_adapter_markers(repo)
+        self.assertEqual(result.status, checks.PASS)
+
+    def test_only_project_local_skills_present_is_not_applicable(self) -> None:
+        repo = _tmp_repo()
+        local_skill = repo / ".claude" / "skills" / "jira-ticket-lifecycle"
+        local_skill.mkdir(parents=True)
+        (local_skill / "SKILL.md").write_text("hand-authored, no marker — this is correct\n", encoding="utf-8")
+        result = checks.check_skill_adapter_markers(repo)
+        self.assertEqual(result.status, checks.NOT_APPLICABLE)
+
     def test_fail_when_a_projected_file_was_hand_edited(self) -> None:
         """Intentionally-broken adoption fixture: a projected SKILL.md with
         no generated marker at all — someone hand-edited a file that's
