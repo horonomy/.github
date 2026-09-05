@@ -91,7 +91,15 @@ def real_http_get(url: str) -> tuple[int, str]:
     req = urllib.request.Request(url, headers={"User-Agent": "horonom-release-reconcile/1"})
     try:
         with urllib.request.urlopen(req, timeout=15, context=ssl.create_default_context()) as resp:
-            return resp.status, resp.read(65536).decode("utf-8", errors="replace")
+            # Read cap, not a full-page assumption: check_horonom_com/check_docs
+            # only need a substring match against the fetched body. 65536 bytes
+            # was measured (HORO-533 audit) to already truncate a marketing
+            # page as it grows (horonom.com was 28,098 bytes at audit time —
+            # not yet truncated, but the margin was thin) — a page that later
+            # grows past the cap would silently turn a premature-exposure
+            # FAILED into a false "correctly absent" NOT_YET_PUBLIC/DEFERRED.
+            # 1 MiB gives real headroom without reading an unbounded response.
+            return resp.status, resp.read(1_048_576).decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         return exc.code, ""
     except (urllib.error.URLError, ssl.SSLError, TimeoutError, ConnectionError) as exc:
