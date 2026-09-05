@@ -1,0 +1,47 @@
+# agents/skills/<name>/SKILL.md is the canonical source for every shared
+# Horonom skill (HORO-509). agents/common/project_skills.py derives the
+# Claude (.claude/skills/**) and Codex (.codex/skills/**) projections from
+# it. This gate fails if either projection drifted from what the generator
+# would produce — on any PR/push that touches a canonical skill, the
+# generator, or a projected file, and weekly to catch stealth hand-edits.
+name: Skill projection drift check
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - agents/skills/**
+      - agents/common/project_skills.py
+      - .claude/skills/**
+      - .codex/skills/**
+      - .github/workflows/skill-projection-drift.yml
+  push:
+    branches: [main]
+    paths:
+      - agents/skills/**
+      - agents/common/project_skills.py
+      - .claude/skills/**
+      - .codex/skills/**
+      - .github/workflows/skill-projection-drift.yml
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    name: generated skill projections match their canonical SKILL.md
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: Show Python version
+        run: python3 --version
+      - name: Run generator in --check mode
+        run: python3 agents/common/project_skills.py --check
