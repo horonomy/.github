@@ -69,22 +69,19 @@ assumes enforcement that isn't there.
   this is enforced by discipline, not tooling — treat it as a hard rule
   regardless, and say so in the repo's own CLAUDE.md the way those two do.
 
-### Merge strategy — repos disagree, said explicitly
+### Merge strategy — company-wide invariant, not a per-repo choice
 
-Existing repos do **not** agree on merge strategy, and this checklist isn't
-picking a winner:
-
-- `circinus` and `ophiuchus` both have squash merge **disabled** — they use
-  rebase-merge or merge-commit specifically to preserve individual atomic
-  commits in `main`'s history.
-- `CONTRIBUTING.md`'s own PR section says merge strategy is picked by "the
-  reviewer or assignee" per repo, "typically squash or rebase."
-- `horonomy/.github` itself (this repo) has used a squash-style merge
-  (single commit per PR) in its own history.
-
-A new repo should pick one strategy deliberately at setup time and record it
-in the repo's own CLAUDE.md (see below) rather than leaving it to whoever
-merges the first PR to decide implicitly.
+Merge strategy is **decided company-wide**: every repo uses "Create a merge
+commit," squash and rebase-merge are disabled
+([ADR-0005](https://github.com/horonomy/internal-docs/blob/main/docs/engineering/adr-0005-horonom-governance-and-agent-workspace-architecture.md)
+decision #0; see `governance/engineering/git-pr-merge.md`). This settles a
+prior disagreement — `circinus`/`ophiuchus` already used non-squash
+strategies; `horonomy/.github`'s own earlier history used squash-style
+merges; `CONTRIBUTING.md` previously left the choice to "the reviewer or
+assignee." A new repo does not choose a merge strategy at setup time —
+disable squash-merge and rebase-merge in the repo's GitHub settings
+(**Settings → General → Pull Requests**) as part of scaffolding, and don't
+record a different choice in the repo's own `CLAUDE.md`.
 
 ## Repo-level `.claude/CLAUDE.md`
 
@@ -103,13 +100,15 @@ A new repo should add `.claude/CLAUDE.md` (or a root `CLAUDE.md` if the repo
 has no other reason for a `.claude/` directory) with the same structure:
 
 1. A pointer to `horonomy/.github/CLAUDE.md` as the authoritative baseline.
-2. An explicit precedence statement — the narrower, repo-specific file wins
-   on conflict (all three repos checked state this the same way).
+2. An explicit precedence statement — Company → Product → Repository (see
+   `governance/README.md`): a narrower file may *add* or *strengthen* a
+   rule, but never weaken or silently override a company-level non-waivable
+   invariant (merge strategy, secrets handling, and the others listed in
+   `governance/README.md`).
 3. Only what's actually specific to the new repo: what it is, its stack,
-   its test/build commands, any commit/branch/merge conventions that add to
-   or narrow the baseline (like the merge-strategy choice above), and a
-   "never commit" list for anything repo-specific (real credentials, local
-   runtime state, etc.).
+   its test/build commands, and a "never commit" list for anything
+   repo-specific (real credentials, local runtime state, etc.). Merge
+   strategy is not a per-repo choice — see "Merge strategy" above.
 
 Don't restate command-format strings (commit message shape, branch naming,
 PR title format) from `horonomy/.github/CONTRIBUTING.md` — reference it

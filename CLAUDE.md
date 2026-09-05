@@ -21,26 +21,35 @@ composable rather than monolithic, and auditable from the start.
 
 ## Products & repos (which repo does what)
 
-| Product / repo | Role |
-|---|---|
-| **AI Agent Assembly** | Governance platform for AI agents. Lives in its own org, [`ai-agent-assembly`](https://github.com/ai-agent-assembly), with its own org-baseline CLAUDE.md. |
-| **ArcheWeave** | Future product — not yet public. Details to be confirmed. |
-| **Harbinger** | Future product — not yet public. Details to be confirmed. |
-| `official-website` | The `horonom.com` marketing site (Docusaurus + TypeScript). |
-| `internal-docs` | Internal documentation site (private). |
-| `.github` | This repo — org profile (`profile/README.md`), community-health files, and this baseline. |
+The current public product catalog is **not** hand-maintained here — see
+[`metadata/company.yaml`](metadata/company.yaml) (machine-readable) or
+[`profile/README.md`](profile/README.md) (the org profile) for the
+authoritative, up-to-date list. Duplicating it here would only create a
+second copy that can drift, which is exactly the problem those files exist
+to prevent. Non-catalog Horonom repos in this org: `official-website` (the
+`horonom.com` marketing site), `internal-docs` (private internal docs),
+and `.github` (this repo — org profile, community-health files, and this
+baseline).
 
-## Universal conventions (each repo's CONTRIBUTING.md is authoritative)
+## Company-wide governance — precedence and detailed rules
 
-- **Commits:** `<emoji> (<scope>): <imperative summary>` (gitmoji.dev). One logical
-  unit per commit; bisectable; utils/mocks/tests are separate preceding commits.
-- **Branch:** `<release-or-phase>/<ticket>/<type>/<short_summary>` —
-  e.g. `v0.1.0/HORO-14/feat/add_org_profile`. Types: feat/fix/refactor/test/docs/
-  config/deps/remove/lint.
-- **PR title:** `[<ticket>] <emoji> (<scope>): <summary>`; body follows the repo's PR
-  template; ≥1 approval. **Never merge to base directly — PR only.**
-- **Worktrees:** develop each ticket in a worktree off the latest default branch so
-  the main checkout stays clean; remove the worktree after merge.
+Governance applies **Company → Product → Repository**: a narrower context
+may add to or strengthen a rule here, never weaken a non-waivable one. The
+detailed, testable rule text (merge strategy, security, testing/review,
+Jira delivery, releases, autonomous-execution) lives in
+[`governance/`](governance/) — start at
+[`governance/README.md`](governance/README.md). Durable cross-repo
+architecture decisions are recorded as ADRs in
+[`horonomy/internal-docs`](https://github.com/horonomy/internal-docs/tree/main/docs/engineering).
+
+## Universal conventions
+
+Commit/branch/PR format and worktree workflow are defined once, in
+[`CONTRIBUTING.md`](CONTRIBUTING.md) and
+[`governance/engineering/git-pr-merge.md`](governance/engineering/git-pr-merge.md)
+— read those rather than this file for the exact format strings, so there
+is only one place to keep them current. Each repo's own `CONTRIBUTING.md`
+is authoritative for anything it adds on top.
 
 ## Git remotes & default branches (these vary per repo — always detect)
 
