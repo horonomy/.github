@@ -103,6 +103,35 @@ def render_adoption_marker(*, org: str, repo: str, governance_version: int, adop
 
 
 # ---------------------------------------------------------------------------
+# Target-path validation
+# ---------------------------------------------------------------------------
+def _validate_target_repo(repo: Path) -> Path:
+    """Resolve and validate the target repo path before any read/write.
+
+    This tool is an operator-invoked local CLI — `repo` is always a path
+    the caller chose deliberately (like `git clone <path>` or `cp -r src
+    <path>`), never data that arrived from a network request or another
+    party's input. Static analysis (SonarQube python:S2083) nonetheless
+    flags any file write whose path traces back to a function argument as
+    "path constructed from user-controlled data," since its taint model
+    can't distinguish a trusted CLI argument from an untrusted network
+    source. Resolving and validating the path explicitly, in one place,
+    both closes the taint path a scanner can follow and gives a real
+    guarantee: adoption never writes through a symlink to somewhere the
+    operator didn't intend, and never targets a bare filesystem root or a
+    path that turned out not to be a real repo.
+    """
+    resolved = repo.resolve()
+    if resolved.parent == resolved:
+        raise AdoptionError(f"refusing to target the filesystem root: {resolved}")
+    if not resolved.is_dir():
+        raise AdoptionError(f"{resolved} is not a directory")
+    if not (resolved / ".git").exists():
+        raise AdoptionError(f"{resolved} is not a git repository")
+    return resolved
+
+
+# ---------------------------------------------------------------------------
 # CLAUDE.md bounded-region insertion — never touches content outside the markers.
 # ---------------------------------------------------------------------------
 def find_claude_md(repo: Path) -> Path:
@@ -160,8 +189,7 @@ def adopt(
     run_git=None,
     now: str | None = None,
 ) -> dict[str, str]:
-    if not (repo / ".git").exists():
-        raise AdoptionError(f"{repo} is not a git repository")
+    repo = _validate_target_repo(repo)
     if not force and not _git_status_clean(repo, run_git=run_git):
         raise AdoptionError(
             f"{repo} has uncommitted changes — adoption must not mix into unrelated "

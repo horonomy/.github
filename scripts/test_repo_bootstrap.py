@@ -30,6 +30,34 @@ def _fake_clean_git(clean: bool):
     return lambda args: mock.Mock(returncode=0, stdout="" if clean else " M file\n")
 
 
+class ValidateTargetRepoTest(unittest.TestCase):
+    """SonarQube python:S2083 flagged scripts/repo_bootstrap.py's write path
+    as "constructed from user-controlled data" (the `repo` CLI argument).
+    This is a real CLI tool whose destination directory is always an
+    intentional operator argument, not network input — but the explicit
+    resolve+validate step this test locks in is still a genuine hardening:
+    it rejects the filesystem root, a non-existent path, and a path that
+    isn't actually a git repo, before any write is attempted."""
+
+    def test_rejects_nonexistent_path(self) -> None:
+        with self.assertRaises(rb.AdoptionError):
+            rb._validate_target_repo(Path("/definitely/does/not/exist/anywhere"))
+
+    def test_rejects_non_git_directory(self) -> None:
+        d = Path(tempfile.mkdtemp())
+        with self.assertRaises(rb.AdoptionError):
+            rb._validate_target_repo(d)
+
+    def test_rejects_filesystem_root(self) -> None:
+        with self.assertRaises(rb.AdoptionError):
+            rb._validate_target_repo(Path("/"))
+
+    def test_accepts_real_git_repo(self) -> None:
+        repo = _tmp_git_repo()
+        result = rb._validate_target_repo(repo)
+        self.assertEqual(result, repo.resolve())
+
+
 class BoundedBlockInsertionTest(unittest.TestCase):
     def test_inserts_block_into_empty_file(self) -> None:
         block = rb.render_adoption_block(org="horonomy", repo="widget", governance_version=1)
