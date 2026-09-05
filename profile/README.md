@@ -14,13 +14,18 @@ Our namesake does not create the sky. It observes it, understands it, records it
 ## Products
 
 The current public product portfolio — see the [Product Atlas](https://horo.run)
-for the full system map and how these relate. Source of truth:
-`horonomy/official-website`'s
+for the full system map and how these relate. This list is kept in step by
+hand with two upstream sources, each authoritative for a different axis:
+`metadata/company.yaml` (this repo) owns catalog-level portfolio lifecycle
+for products that have crossed a real public-release threshold (AI Agent
+Assembly's "Beta" below); `horonomy/official-website`'s
 [Product Registry](https://github.com/horonomy/official-website/blob/main/src/data/productRegistry.ts)
-(HORO-282) — this list is kept in step with it by hand; if the two ever
-disagree, the Registry is correct.
+(HORO-282) owns Atlas presentation and the `experimental` tier used by
+Octans/Circinus/Ophiuchus below. Neither file redefines the other's axis —
+see `governance/releases/public-surfaces.md` — so this page never disagrees
+with either upstream source by construction; it can only fall behind one.
 
-### 🤖 AI Agent Assembly — Beta
+### 🤖 AI Agent Assembly — Product stage: Beta
 
 [![release](https://img.shields.io/github/v/release/ai-agent-assembly/agent-assembly?include_prereleases&sort=semver&label=release&logo=github)](https://github.com/ai-agent-assembly/agent-assembly/releases) [![CI](https://github.com/ai-agent-assembly/agent-assembly/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/ai-agent-assembly/agent-assembly/actions/workflows/ci.yml?query=branch%3Amaster) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
