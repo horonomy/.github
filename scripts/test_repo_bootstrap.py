@@ -159,6 +159,58 @@ class AdoptFreshRepoFixtureTest(unittest.TestCase):
         self.assertEqual(statuses["agents_md"], "PASS")
 
 
+class AdoptSymlinkGuardTest(unittest.TestCase):
+    """HORO-533: `adopt()` writes at `.horonom-adoption.yaml`, `AGENTS.md`,
+    the CLAUDE.md entry point, and each projected skill file all used
+    `Path.exists()` (which follows symlinks and returns False for a
+    dangling one) as the "is this real content?" test — so a dangling
+    symlink at any of those paths fell into the "doesn't exist, create it"
+    branch and wrote straight through the link to wherever it pointed.
+    Confirmed live against a real scratch repo before this fix (a real
+    file appeared outside the repo at the dangling link's target)."""
+
+    def setUp(self) -> None:
+        self.repo = _tmp_git_repo()
+        self._patch = mock.patch.object(rb.hw, "load_governance_version", return_value=1)
+        self._patch.start()
+
+    def tearDown(self) -> None:
+        self._patch.stop()
+
+    def test_dangling_marker_symlink_is_refused_not_written_through(self) -> None:
+        outside = self.repo.parent / "escape.txt"
+        (self.repo / rb.ADOPTION_MARKER_FILENAME).symlink_to(outside)
+        with self.assertRaises(rb.AdoptionError):
+            rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        self.assertFalse(outside.exists())
+
+    def test_dangling_agents_md_symlink_is_refused_not_written_through(self) -> None:
+        outside = self.repo.parent / "escape_agents.md"
+        (self.repo / "AGENTS.md").symlink_to(outside)
+        with self.assertRaises(rb.AdoptionError):
+            rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        self.assertFalse(outside.exists())
+
+    def test_symlink_escaping_repo_to_a_real_file_is_refused(self) -> None:
+        outside = self.repo.parent / "real_outside_file.yaml"
+        outside.write_text("pre-existing content\n", encoding="utf-8")
+        (self.repo / rb.ADOPTION_MARKER_FILENAME).symlink_to(outside)
+        with self.assertRaises(rb.AdoptionError):
+            rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        self.assertEqual(outside.read_text(encoding="utf-8"), "pre-existing content\n")
+
+    def test_symlink_pointing_inside_repo_is_treated_as_hand_authored(self) -> None:
+        """The Eridanus case (ADR-0001): AGENTS.md is a real symlink to
+        .claude/CLAUDE.md, entirely within the repo — this must keep working
+        via the ordinary skipped-conflict path, not be rejected as unsafe."""
+        (self.repo / ".claude").mkdir(parents=True)
+        (self.repo / ".claude" / "CLAUDE.md").write_text("# hand-authored\n", encoding="utf-8")
+        (self.repo / "AGENTS.md").symlink_to(Path(".claude") / "CLAUDE.md")
+        outcomes = rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        self.assertEqual(outcomes["agents_md"], "skipped-conflict")
+        self.assertTrue((self.repo / "AGENTS.md").is_symlink())
+
+
 class CrossRepoSkillProjectionTest(unittest.TestCase):
     """HORO-507: an adopted repo gets the same canonical skill content
     Claude/Codex read from horonomy/.github itself — never a second
