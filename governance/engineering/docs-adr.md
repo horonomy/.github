@@ -20,7 +20,7 @@ there.
 Everything else: workflow conventions, tool usage, day-to-day process,
 routine implementation choices with a clearly-reversible answer. These
 belong in `governance/**` (this repo), `CONTRIBUTING.md`, `CLAUDE.md`, or a
-shared skill under `governance/skills/` — whichever already owns the
+shared skill under `agents/skills/` — whichever already owns the
 concern per `governance/README.md`'s ownership matrix. Don't create an ADR
 for a decision this category already covers; don't bury a genuinely durable
 cross-repo decision in a skill's README where it won't be found later.

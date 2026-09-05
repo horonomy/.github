@@ -52,7 +52,7 @@ see [`engineering/security.md`](./engineering/security.md).
 | Local agent workspace layout, bootstrap, drift-doctor | `$HORONOM_WORKSPACE_ROOT` tooling (HORO-506/HORO-510) | Product build/test, which stays standalone-clone-usable |
 | Claude adapter | `.claude/` in each adopting repo (HORO-507) | Policy content itself — the adapter points at/consumes canonical content, never forks a copy |
 | Codex adapter | `.codex/` in each adopting repo (HORO-508) | Same as above |
-| Shared skills | [`skills/`](./skills/) in this repo, consumed by both adapters (HORO-509) | Product-specific skill logic, which stays in the product repo |
+| Shared skills | [`agents/skills/`](../agents/skills/) + [`agents/common/`](../agents/common/) in this repo, consumed by both adapters (HORO-509) | Product-specific skill logic, which stays in the product repo |
 
 ## Structure
 
@@ -65,7 +65,10 @@ see [`engineering/security.md`](./engineering/security.md).
   ([`workspace/manifest.yaml`](./workspace/manifest.yaml)), and the
   bootstrap tool's usage doc ([`workspace/bootstrap.md`](./workspace/bootstrap.md);
   implementation at `scripts/horonom_workspace.py`, HORO-506).
-- `skills/` — shared skill canonical content (added by HORO-509).
+- `../agents/skills/` and `../agents/common/` (repo root, not under
+  `governance/`) — shared skill canonical content (added by HORO-509). Kept
+  outside `governance/` because it's consumed content (SKILL.md + scripts),
+  not policy prose — see [`engineering/docs-adr.md`](./engineering/docs-adr.md).
 
 ## Governance version
 
