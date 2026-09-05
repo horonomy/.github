@@ -17,6 +17,13 @@ Stdlib only, deterministic, idempotent (`--check` exits non-zero on
 drift), fail-closed on a malformed canonical skill — matches
 scripts/generate_company_metadata.py's contract.
 
+`build_projections()` targets this repo's own `.claude/`/`.codex/` by
+default. HORO-507/HORO-511's cross-repo adoption path
+(`scripts/repo_bootstrap.py adopt`) calls it with `dest_root` set to a
+*different* target repo, so an adopted product repo gets the same
+canonical skill content projected into its own `.claude/skills/`/
+`.codex/skills/` — never a second hand-copied implementation.
+
 Usage:
     python3 agents/common/project_skills.py
     python3 agents/common/project_skills.py --check
@@ -83,12 +90,17 @@ def render_codex_projection(name: str, canonical: str) -> str:
     )
 
 
-def build_projections() -> dict[Path, str]:
+def build_projections(dest_root: Path | None = None) -> dict[Path, str]:
+    """`dest_root` defaults to this repo (self-projection). Passing a
+    different repo's path projects the *same* canonical content there —
+    used by scripts/repo_bootstrap.py's cross-repo adoption path."""
+    claude_dir = (dest_root / ".claude" / "skills") if dest_root else CLAUDE_SKILLS_DIR
+    codex_dir = (dest_root / ".codex" / "skills") if dest_root else CODEX_SKILLS_DIR
     projections: dict[Path, str] = {}
     for name in discover_skills():
         canonical = (SKILLS_DIR / name / "SKILL.md").read_text(encoding="utf-8")
-        projections[CLAUDE_SKILLS_DIR / name / "SKILL.md"] = render_claude_projection(name, canonical)
-        projections[CODEX_SKILLS_DIR / f"{name}.md"] = render_codex_projection(name, canonical)
+        projections[claude_dir / name / "SKILL.md"] = render_claude_projection(name, canonical)
+        projections[codex_dir / f"{name}.md"] = render_codex_projection(name, canonical)
     return projections
 
 
