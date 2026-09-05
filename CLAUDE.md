@@ -59,6 +59,30 @@ domain. Full constitution, security checklist, and precedence:
 (HORO-566). Product-specific domain/DNS/analytics implementation is
 product-owned, not centralized here.
 
+## Documentation analytics convention (non-waivable)
+
+A **Documentation** GA4 stream is a separate boundary from marketing
+analytics and from authenticated product telemetry — never assume they
+share a stream, property, or event vocabulary, and never assume a
+Documentation stream URL proves the corresponding docs DNS/site exists.
+Common docs event vocabulary (`page_view` plus only real interactions
+like `docs_search`, `code_copy`, `install_command_copy`,
+`quickstart_click`, `github_click`, `docs_feedback`, etc.) and the
+forbidden-parameter list (no raw search text, copied code, prompts,
+repo/tenant/user identity, credentials, authenticated payloads, or
+Product Truth/security content) are fixed centrally so no product session
+invents its own. A Measurement ID in a bundle, `gtag.js` 200, or a
+synthetic `g/collect` 204 is never sufficient proof of working analytics —
+required evidence is a real production browser emitting the event via
+real navigation/interaction. Full constitution, event vocabulary,
+parameter policy, and verification standard:
+[`governance/engineering/docs-analytics.md`](governance/engineering/docs-analytics.md)
+→ [ADR-0007](https://github.com/horonomy/internal-docs/blob/main/docs/engineering/adr-0007-documentation-analytics-constitution.md)
+(HORO-587), extending
+[ADR-0006](https://github.com/horonomy/internal-docs/blob/main/docs/engineering/adr-0006-horonom-domain-surface-and-analytics-constitution.md)
+(HORO-566). Product-specific docs-analytics implementation is
+product-owned, not centralized here.
+
 ## Universal conventions
 
 Commit/branch/PR format and worktree workflow are defined once, in
