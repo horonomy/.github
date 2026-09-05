@@ -134,10 +134,14 @@ def _validate_target_repo(repo: Path) -> Path:
 
 
 def _reject_unsafe_symlink(path: Path, *, repo: Path) -> None:
-    """Refuse to write through a symlink at one of adoption's generated
-    file paths whose target is dangling or escapes the repo — but allow a
-    symlink that legitimately points at another file *inside* the same
-    repo (e.g. Eridanus's real `AGENTS.md -> .claude/CLAUDE.md`, its own
+    """Refuse to write to one of adoption's generated file paths if it
+    resolves outside the repo — whether the escape comes from the leaf
+    path itself being a symlink (dangling, or pointing elsewhere) or from
+    ANY ancestor directory component being a symlink (e.g. `.claude` itself
+    replaced with a symlink to an outside directory, so `.claude/CLAUDE.md`
+    is never a symlink but still resolves outside the repo). A symlink that
+    legitimately points at another file *inside* the same repo is allowed
+    (e.g. Eridanus's real `AGENTS.md -> .claude/CLAUDE.md`, its own
     ADR-0001 design, which `adopt()` must keep treating as ordinary
     hand-authored content via the existing `skipped-conflict` path).
 
@@ -146,20 +150,24 @@ def _reject_unsafe_symlink(path: Path, *, repo: Path) -> None:
     symlinks and reports False for a dangling one, so a repo carrying a
     dangling symlink at, say, `.horonom-adoption.yaml` fell through every
     write site's "doesn't exist yet, create it" branch and wrote straight
-    through the link to wherever it pointed — confirmed live (HORO-533) as
-    an arbitrary-file-write primitive scoped to wherever the symlink target
-    resolves, reachable by anyone who can get content into a repo an
-    operator later runs `adopt` against (a PR, a compromised repo).
+    through the link to wherever it pointed. An initial fix only checked
+    `path.is_symlink()` on the leaf component — an independent review
+    (HORO-533) found this still fully bypassable by making an *ancestor
+    directory* (e.g. `.claude`) the symlink instead of the leaf file, since
+    the leaf itself is then never a symlink and the check short-circuited
+    before ever resolving the real write location. `Path.resolve()`
+    follows symlinks in every path component, not just the leaf, so
+    resolving unconditionally and checking containment catches both the
+    original leaf case and this ancestor-directory case in one guard.
     """
-    if not path.is_symlink():
-        return
-    target = path.resolve()
-    if not target.exists():
-        raise AdoptionError(f"refusing to write through a dangling symlink at {path} (-> {target})")
+    resolved = path.resolve()
     try:
-        target.relative_to(repo)
+        resolved.relative_to(repo)
     except ValueError:
-        raise AdoptionError(f"refusing to write through a symlink at {path} that escapes the repo (-> {target})") from None
+        raise AdoptionError(
+            f"refusing to write to {path} — it resolves outside the repo (-> {resolved}), "
+            f"via a symlink at the path itself or an ancestor directory"
+        ) from None
 
 
 # ---------------------------------------------------------------------------
