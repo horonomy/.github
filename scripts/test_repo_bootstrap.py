@@ -59,6 +59,26 @@ class ResolveRepoNameTest(unittest.TestCase):
         name = rb.resolve_repo_name(Path("/some/dir"), run_git=fake)
         self.assertEqual(name, "dir")
 
+    def test_shell_metacharacters_in_remote_url_do_not_leak_into_name(self) -> None:
+        """HORO-533: a `git remote -v` value is attacker-influenced (whoever
+        controls the repo's remote config), and the resolved name lands
+        unescaped in generated content — including a copy-pasteable
+        `adopt <name> --org ...` command line. The original regex excluded
+        only `/`, whitespace, and `.`, so a remote crafted with a
+        `;$(touch ...)` suffix produced a generated regenerate-command
+        containing that exact injection payload — confirmed live before
+        this fix. The positive allowlist must reject it and fall back to
+        the safe directory-name default instead of capturing a truncated,
+        still-dangerous fragment."""
+        fake = lambda args: mock.Mock(  # noqa: E731
+            returncode=0,
+            stdout="origin\thttps://github.com/horonomy/foo;$(touch /tmp/pwn) (fetch)\n",
+        )
+        name = rb.resolve_repo_name(Path("/some/dir/safe-fallback-name"), run_git=fake)
+        self.assertEqual(name, "safe-fallback-name")
+        self.assertNotIn(";", name)
+        self.assertNotIn("$", name)
+
 
 class ValidateTargetRepoTest(unittest.TestCase):
     """SonarQube python:S2083 flagged scripts/repo_bootstrap.py's write path
@@ -157,6 +177,72 @@ class AdoptFreshRepoFixtureTest(unittest.TestCase):
         self.assertEqual(statuses["adoption_marker"], "PASS")
         self.assertEqual(statuses["claude_md_block"], "PASS")
         self.assertEqual(statuses["agents_md"], "PASS")
+
+
+class AdoptSymlinkGuardTest(unittest.TestCase):
+    """HORO-533: `adopt()` writes at `.horonom-adoption.yaml`, `AGENTS.md`,
+    the CLAUDE.md entry point, and each projected skill file all used
+    `Path.exists()` (which follows symlinks and returns False for a
+    dangling one) as the "is this real content?" test — so a dangling
+    symlink at any of those paths fell into the "doesn't exist, create it"
+    branch and wrote straight through the link to wherever it pointed.
+    Confirmed live against a real scratch repo before this fix (a real
+    file appeared outside the repo at the dangling link's target)."""
+
+    def setUp(self) -> None:
+        self.repo = _tmp_git_repo()
+        self._patch = mock.patch.object(rb.hw, "load_governance_version", return_value=1)
+        self._patch.start()
+
+    def tearDown(self) -> None:
+        self._patch.stop()
+
+    def test_dangling_marker_symlink_is_refused_not_written_through(self) -> None:
+        outside = Path(tempfile.mkdtemp()) / "escape.txt"
+        (self.repo / rb.ADOPTION_MARKER_FILENAME).symlink_to(outside)
+        with self.assertRaises(rb.AdoptionError):
+            rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        self.assertFalse(outside.exists())
+
+    def test_dangling_agents_md_symlink_is_refused_not_written_through(self) -> None:
+        outside = Path(tempfile.mkdtemp()) / "escape_agents.md"
+        (self.repo / "AGENTS.md").symlink_to(outside)
+        with self.assertRaises(rb.AdoptionError):
+            rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        self.assertFalse(outside.exists())
+
+    def test_symlink_escaping_repo_to_a_real_file_is_refused(self) -> None:
+        outside = Path(tempfile.mkdtemp()) / "real_outside_file.yaml"
+        outside.write_text("pre-existing content\n", encoding="utf-8")
+        (self.repo / rb.ADOPTION_MARKER_FILENAME).symlink_to(outside)
+        with self.assertRaises(rb.AdoptionError):
+            rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        self.assertEqual(outside.read_text(encoding="utf-8"), "pre-existing content\n")
+
+    def test_symlinked_ancestor_directory_is_refused_not_written_through(self) -> None:
+        """Independent review (HORO-533) found the first version of this
+        guard only checked `path.is_symlink()` on the leaf file — fully
+        bypassable by making an ANCESTOR directory (e.g. `.claude`) the
+        symlink instead, since the leaf itself is then never a symlink and
+        the check short-circuited before ever resolving the real write
+        location. Confirmed live: this wrote CLAUDE.md straight into the
+        symlinked-to directory before the fix."""
+        outside = Path(tempfile.mkdtemp())
+        (self.repo / ".claude").symlink_to(outside)
+        with self.assertRaises(rb.AdoptionError):
+            rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_symlink_pointing_inside_repo_is_treated_as_hand_authored(self) -> None:
+        """The Eridanus case (ADR-0001): AGENTS.md is a real symlink to
+        .claude/CLAUDE.md, entirely within the repo — this must keep working
+        via the ordinary skipped-conflict path, not be rejected as unsafe."""
+        (self.repo / ".claude").mkdir(parents=True)
+        (self.repo / ".claude" / "CLAUDE.md").write_text("# hand-authored\n", encoding="utf-8")
+        (self.repo / "AGENTS.md").symlink_to(Path(".claude") / "CLAUDE.md")
+        outcomes = rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        self.assertEqual(outcomes["agents_md"], "skipped-conflict")
+        self.assertTrue((self.repo / "AGENTS.md").is_symlink())
 
 
 class CrossRepoSkillProjectionTest(unittest.TestCase):

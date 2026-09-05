@@ -58,6 +58,22 @@ _SECRET_VALUE_RES = (
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b"),
     re.compile(r"\b[0-9a-fA-F]{32,}\b"),
+    # Common named-prefix credential formats — the two generic patterns
+    # above (long base64/hex runs) miss these because a `_` separator or
+    # mixed-case non-hex letters break their charsets. Found live (HORO-533
+    # security review): a planted GitHub PAT-shaped string
+    # (`ghp_<36 chars>`) sailed straight through both generic patterns and
+    # was reported PASS by doctor's no_secrets_in_generated_files check.
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),  # GitHub PAT/OAuth/App/refresh tokens (classic)
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),  # GitHub fine-grained PAT
+    re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),  # AWS long-term (AKIA) / temporary STS (ASIA) access key ID
+    re.compile(r"\bxox(?:[baprs]|e)-[A-Za-z0-9-]{10,}\b"),  # Slack tokens, incl. xoxe- refresh/exchange
+    # OpenAI-style keys: the `-proj-`/`-org-`/etc. variants insert a hyphen
+    # a few chars in, which broke a plain `sk-[A-Za-z0-9]{20,}` run — an
+    # independent review (HORO-533) constructed an `sk-proj-...` value that
+    # slipped past both that pattern and the generic base64/hex fallbacks.
+    # Match the literal prefix, then allow embedded hyphens in the body.
+    re.compile(r"\bsk-(?:proj-|org-|ant-)?[A-Za-z0-9-]{20,}\b"),
 )
 
 _SLA_UNIT_LABELS = {

@@ -133,6 +133,43 @@ def _validate_target_repo(repo: Path) -> Path:
     return resolved
 
 
+def _reject_unsafe_symlink(path: Path, *, repo: Path) -> None:
+    """Refuse to write to one of adoption's generated file paths if it
+    resolves outside the repo — whether the escape comes from the leaf
+    path itself being a symlink (dangling, or pointing elsewhere) or from
+    ANY ancestor directory component being a symlink (e.g. `.claude` itself
+    replaced with a symlink to an outside directory, so `.claude/CLAUDE.md`
+    is never a symlink but still resolves outside the repo). A symlink that
+    legitimately points at another file *inside* the same repo is allowed
+    (e.g. Eridanus's real `AGENTS.md -> .claude/CLAUDE.md`, its own
+    ADR-0001 design, which `adopt()` must keep treating as ordinary
+    hand-authored content via the existing `skipped-conflict` path).
+
+    `_validate_target_repo` only resolves the repo *directory* — it never
+    checked the individual files adoption writes. `Path.exists()` follows
+    symlinks and reports False for a dangling one, so a repo carrying a
+    dangling symlink at, say, `.horonom-adoption.yaml` fell through every
+    write site's "doesn't exist yet, create it" branch and wrote straight
+    through the link to wherever it pointed. An initial fix only checked
+    `path.is_symlink()` on the leaf component — an independent review
+    (HORO-533) found this still fully bypassable by making an *ancestor
+    directory* (e.g. `.claude`) the symlink instead of the leaf file, since
+    the leaf itself is then never a symlink and the check short-circuited
+    before ever resolving the real write location. `Path.resolve()`
+    follows symlinks in every path component, not just the leaf, so
+    resolving unconditionally and checking containment catches both the
+    original leaf case and this ancestor-directory case in one guard.
+    """
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(repo)
+    except ValueError:
+        raise AdoptionError(
+            f"refusing to write to {path} — it resolves outside the repo (-> {resolved}), "
+            f"via a symlink at the path itself or an ancestor directory"
+        ) from None
+
+
 # ---------------------------------------------------------------------------
 # CLAUDE.md bounded-region insertion — never touches content outside the markers.
 # ---------------------------------------------------------------------------
@@ -146,7 +183,22 @@ def find_claude_md(repo: Path) -> Path:
     return dot_claude  # default location for a brand-new repo
 
 
-_REMOTE_URL_RE = re.compile(r"github\.com[:/][^/\s]+/([^/\s.]+?)(?:\.git)?(?:\s|$)")
+# Capture group is a positive allowlist (GitHub's own repo-name charset:
+# alphanumeric, `-`, `_`, `.`) rather than a negative exclusion — a
+# `git remote -v` value is attacker-influenced (whoever controls the
+# repo's remote config, e.g. a malicious fork or a compromised repo an
+# operator later runs `adopt` against) and lands, unescaped, in generated
+# content: the .horonom-adoption.yaml `repo:` field and the copy-pasteable
+# `python3 scripts/repo_bootstrap.py adopt <repo> --org ...` line in
+# CLAUDE.md. A negative exclusion (originally just `[^/\s.]`) let shell
+# metacharacters (`;`, `$(...)`, backticks) through into that copy-pasteable
+# command — confirmed live (HORO-533 security review): a remote URL crafted
+# with a `;$(touch ...)` suffix produced a generated regenerate-command line
+# containing that exact injection payload, a real risk if a human or agent
+# copy-pastes the suggested command into a shell. Not exploitable by this
+# tool itself (no `shell=True` anywhere), but the generated content was
+# handing a loaded gun to whatever reads it next.
+_REMOTE_URL_RE = re.compile(r"github\.com[:/][^/\s]+/([A-Za-z0-9._-]+?)(?:\.git)?(?:\s|$)")
 
 
 def resolve_repo_name(repo: Path, *, run_git=None) -> str:
@@ -225,6 +277,7 @@ def adopt(
     outcomes: dict[str, str] = {}
 
     claude_path = find_claude_md(repo)
+    _reject_unsafe_symlink(claude_path, repo=repo)
     block = render_adoption_block(org=org, repo=repo_name, governance_version=governance_version)
     existing = claude_path.read_text(encoding="utf-8") if claude_path.exists() else ""
     new_content = apply_bounded_block(existing, block)
@@ -237,6 +290,7 @@ def adopt(
         outcomes["claude_md"] = "written" if existing else "created"
 
     agents_path = repo / "AGENTS.md"
+    _reject_unsafe_symlink(agents_path, repo=repo)
     if agents_path.exists():
         current = agents_path.read_text(encoding="utf-8")
         if current.startswith(AGENTS_MARKER):
@@ -252,6 +306,7 @@ def adopt(
         outcomes["agents_md"] = "created"
 
     marker_path = repo / ADOPTION_MARKER_FILENAME
+    _reject_unsafe_symlink(marker_path, repo=repo)
     marker_content = render_adoption_marker(org=org, repo=repo_name, governance_version=governance_version, adopted_at=adopted_at)
     if not dry_run:
         marker_path.write_text(marker_content, encoding="utf-8")
@@ -265,6 +320,7 @@ def adopt(
     skill_projections = project_skills.build_projections(dest_root=repo)
     skill_outcomes = {"written": 0, "unchanged": 0, "skipped-conflict": 0}
     for path, content in skill_projections.items():
+        _reject_unsafe_symlink(path, repo=repo)
         if path.exists():
             current = path.read_text(encoding="utf-8", errors="replace")
             if current == content:
