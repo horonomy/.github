@@ -1,8 +1,9 @@
-# Runs the stdlib unittest suites under scripts/ and agents/common/ — the
-# company-metadata generator, the workspace bootstrap CLI, the skill
-# projection generator, and the Public Release Surface Contract reconciler.
-# All of these tests are fully offline (network/gh calls are dependency-
-# injected and faked); nothing here makes a live network call in CI.
+# Runs the stdlib unittest suites under scripts/, agents/common/, and
+# agents/adapters/**/ — the company-metadata generator, the workspace
+# bootstrap CLI, the skill projection generator, the Public Release Surface
+# Contract reconciler, and the Codex adapter. All of these tests are fully
+# offline (network/gh/codex calls are dependency-injected and faked);
+# nothing here makes a live network call or requires `codex` on PATH.
 name: Scripts tests
 
 on:
@@ -11,12 +12,14 @@ on:
     paths:
       - scripts/**
       - agents/common/**
+      - agents/adapters/**
       - .github/workflows/scripts-tests.yml
   push:
     branches: [main]
     paths:
       - scripts/**
       - agents/common/**
+      - agents/adapters/**
       - .github/workflows/scripts-tests.yml
 
 permissions:
@@ -39,3 +42,5 @@ jobs:
         run: python3 -m unittest discover -s scripts
       - name: Run agents/common/ tests
         run: python3 -m unittest discover -s agents/common
+      - name: Run agents/adapters/codex/ tests
+        run: python3 -m unittest discover -s agents/adapters/codex
