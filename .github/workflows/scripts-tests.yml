@@ -1,0 +1,41 @@
+# Runs the stdlib unittest suites under scripts/ and agents/common/ — the
+# company-metadata generator, the workspace bootstrap CLI, the skill
+# projection generator, and the Public Release Surface Contract reconciler.
+# All of these tests are fully offline (network/gh calls are dependency-
+# injected and faked); nothing here makes a live network call in CI.
+name: Scripts tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - scripts/**
+      - agents/common/**
+      - .github/workflows/scripts-tests.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/**
+      - agents/common/**
+      - .github/workflows/scripts-tests.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: unittest discover
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: Show Python version
+        run: python3 --version
+      - name: Run scripts/ tests
+        run: python3 -m unittest discover -s scripts
+      - name: Run agents/common/ tests
+        run: python3 -m unittest discover -s agents/common
