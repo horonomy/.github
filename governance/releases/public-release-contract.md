@@ -15,7 +15,7 @@ Every surface, and the product overall, resolves to exactly one of:
 |---|---|
 | `VERIFIED` | Checked live/mechanically and confirmed correct. |
 | `REQUIRED` | The product's claimed maturity implies this surface should exist/agree, and it currently doesn't — action needed. |
-| `DEFERRED` | Not required yet at this product's current maturity, and correctly absent (e.g. no company-catalog entry for an experimental product). |
+| `DEFERRED` | Not required yet at this product's current maturity, and correctly absent (e.g. no company-catalog entry for an experimental product) — this also covers an `experimental` product simply not (yet) mentioned on `org_profile`/`horonom_com`: `experimental` is a legitimately publishable tier, so its absence there is a deferred choice, never a `REQUIRED` action. |
 | `NOT_APPLICABLE` | This surface doesn't apply to this product (e.g. no hosted service for a library). |
 | `NOT_YET_PUBLIC` | The product is intentionally pre-public; surfaces that would expose it are correctly absent. |
 | `BLOCKED_EXTERNAL` | Could not be checked for a verified external reason (network unreachable, GitHub API rate-limited) — not a defect in the product or the check. |
@@ -38,8 +38,8 @@ majority vote — one genuinely failed surface fails the whole reconciliation.
 | `website` / `docs` / `hosted_service` | The configured URL, if any, responds successfully over HTTPS | live HTTP(S) request; connection failure classifies as `BLOCKED_EXTERNAL`, a non-2xx/3xx response as `FAILED` |
 | `domain_tls` | TLS handshake succeeds for any configured HTTPS surface | folded into the website/docs/hosted_service checks |
 | `company_registry` | `metadata/company.yaml`'s catalog entry, if any, matches the claimed lifecycle | direct read of `metadata/company.yaml` — a mismatched or stale entry is `FAILED`, a genuinely absent entry for a not-yet-warranted product is `DEFERRED` |
-| `org_profile` | `profile/README.md` mentions the product **iff** its maturity warrants public listing | text presence check — mentioning a `not_yet_public`/`experimental` product here is premature exposure and is `FAILED`, not merely `REQUIRED` in reverse |
-| `horonom_com` | `horonom.com`'s live content mentions the product **iff** warranted | live fetch of `https://horonom.com`; same premature-exposure logic as `org_profile` |
+| `org_profile` | `profile/README.md` mentions the product **iff** its maturity requires public listing | text presence check, three-way by lifecycle: `not_yet_public` mentioned is `FAILED` (premature exposure), absent is `NOT_YET_PUBLIC`; `experimental` is a legitimately publishable tier — mentioned is `VERIFIED`, absent is `DEFERRED` (never forced); `beta`/`release_candidate`/`available` mentioned is `VERIFIED`, absent is `REQUIRED` |
+| `horonom_com` | `horonom.com`'s live content mentions the product **iff** required | live fetch of `https://horonom.com`; same three-way logic as `org_profile` |
 | `cross_links` | If both `website` and `docs` are configured and `VERIFIED`, the website actually links to the docs host | live fetch + substring check; otherwise `NOT_APPLICABLE` — there's nothing to cross-link |
 | `product_truth` | The product's own repo is the authoritative source for its capability claim (`governance/releases/public-surfaces.md`) | proxied by `repo_metadata` succeeding — this contract does not attempt semantic verification of the claim's content itself |
 

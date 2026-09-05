@@ -252,6 +252,38 @@ class OrgProfileExposureTest(unittest.TestCase):
             result = prr.check_org_profile(_evidence(product="widget", claimed_lifecycle="beta"))
         self.assertEqual(result.state, prr.VERIFIED)
 
+    def test_verified_when_experimental_product_is_listed(self) -> None:
+        """HORO-515: experimental is a legitimately publishable tier (see
+        productRegistry.ts's ProductMaturity) — being mentioned is fine, not
+        premature exposure like not_yet_public."""
+        with mock.patch.object(prr, "PROFILE_README_PATH", _readme_with("Circinus is Experimental")):
+            result = prr.check_org_profile(_evidence(product="circinus", claimed_lifecycle="experimental"))
+        self.assertEqual(result.state, prr.VERIFIED)
+
+    def test_deferred_when_experimental_product_is_absent(self) -> None:
+        """An experimental product not yet listed anywhere is DEFERRED, not
+        REQUIRED — never force a product public (public-release-contract.md)."""
+        with mock.patch.object(prr, "PROFILE_README_PATH", _readme_with("nothing relevant here")):
+            result = prr.check_org_profile(_evidence(product="fornax", claimed_lifecycle="experimental"))
+        self.assertEqual(result.state, prr.DEFERRED)
+
+
+class HoronomComExposureTest(unittest.TestCase):
+    def test_verified_when_experimental_product_appears_on_horonom_com(self) -> None:
+        fx = _fake_fetchers(http_get=lambda u: (200, "Circinus is Experimental"))
+        result = prr.check_horonom_com(_evidence(product="circinus", claimed_lifecycle="experimental"), fx)
+        self.assertEqual(result.state, prr.VERIFIED)
+
+    def test_deferred_when_experimental_product_absent_from_horonom_com(self) -> None:
+        fx = _fake_fetchers(http_get=lambda u: (200, "nothing relevant here"))
+        result = prr.check_horonom_com(_evidence(product="fornax", claimed_lifecycle="experimental"), fx)
+        self.assertEqual(result.state, prr.DEFERRED)
+
+    def test_failed_when_not_yet_public_product_appears_on_horonom_com(self) -> None:
+        fx = _fake_fetchers(http_get=lambda u: (200, "Eridanus launches today"))
+        result = prr.check_horonom_com(_evidence(product="eridanus", claimed_lifecycle="not_yet_public"), fx)
+        self.assertEqual(result.state, prr.FAILED)
+
 
 def _readme_with(text: str) -> Path:
     d = Path(tempfile.mkdtemp())
