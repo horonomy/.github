@@ -1,0 +1,16 @@
+# Public Release Surface Contract evidence for Horologium (HORO-512).
+#
+# claimed_lifecycle reflects Horologium's own README ("Status: MVP /
+# validation slice (v0.0.0). Not GA, not production-proven.") — experimental,
+# not beta/available, despite having a v0.0.0 tag. This is the AC's
+# "evaluate Horologium as a released MVP" case: it has one real GitHub tag
+# but makes no public/GA claim, so the contract's checks should reflect an
+# internal validation-slice product, not a public release.
+product: horologium
+claimed_lifecycle: experimental
+github:
+  org: horonomy
+  repo: horologium
+website: null
+docs: null
+hosted_service: null
