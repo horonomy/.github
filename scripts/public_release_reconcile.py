@@ -161,11 +161,28 @@ def check_tags_releases(evidence: dict[str, Any], fx: Fetchers) -> SurfaceResult
             FAILED,
             f"claimed_lifecycle={lifecycle!r} implies a release exists, but repo has none — claim wider than evidence",
         )
-    # experimental / not_yet_public: zero releases is the correct, expected state.
+    # experimental / not_yet_public: zero releases is the correct, expected state
+    # UNLESS the repo is private — a release on a private repo is not visible to
+    # anyone outside the org, so it is not public exposure and does not contradict
+    # the claim (see HORO-517: this exact gap surfaced against the real Eridanus
+    # repo, which ships internal MVP tags while staying not_yet_public). Default
+    # to "public" (the stricter, exposure-surfacing behavior) whenever visibility
+    # can't be determined — never let an unknown default silently hide drift.
     if has_release:
+        is_private = False
+        try:
+            repo_info = fx.gh_api(f"repos/{org}/{repo}")
+            is_private = bool(repo_info.get("private"))
+        except (ConnectionError, LookupError, AttributeError):
+            is_private = False
+        if is_private:
+            return SurfaceResult(
+                NOT_YET_PUBLIC if lifecycle == "not_yet_public" else DEFERRED,
+                f"{len(releases)} release(s) exist but repo is private — not public exposure, consistent with claimed lifecycle {lifecycle!r}",
+            )
         return SurfaceResult(
             REQUIRED,
-            f"claimed_lifecycle={lifecycle!r} but {len(releases)} release(s) already exist — reconcile the claimed lifecycle",
+            f"claimed_lifecycle={lifecycle!r} but {len(releases)} release(s) already exist on a public repo — reconcile the claimed lifecycle",
         )
     return SurfaceResult(NOT_YET_PUBLIC if lifecycle == "not_yet_public" else DEFERRED, "no releases yet, consistent with claimed lifecycle")
 
