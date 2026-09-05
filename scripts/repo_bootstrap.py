@@ -45,8 +45,10 @@ from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS_DIR))
+sys.path.insert(0, str(SCRIPTS_DIR.parent / "agents" / "common"))
 import generate_company_metadata as company_meta  # noqa: E402  (reuse the YAML parser)
 import horonom_workspace as hw  # noqa: E402  (reuse load_governance_version)
+import project_skills  # noqa: E402  (reuse the canonical -> adapter projection, cross-repo)
 
 BLOCK_BEGIN = "<!-- BEGIN GENERATED: horonom_adoption -->"
 BLOCK_END = "<!-- END GENERATED: horonom_adoption -->"
@@ -144,6 +146,26 @@ def find_claude_md(repo: Path) -> Path:
     return dot_claude  # default location for a brand-new repo
 
 
+_REMOTE_URL_RE = re.compile(r"github\.com[:/][^/\s]+/([^/\s.]+?)(?:\.git)?(?:\s|$)")
+
+
+def resolve_repo_name(repo: Path, *, run_git=None) -> str:
+    """The canonical GitHub repo name, from the remote URL — never the local
+    directory's basename. A worktree's directory is deliberately named
+    `<repo>-<ticket>-...` per this campaign's own worktree convention
+    (governance/engineering/git-pr-merge.md), so `repo.name` would silently
+    bake the wrong, worktree-specific name into every generated file this
+    tool writes. Falls back to `repo.name` only if no remote is found (e.g.
+    a fresh, not-yet-pushed repo)."""
+    run = run_git or (lambda args: subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, timeout=10))
+    result = run(["remote", "-v"])
+    if result.returncode == 0:
+        match = _REMOTE_URL_RE.search(result.stdout)
+        if match:
+            return match.group(1)
+    return repo.name
+
+
 def apply_bounded_block(existing_text: str, block: str) -> str:
     pattern = re.compile(re.escape(BLOCK_BEGIN) + r".*?" + re.escape(BLOCK_END), re.DOTALL)
     if pattern.search(existing_text):
@@ -197,7 +219,7 @@ def adopt(
         )
 
     governance_version = governance_version if governance_version is not None else hw.load_governance_version()
-    repo_name = repo.name
+    repo_name = resolve_repo_name(repo, run_git=run_git)
     adopted_at = now or datetime.now(timezone.utc).isoformat()
 
     outcomes: dict[str, str] = {}
@@ -234,6 +256,31 @@ def adopt(
     if not dry_run:
         marker_path.write_text(marker_content, encoding="utf-8")
     outcomes["adoption_marker"] = "written"
+
+    # Project this repo's canonical agents/skills/ into the target repo's
+    # own .claude/skills/ + .codex/skills/ — the cross-repo half of HORO-507:
+    # an adopted repo gets the same shared-skill content Claude/Codex read
+    # from horonomy/.github itself, never a second hand-copied
+    # implementation (HORO-509/ADR-0005 decision #6).
+    skill_projections = project_skills.build_projections(dest_root=repo)
+    skill_outcomes = {"written": 0, "unchanged": 0, "skipped-conflict": 0}
+    for path, content in skill_projections.items():
+        if path.exists():
+            current = path.read_text(encoding="utf-8", errors="replace")
+            if current == content:
+                skill_outcomes["unchanged"] += 1
+                continue
+            if not current.startswith(project_skills.GENERATED_MARKER):
+                skill_outcomes["skipped-conflict"] += 1
+                continue
+        if not dry_run:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        skill_outcomes["written"] += 1
+    outcomes["skills"] = (
+        f"{skill_outcomes['written']} written, {skill_outcomes['unchanged']} unchanged"
+        + (f", {skill_outcomes['skipped-conflict']} skipped-conflict" if skill_outcomes["skipped-conflict"] else "")
+    )
 
     return outcomes
 
@@ -317,11 +364,13 @@ def _cmd_adopt(args: argparse.Namespace) -> int:
     except AdoptionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+    had_conflict = False
     for name, outcome in outcomes.items():
         print(f"{name}: {outcome}")
-        if outcome == "skipped-conflict":
-            print(f"  WARNING: {name} exists with hand-authored content — left untouched.", file=sys.stderr)
-    return 1 if "skipped-conflict" in outcomes.values() else 0
+        if "skipped-conflict" in outcome:
+            had_conflict = True
+            print(f"  WARNING: {name} has hand-authored content that was left untouched.", file=sys.stderr)
+    return 1 if had_conflict else 0
 
 
 def _cmd_check(args: argparse.Namespace) -> int:

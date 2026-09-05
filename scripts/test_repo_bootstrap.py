@@ -30,6 +30,36 @@ def _fake_clean_git(clean: bool):
     return lambda args: mock.Mock(returncode=0, stdout="" if clean else " M file\n")
 
 
+class ResolveRepoNameTest(unittest.TestCase):
+    """Regression: adopting from a worktree (named e.g.
+    `official-website-wt-HORO-507` per this campaign's own worktree
+    convention) must embed the canonical repo name in generated content,
+    never the worktree directory's basename — found via manual testing
+    against a real worktree, not a mocked unit test."""
+
+    def test_resolves_name_from_github_remote_https(self) -> None:
+        fake = lambda args: mock.Mock(  # noqa: E731
+            returncode=0, stdout="origin\thttps://github.com/horonomy/official-website.git (fetch)\n"
+        )
+        name = rb.resolve_repo_name(Path("/some/worktree/official-website-wt-HORO-507"), run_git=fake)
+        self.assertEqual(name, "official-website")
+
+    def test_resolves_name_from_github_remote_ssh(self) -> None:
+        fake = lambda args: mock.Mock(returncode=0, stdout="origin\tgit@github.com:horonomy/circinus.git (fetch)\n")  # noqa: E731
+        name = rb.resolve_repo_name(Path("/some/worktree/circinus-wt-X"), run_git=fake)
+        self.assertEqual(name, "circinus")
+
+    def test_falls_back_to_directory_name_when_no_remote(self) -> None:
+        fake = lambda args: mock.Mock(returncode=0, stdout="")  # noqa: E731
+        name = rb.resolve_repo_name(Path("/some/fresh-repo"), run_git=fake)
+        self.assertEqual(name, "fresh-repo")
+
+    def test_falls_back_when_git_command_fails(self) -> None:
+        fake = lambda args: mock.Mock(returncode=1, stdout="")  # noqa: E731
+        name = rb.resolve_repo_name(Path("/some/dir"), run_git=fake)
+        self.assertEqual(name, "dir")
+
+
 class ValidateTargetRepoTest(unittest.TestCase):
     """SonarQube python:S2083 flagged scripts/repo_bootstrap.py's write path
     as "constructed from user-controlled data" (the `repo` CLI argument).
@@ -127,6 +157,49 @@ class AdoptFreshRepoFixtureTest(unittest.TestCase):
         self.assertEqual(statuses["adoption_marker"], "PASS")
         self.assertEqual(statuses["claude_md_block"], "PASS")
         self.assertEqual(statuses["agents_md"], "PASS")
+
+
+class CrossRepoSkillProjectionTest(unittest.TestCase):
+    """HORO-507: an adopted repo gets the same canonical skill content
+    Claude/Codex read from horonomy/.github itself — never a second
+    hand-copied implementation (ADR-0005 decision #6)."""
+
+    def setUp(self) -> None:
+        self.repo = _tmp_git_repo()
+        self._patch = mock.patch.object(rb.hw, "load_governance_version", return_value=1)
+        self._patch.start()
+
+    def tearDown(self) -> None:
+        self._patch.stop()
+
+    def test_adopt_projects_all_canonical_skills_into_target_repo(self) -> None:
+        rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        claude_skills = sorted(p.parent.name for p in (self.repo / ".claude" / "skills").glob("*/SKILL.md"))
+        codex_skills = sorted(p.stem for p in (self.repo / ".codex" / "skills").glob("*.md"))
+        canonical = sorted(rb.project_skills.discover_skills())
+        self.assertEqual(claude_skills, canonical)
+        self.assertEqual(codex_skills, canonical)
+
+    def test_projected_skill_matches_canonical_content(self) -> None:
+        rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        name = rb.project_skills.discover_skills()[0]
+        canonical = (rb.project_skills.SKILLS_DIR / name / "SKILL.md").read_text(encoding="utf-8")
+        projected = (self.repo / ".claude" / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn(canonical, projected)
+        self.assertTrue(projected.startswith(rb.project_skills.GENERATED_MARKER))
+
+    def test_reports_skills_outcome(self) -> None:
+        outcomes = rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        self.assertIn("written", outcomes["skills"])
+
+    def test_never_overwrites_a_hand_edited_projected_skill(self) -> None:
+        rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        name = rb.project_skills.discover_skills()[0]
+        target = self.repo / ".claude" / "skills" / name / "SKILL.md"
+        target.write_text("hand-edited, no marker\n", encoding="utf-8")
+        outcomes = rb.adopt(self.repo, org="horonomy", force=True, now="2026-01-01T00:00:01+00:00")
+        self.assertIn("skipped-conflict", outcomes["skills"])
+        self.assertEqual(target.read_text(), "hand-edited, no marker\n")
 
 
 class AdoptPreservesRepoSpecificContentTest(unittest.TestCase):
