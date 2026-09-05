@@ -58,6 +58,16 @@ _SECRET_VALUE_RES = (
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b"),
     re.compile(r"\b[0-9a-fA-F]{32,}\b"),
+    # Common named-prefix credential formats — the two generic patterns
+    # above (long base64/hex runs) miss these because a `_` separator or
+    # mixed-case non-hex letters break their charsets. Found live (HORO-533
+    # security review): a planted GitHub PAT-shaped string
+    # (`ghp_<36 chars>`) sailed straight through both generic patterns and
+    # was reported PASS by doctor's no_secrets_in_generated_files check.
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),  # GitHub PAT/OAuth/App/refresh tokens
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),  # AWS access key ID
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),  # Slack tokens
+    re.compile(r"\bsk-[A-Za-z0-9]{20,}\b"),  # OpenAI-style API keys
 )
 
 _SLA_UNIT_LABELS = {
