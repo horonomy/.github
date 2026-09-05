@@ -175,7 +175,22 @@ def find_claude_md(repo: Path) -> Path:
     return dot_claude  # default location for a brand-new repo
 
 
-_REMOTE_URL_RE = re.compile(r"github\.com[:/][^/\s]+/([^/\s.]+?)(?:\.git)?(?:\s|$)")
+# Capture group is a positive allowlist (GitHub's own repo-name charset:
+# alphanumeric, `-`, `_`, `.`) rather than a negative exclusion — a
+# `git remote -v` value is attacker-influenced (whoever controls the
+# repo's remote config, e.g. a malicious fork or a compromised repo an
+# operator later runs `adopt` against) and lands, unescaped, in generated
+# content: the .horonom-adoption.yaml `repo:` field and the copy-pasteable
+# `python3 scripts/repo_bootstrap.py adopt <repo> --org ...` line in
+# CLAUDE.md. A negative exclusion (originally just `[^/\s.]`) let shell
+# metacharacters (`;`, `$(...)`, backticks) through into that copy-pasteable
+# command — confirmed live (HORO-533 security review): a remote URL crafted
+# with a `;$(touch ...)` suffix produced a generated regenerate-command line
+# containing that exact injection payload, a real risk if a human or agent
+# copy-pastes the suggested command into a shell. Not exploitable by this
+# tool itself (no `shell=True` anywhere), but the generated content was
+# handing a loaded gun to whatever reads it next.
+_REMOTE_URL_RE = re.compile(r"github\.com[:/][^/\s]+/([A-Za-z0-9._-]+?)(?:\.git)?(?:\s|$)")
 
 
 def resolve_repo_name(repo: Path, *, run_git=None) -> str:
