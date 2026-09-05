@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Thin entrypoint for horonom_codex.py — the real logic lives in Python so
+# it's unit-testable (see test_horonom_codex.py); this script exists only
+# so "horonom-codex" is a runnable command name, matching the ticket's own
+# "horonom-codex (or equivalent minimal launcher)" wording.
+set -euo pipefail
+HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$HERE/../../.." && pwd)"
+exec python3 "$REPO_ROOT/agents/adapters/codex/horonom_codex.py" "$@"
