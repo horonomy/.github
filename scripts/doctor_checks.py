@@ -28,9 +28,11 @@ from typing import Any
 SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(SCRIPTS_DIR.parent / "agents" / "adapters" / "codex"))
+sys.path.insert(0, str(SCRIPTS_DIR.parent / "agents" / "common"))
 
 import generate_company_metadata as company_meta  # noqa: E402  (reuse secret-pattern guard)
 import horonom_workspace as hw  # noqa: E402
+import project_skills  # noqa: E402
 import public_release_reconcile as prr  # noqa: E402
 import repo_bootstrap as rb  # noqa: E402
 
@@ -54,21 +56,35 @@ class CheckResult:
 # Repo-level checks — work from a plain repo clone, no workspace root needed.
 # ---------------------------------------------------------------------------
 def check_skill_adapter_markers(repo: Path) -> CheckResult:
-    """A repo that has adopted shared skills should have every projected
+    """A repo that has adopted shared skills should have every *company-projected*
     SKILL.md carry the generated-provenance marker — a missing marker means
-    someone hand-edited a file that's supposed to be regenerated."""
+    someone hand-edited a file that's supposed to be regenerated.
+
+    Only checks the canonical company skill names (`project_skills.discover_skills()`)
+    — a repo may also carry its own project-local skills under the same
+    `.claude/skills/`/`.codex/skills/` directories (e.g. Eridanus's own
+    jira-ticket-lifecycle/adr-management/etc., predating this campaign, ADR-governed,
+    never meant to carry this marker). Globbing every file there without this filter
+    flags those as "hand-edited" and tells the operator to restore them from
+    horonomy/.github's canonical set — which doesn't even contain those names — a
+    false positive found while dogfooding this check against a real adopted repo
+    (HORO-533)."""
+    try:
+        canonical_names = set(project_skills.discover_skills())
+    except project_skills.SkillProjectionError:
+        canonical_names = set()
     claude_skills = repo / ".claude" / "skills"
     codex_skills = repo / ".codex" / "skills"
     files = []
     if claude_skills.is_dir():
-        files.extend(claude_skills.glob("*/SKILL.md"))
+        files.extend(f for f in claude_skills.glob("*/SKILL.md") if f.parent.name in canonical_names)
     if codex_skills.is_dir():
-        files.extend(codex_skills.glob("*.md"))
+        files.extend(f for f in codex_skills.glob("*.md") if f.stem in canonical_names)
     if not files:
         return CheckResult(
             "skill_adapter_markers",
             NOT_APPLICABLE,
-            "no .claude/skills or .codex/skills found — governance not yet adopted here",
+            "no company-projected skill files found — governance not yet adopted here (or this repo only carries its own project-local skills)",
             fix="run the repo-bootstrap skill, then agents/common/project_skills.py",
         )
     unmarked = [f for f in files if not f.read_text(encoding="utf-8", errors="replace").startswith("<!-- horonom:generated -->")]
