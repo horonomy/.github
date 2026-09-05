@@ -1,0 +1,54 @@
+# Horonom local agent-workspace repository manifest (HORO-506).
+#
+# This is a DEV-TOOLING registry — "where does horonom_workspace.py bootstrap
+# a clone of this repo, and under which workspace subdirectory" — not a
+# public-truth catalog. It is deliberately separate from metadata/company.yaml
+# (governance/README.md decision #7): company.yaml owns what Horonom
+# publicly claims a product IS; this manifest only owns where its source
+# lives for someone assembling a local workspace. A repo can appear here
+# before it has any public presence at all.
+#
+# `category` selects the workspace subdirectory: `company` -> company/<name>,
+# `product` -> products/<name>. `adopted` is informational only here — it is
+# not proof of anything; HORO-511/513/517 track actual governance adoption.
+# ai-agent-assembly/agent-assembly is intentionally absent: it lives in its
+# own GitHub org with its own governance baseline (governance/README.md's
+# ownership matrix) and is out of scope for this workspace manifest.
+schema_version: 1
+repos:
+  - name: governance
+    org: horonomy
+    repo: .github
+    category: company
+  - name: official-website
+    org: horonomy
+    repo: official-website
+    category: company
+  - name: internal-docs
+    org: horonomy
+    repo: internal-docs
+    category: company
+  - name: circinus
+    org: horonomy
+    repo: circinus
+    category: product
+  - name: ophiuchus
+    org: horonomy
+    repo: ophiuchus
+    category: product
+  - name: octans
+    org: horonomy
+    repo: octans
+    category: product
+  - name: fornax
+    org: horonomy
+    repo: fornax-core
+    category: product
+  - name: horologium
+    org: horonomy
+    repo: horologium
+    category: product
+  - name: eridanus
+    org: horonomy
+    repo: eridanus
+    category: product
