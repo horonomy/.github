@@ -1,0 +1,12 @@
+# Governance version marker (HORO-505).
+#
+# `horonom doctor` (HORO-510) compares an adopting repo's projected
+# governance content against this value to detect drift: WARN when the
+# projection is merely behind current `main`, FAIL when regenerating now
+# would produce different content than what's checked in. Bump
+# `governance_version` whenever a change under governance/**, CLAUDE.md, or
+# CONTRIBUTING.md is meant to propagate to adopting repos.
+schema_version: 1
+governance_version: 1
+updated: "2026-09-05"
+# See governance/README.md for the full drift/adoption contract.

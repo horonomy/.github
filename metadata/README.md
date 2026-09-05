@@ -50,3 +50,10 @@ The generator validates the schema and fails closed on malformed or
 leakage-prone input; the drift gate
 (`.github/workflows/company-metadata-drift.yml`) runs it in `--check` mode.
 Unit tests live in `scripts/test_company_metadata.py`.
+
+## `governance.yaml`
+
+Separate from the company registry above: `governance.yaml` carries a
+`governance_version` marker consumed by `horonom doctor` (HORO-510) to
+detect drift in a product repo's projected copy of `governance/**`
+content. See [`../governance/README.md`](../governance/README.md).
