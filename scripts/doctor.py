@@ -53,14 +53,19 @@ def _resolve_evidence_path(repo: Path, workspace_root: Path | None, product: str
     candidate = repo / "metadata" / "release-evidence" / f"{product}.yaml"
     if candidate.is_file() or workspace_root is None:
         return candidate
+    # Independent review (HORO-533): _repo_path can itself raise
+    # WorkspaceError (its own escape-guard) — keep it inside the same
+    # try/except as load_manifest() so any failure here degrades to the
+    # repo-local candidate like every other failure mode in this function,
+    # rather than propagating an uncaught exception out of `doctor`.
     try:
         manifest = hw.load_manifest()
+        governance_entry = next((e for e in manifest if e["repo"] == ".github"), None)
+        if governance_entry is None:
+            return candidate
+        governance_repo = hw._repo_path(workspace_root, governance_entry)
     except hw.WorkspaceError:
         return candidate
-    governance_entry = next((e for e in manifest if e["repo"] == ".github"), None)
-    if governance_entry is None:
-        return candidate
-    governance_repo = hw._repo_path(workspace_root, governance_entry)
     fallback = governance_repo / "metadata" / "release-evidence" / f"{product}.yaml"
     return fallback if fallback.is_file() else candidate
 
