@@ -1,0 +1,19 @@
+# Public Release Surface Contract evidence for Octans (HORO-515).
+#
+# Octans is already published on both public surfaces (profile/README.md,
+# horonom.com via productRegistry.ts, HORO-282) as "Experimental" — its own
+# repo description ("Experimental MVP") agrees, but until this ticket no
+# release-evidence fixture existed for it at all, so that public claim was
+# never machine-checked. This fixture closes that gap. The GitHub repo is
+# private (an Alpha-stage experiment, per its own product-registry.ts
+# comment); no releases exist yet, so `beta`/`release_candidate`/
+# `available` would be claim-widening — experimental is the only accurate
+# claim, and is a legitimately publishable tier at this maturity.
+product: octans
+claimed_lifecycle: experimental
+github:
+  org: horonomy
+  repo: octans
+website: null
+docs: null
+hosted_service: null

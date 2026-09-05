@@ -1,0 +1,23 @@
+# Public Release Surface Contract evidence for Circinus (HORO-515).
+#
+# claimed_lifecycle reflects Circinus's own README ("Experimental MVP
+# (v0.0.0) — not production security software.") — matching the Product
+# Registry's maturity entry (horonomy/official-website
+# src/data/productRegistry.ts, HORO-282) and the GitHub org profile
+# (profile/README.md), both of which already list it as "Experimental".
+# The GitHub repo itself is private, but the product has a live public
+# marketing/docs/hosted-API site at circinus.horo.run (verified 200) — repo
+# visibility governs whether the *code* is public, not whether the
+# *product* is, and experimental is a legitimately publishable maturity
+# tier (see check_org_profile/check_horonom_com's three-way logic). No
+# releases exist yet, so `beta`/`release_candidate`/`available` would be
+# claim-widening (`tags_releases` FAILED) — experimental is the only
+# accurate claim.
+product: circinus
+claimed_lifecycle: experimental
+github:
+  org: horonomy
+  repo: circinus
+website: null
+docs: null
+hosted_service: null

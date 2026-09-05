@@ -247,6 +247,30 @@ def check_company_registry(evidence: dict[str, Any]) -> SurfaceResult:
     return SurfaceResult(VERIFIED, "catalog entry present and matches claimed lifecycle")
 
 
+def _discoverability_result(lifecycle: str, mentioned: bool, *, surface: str) -> SurfaceResult:
+    """Shared three-way verdict for `check_org_profile`/`check_horonom_com`.
+
+    `not_yet_public` is the only lifecycle that must never appear on a public
+    surface (mentioned => FAILED premature exposure). `experimental` is a
+    legitimately publishable tier (see productRegistry.ts's `ProductMaturity`
+    and profile/README.md's own "Experimental" product entries, HORO-282) —
+    it is fine either way: mentioned is VERIFIED, absent is DEFERRED (correct
+    and final, per "Never force a product public" — never REQUIRED). Only
+    beta/release_candidate/available actually require presence.
+    """
+    if lifecycle == "not_yet_public":
+        if mentioned:
+            return SurfaceResult(FAILED, f"product appears on {surface} despite being not-yet-public — premature exposure")
+        return SurfaceResult(NOT_YET_PUBLIC, f"correctly absent from {surface}")
+    if lifecycle == "experimental":
+        if mentioned:
+            return SurfaceResult(VERIFIED, f"product is listed on {surface}, a valid tier for an experimental product")
+        return SurfaceResult(DEFERRED, f"not yet listed on {surface}, consistent with claimed lifecycle 'experimental'")
+    if mentioned:
+        return SurfaceResult(VERIFIED, f"product appears on {surface}")
+    return SurfaceResult(REQUIRED, f"claimed_lifecycle={lifecycle!r} but product does not appear on {surface}")
+
+
 def check_org_profile(evidence: dict[str, Any]) -> SurfaceResult:
     product = evidence["product"]
     lifecycle = evidence["claimed_lifecycle"]
@@ -255,13 +279,7 @@ def check_org_profile(evidence: dict[str, Any]) -> SurfaceResult:
     except FileNotFoundError as exc:
         return SurfaceResult(BLOCKED_EXTERNAL, f"could not read profile/README.md: {exc}")
     mentioned = product.lower() in text
-    if lifecycle in _LIFECYCLES_NOT_YET_PUBLIC:
-        if mentioned:
-            return SurfaceResult(FAILED, "product is mentioned in profile/README.md despite being not-yet-public — premature exposure")
-        return SurfaceResult(NOT_YET_PUBLIC, "correctly absent from the public org profile")
-    if mentioned:
-        return SurfaceResult(VERIFIED, "product is listed in the public org profile")
-    return SurfaceResult(REQUIRED, f"claimed_lifecycle={lifecycle!r} but product is not listed in profile/README.md")
+    return _discoverability_result(lifecycle, mentioned, surface="profile/README.md")
 
 
 def check_horonom_com(evidence: dict[str, Any], fx: Fetchers) -> SurfaceResult:
@@ -272,13 +290,7 @@ def check_horonom_com(evidence: dict[str, Any], fx: Fetchers) -> SurfaceResult:
     except ConnectionError as exc:
         return SurfaceResult(BLOCKED_EXTERNAL, f"horonom.com unreachable: {exc}")
     mentioned = product.lower() in body.lower()
-    if lifecycle in _LIFECYCLES_NOT_YET_PUBLIC:
-        if mentioned:
-            return SurfaceResult(FAILED, "product appears on horonom.com despite being not-yet-public — premature exposure")
-        return SurfaceResult(NOT_YET_PUBLIC, "correctly absent from horonom.com")
-    if mentioned:
-        return SurfaceResult(VERIFIED, "product appears on horonom.com")
-    return SurfaceResult(REQUIRED, f"claimed_lifecycle={lifecycle!r} but product does not appear on horonom.com")
+    return _discoverability_result(lifecycle, mentioned, surface="horonom.com")
 
 
 def check_cross_links(evidence: dict[str, Any], website_result: SurfaceResult, docs_result: SurfaceResult, fx: Fetchers) -> SurfaceResult:

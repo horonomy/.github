@@ -1,0 +1,32 @@
+# Public Release Surface Contract evidence for Fornax (HORO-515).
+#
+# product: fornax (not "fornax-core") — check_company_registry matches
+# against metadata/company.yaml's `name` field and check_org_profile is a
+# substring test against profile/README.md's prose; "Fornax" is the name
+# used everywhere else (README, org profile), "fornax-core" is only the
+# GitHub repo slug.
+#
+# claimed_lifecycle reflects Fornax's own README: "Implementation is being
+# replayed ticket-by-ticket..." with an explicit "no hosted Beta/production
+# service exists at this version" and "$FORNAX_HOME's on-disk schema is not
+# yet guaranteed stable across releases." The repo is genuinely PUBLIC and
+# carries a real v0.0.1 GitHub release, but https://fornax.horo.run — the
+# Product Atlas family-alias domain a public listing would point to — is
+# live yet returns only a 726-byte placeholder (title + meta description,
+# no body), and fornax-core.horo.run does not resolve at all. Publishing a
+# System Map/org-profile entry that points at a placeholder would itself be
+# the premature/broken-link exposure this contract exists to catch.
+#
+# This intentionally leaves `tags_releases` at REQUIRED (a real release
+# exists but the experimental claim says none should yet) — that is the
+# correct, non-silent record of an open promotion decision (per
+# governance/releases/public-surfaces.md "Never publish to make a gate
+# green"), not a defect to paper over by relabeling the claim `beta`.
+product: fornax
+claimed_lifecycle: experimental
+github:
+  org: horonomy
+  repo: fornax-core
+website: null
+docs: null
+hosted_service: null
