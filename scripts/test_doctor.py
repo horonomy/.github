@@ -49,6 +49,22 @@ class SkillAdapterMarkersTest(unittest.TestCase):
         self.assertEqual(result.status, checks.FAIL)
 
 
+class RepoAdoptionCheckTest(unittest.TestCase):
+    def test_not_applicable_when_never_adopted(self) -> None:
+        result = checks.check_repo_adoption(_tmp_repo())
+        self.assertEqual(result.status, checks.NOT_APPLICABLE)
+
+    def test_pass_after_real_adoption(self) -> None:
+        import subprocess
+
+        repo = _tmp_repo()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        with mock.patch.object(checks.rb.hw, "load_governance_version", return_value=1):
+            checks.rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+            result = checks.check_repo_adoption(repo)
+        self.assertEqual(result.status, checks.PASS)
+
+
 class RemoteSanityTest(unittest.TestCase):
     def test_pass_when_expected_org_remote_present(self) -> None:
         fake = mock.Mock(returncode=0, stdout="origin\thttps://github.com/horonomy/.github.git (fetch)\n")
