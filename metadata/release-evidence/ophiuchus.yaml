@@ -1,0 +1,20 @@
+# Public Release Surface Contract evidence for Ophiuchus (HORO-515).
+#
+# claimed_lifecycle reflects Ophiuchus's own repo description ("Alpha,
+# invite-gated") and README — matching the Product Registry's maturity
+# entry (horonomy/official-website src/data/productRegistry.ts, HORO-282)
+# and the GitHub org profile (profile/README.md), both already listing it
+# as "Experimental" (this contract's vocabulary has no `alpha` tier).
+# The GitHub repo is private, but the product has a live public
+# marketing/docs site at ophiuchus.horo.run (verified 200) — repo
+# visibility governs code, not product, discoverability. No releases exist
+# yet, so `beta`/`release_candidate`/`available` would be claim-widening —
+# experimental is the only accurate claim.
+product: ophiuchus
+claimed_lifecycle: experimental
+github:
+  org: horonomy
+  repo: ophiuchus
+website: null
+docs: null
+hosted_service: null
