@@ -1,10 +1,17 @@
 # Public Release Surface Contract evidence for Eridanus (HORO-512).
 #
 # GitHub repo description: "private validation/research repo for
-# post-transformation leak attribution" — zero tags, zero releases. This is
-# the AC's "Eridanus can be represented as NOT_YET_PUBLIC without creating
-# public entries" case: governance adoption (HORO-517) must not itself make
-# Eridanus public, and this fixture proves the contract agrees on its own.
+# post-transformation leak attribution". This is the AC's "Eridanus can be
+# represented as NOT_YET_PUBLIC without creating public entries" case:
+# governance adoption (HORO-517) must not itself make Eridanus public, and
+# this fixture proves the contract agrees on its own. As of HORO-517, the
+# repo does carry one real GitHub release (v0.1.0) — but the repo is
+# private, so that release is not visible outside the org and is not public
+# exposure (see check_tags_releases's private-repo handling, HORO-517);
+# this comment previously said "zero tags, zero releases", which stopped
+# being true the moment that release was tagged — corrected here (HORO-515)
+# rather than left stale in the exact file class this contract exists to
+# keep honest.
 product: eridanus
 claimed_lifecycle: not_yet_public
 github:
