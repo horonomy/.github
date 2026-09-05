@@ -30,11 +30,15 @@ on a public surface: `metadata/company.yaml`, the GitHub org profile,
 
 ## Procedure
 
-1. For the product, check each surface independently: product repo's own
-   truth/maturity claim, product docs, hosted app (if any), domain/TLS,
-   GitHub repo metadata (description, topics, visibility), tags/GitHub
-   Releases, `metadata/company.yaml`'s catalog entry, the GitHub org
-   profile (`profile/README.md`), and `horonom.com`'s product listing.
+1. Add or update the product's evidence config at
+   `metadata/release-evidence/<product>.yaml` (github org/repo, claimed
+   lifecycle, and any public website/docs/hosted-service URL), then run
+   `python3 scripts/public_release_reconcile.py metadata/release-evidence/<product>.yaml`.
+   It checks each surface independently and live: product repo's own
+   truth/maturity claim, GitHub repo metadata, tags/Releases (catching a
+   lifecycle claim wider than the release evidence supports), website/docs/
+   hosted-service reachability and TLS, `metadata/company.yaml`'s catalog
+   entry, the GitHub org profile, and `horonom.com` itself.
 2. Classify the product's overall state using the 7-state contract in
    `governance/releases/public-release-contract.md`
    (VERIFIED / REQUIRED / DEFERRED / NOT_APPLICABLE / NOT_YET_PUBLIC /
