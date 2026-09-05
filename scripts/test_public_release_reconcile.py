@@ -115,6 +115,56 @@ class TagsReleasesClaimWideningTest(unittest.TestCase):
         result = prr.check_tags_releases(_evidence(claimed_lifecycle="experimental"), fx)
         self.assertEqual(result.state, prr.REQUIRED)
 
+    def test_not_yet_public_claim_with_releases_on_private_repo_stays_not_yet_public(self) -> None:
+        """HORO-517: a release tagged on a private repo (e.g. Eridanus's
+        internal MVP tags) is not visible outside the org — it must not be
+        treated as public exposure contradicting a not_yet_public claim."""
+
+        def gh_api(path: str):
+            if path.endswith("/releases"):
+                return [{"tag_name": "v0.1.0"}]
+            return {"private": True}
+
+        fx = _fake_fetchers(gh_api=gh_api)
+        result = prr.check_tags_releases(_evidence(claimed_lifecycle="not_yet_public"), fx)
+        self.assertEqual(result.state, prr.NOT_YET_PUBLIC)
+
+    def test_experimental_claim_with_releases_on_private_repo_is_deferred(self) -> None:
+        def gh_api(path: str):
+            if path.endswith("/releases"):
+                return [{"tag_name": "v0.1.0"}]
+            return {"private": True}
+
+        fx = _fake_fetchers(gh_api=gh_api)
+        result = prr.check_tags_releases(_evidence(claimed_lifecycle="experimental"), fx)
+        self.assertEqual(result.state, prr.DEFERRED)
+
+    def test_not_yet_public_claim_with_releases_on_public_repo_is_required(self) -> None:
+        """A release on a genuinely public repo still contradicts the claim —
+        this fix must not blanket-suppress the check, only the private case."""
+
+        def gh_api(path: str):
+            if path.endswith("/releases"):
+                return [{"tag_name": "v0.1.0"}]
+            return {"private": False}
+
+        fx = _fake_fetchers(gh_api=gh_api)
+        result = prr.check_tags_releases(_evidence(claimed_lifecycle="not_yet_public"), fx)
+        self.assertEqual(result.state, prr.REQUIRED)
+
+    def test_repo_visibility_lookup_failure_defaults_to_public(self) -> None:
+        """If the repo-info call itself fails, don't let that silently hide
+        drift — default to the stricter (public) assumption."""
+
+        def gh_api(path: str):
+            if path.endswith("/releases"):
+                return [{"tag_name": "v0.1.0"}]
+            raise LookupError("404")
+
+        fx = _fake_fetchers(gh_api=gh_api)
+        result = prr.check_tags_releases(_evidence(claimed_lifecycle="not_yet_public"), fx)
+        self.assertEqual(result.state, prr.REQUIRED)
+
 
 class HttpSurfaceTest(unittest.TestCase):
     def test_not_applicable_when_no_url_configured(self) -> None:
