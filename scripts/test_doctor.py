@@ -251,6 +251,50 @@ class OverallComputationTest(unittest.TestCase):
         self.assertEqual(doctor.compute_overall(results), checks.WARN)
 
 
+class ResolveEvidencePathTest(unittest.TestCase):
+    """HORO-533: `doctor --repo <product-repo> --product X` always resolved
+    metadata/release-evidence/X.yaml relative to --repo — but that file
+    lives in the governance (.github) checkout, not in a product's own
+    repo, so this always 404'd even when the evidence genuinely exists in
+    a sibling workspace checkout. Found by dogfooding this exact
+    invocation shape against a real adopted product repo."""
+
+    def test_falls_back_to_workspace_governance_checkout_when_repo_lacks_it(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = Path(tmp.name)
+            product_repo = root / "products" / "widget"
+            product_repo.mkdir(parents=True)
+            governance_repo = root / "company" / "governance"
+            evidence_dir = governance_repo / "metadata" / "release-evidence"
+            evidence_dir.mkdir(parents=True)
+            (evidence_dir / "widget.yaml").write_text("product: widget\n", encoding="utf-8")
+
+            manifest_entry = {"name": "governance", "org": "horonomy", "repo": ".github", "category": "company"}
+            with mock.patch.object(doctor.hw, "load_manifest", return_value=[manifest_entry]):
+                result = doctor._resolve_evidence_path(product_repo, root, "widget")
+            self.assertEqual(result.resolve(), (evidence_dir / "widget.yaml").resolve())
+        finally:
+            tmp.cleanup()
+
+    def test_prefers_repo_local_evidence_when_present(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            repo = Path(tmp.name) / "repo"
+            evidence_dir = repo / "metadata" / "release-evidence"
+            evidence_dir.mkdir(parents=True)
+            (evidence_dir / "widget.yaml").write_text("product: widget\n", encoding="utf-8")
+            result = doctor._resolve_evidence_path(repo, Path(tmp.name), "widget")
+            self.assertEqual(result, evidence_dir / "widget.yaml")
+        finally:
+            tmp.cleanup()
+
+    def test_no_workspace_root_returns_repo_relative_path_unchanged(self) -> None:
+        repo = Path("/some/repo")
+        result = doctor._resolve_evidence_path(repo, None, "widget")
+        self.assertEqual(result, repo / "metadata" / "release-evidence" / "widget.yaml")
+
+
 class MainCLIIntegrationTest(unittest.TestCase):
     """End-to-end through doctor.main() against a real healthy fixture and a
     real broken fixture, satisfying the AC's 'detects at least one broken
