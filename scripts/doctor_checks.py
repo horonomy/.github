@@ -71,8 +71,20 @@ def check_skill_adapter_markers(repo: Path) -> CheckResult:
     (HORO-533)."""
     try:
         canonical_names = set(project_skills.discover_skills())
-    except project_skills.SkillProjectionError:
-        canonical_names = set()
+    except project_skills.SkillProjectionError as exc:
+        # Independent review (HORO-533): silently treating this as "zero
+        # canonical names" would make a genuinely broken governance
+        # checkout (missing/misconfigured agents/skills/) indistinguishable
+        # from "governance not yet adopted here" (NOT_APPLICABLE) — a real
+        # internal-tooling fault masquerading as nothing-to-see. This is a
+        # fault in the .github checkout doctor itself is running from, not
+        # in the target repo being audited, so it's WARN rather than FAIL.
+        return CheckResult(
+            "skill_adapter_markers",
+            WARN,
+            f"could not determine canonical company skill names: {exc}",
+            fix="run this from a healthy horonomy/.github checkout with agents/skills/ intact",
+        )
     claude_skills = repo / ".claude" / "skills"
     codex_skills = repo / ".codex" / "skills"
     files = []
