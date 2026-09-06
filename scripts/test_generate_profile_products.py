@@ -15,7 +15,9 @@ import generate_profile_products as gpp
 
 class RenderIsStableTest(unittest.TestCase):
     def test_render_is_idempotent(self) -> None:
-        self.assertEqual(gpp.render_products_section(), gpp.render_products_section())
+        first_render = gpp.render_products_section()
+        second_render = gpp.render_products_section()
+        self.assertEqual(first_render, second_render)
 
     def test_check_mode_passes_against_committed_file(self) -> None:
         # The committed profile/README.md must already match the generator's

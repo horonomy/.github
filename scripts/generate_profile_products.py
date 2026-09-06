@@ -233,6 +233,20 @@ def render_products_section() -> str:
     return "\n".join(lines)
 
 
+def _safe_write(path: Path, content: str) -> None:
+    """Write `content` to `path`, refusing to write outside REPO_ROOT.
+
+    `path` is always the hardcoded PROFILE_README_PATH constant today, never
+    argv-derived — but static analysis can't prove that from this function's
+    signature alone, so this makes the constraint an explicit runtime check
+    (CWE-22 path-traversal sanitization) rather than an implicit assumption.
+    """
+    resolved = path.resolve()
+    if not resolved.is_relative_to(REPO_ROOT.resolve()):
+        raise ValueError(f"refusing to write outside the repo root: {resolved}")
+    resolved.write_text(content, encoding="utf-8")
+
+
 def _replace_bounded(text: str, block_id: str, body: str, where: str) -> str:
     begin = f"<!-- BEGIN GENERATED: {block_id} -->"
     end = f"<!-- END GENERATED: {block_id} -->"
@@ -269,7 +283,7 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 1
-    PROFILE_README_PATH.write_text(desired, encoding="utf-8")
+    _safe_write(PROFILE_README_PATH, desired)
     print("Wrote profile/README.md.")
     return 0
 
