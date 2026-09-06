@@ -42,36 +42,36 @@ products:
   - product: ophiuchus
     parent_epic: HORO-587
     implementation_ticket: HORO-589
-    docs_surface_current: "https://ophiuchus.horo.run/docs"
-    docs_surface_target: null
+    docs_surface_current: "https://ophiuchus.horonom.com/docs"
+    docs_surface_target: "https://ophiuchus.horonom.com/docs"
     docs_dns_status: path_based_no_subdomain
     documentation_stream:
       name: "Documentation"
       stream_id: "15725289372"
       measurement_id: "G-2X3VEZ2SG4"
-    marketing_stream_note: "Distinct from marketing streams G-RE2P2Q3J08 (live, old domain) and G-SK9BL6R66J (founder target, new domain) — see domain-migration-inventory.yaml."
+    marketing_stream_note: "Distinct from marketing stream G-SK9BL6R66J on ophiuchus.horonom.com, routed via explicit send_to targeting. Old-domain stream G-RE2P2Q3J08 no longer reachable (legacy host redirects, HORO-579)."
     property_relationship_verified: false
-    implementation_status: not_started
-    live_browser_verification_status: not_performed
-    privacy_notes: null
-    blockers: "Canonical docs architecture (subdomain vs. path) not yet decided by HORO-589."
+    implementation_status: complete
+    live_browser_verification_status: complete
+    privacy_notes: "Every hit carries only tid/en/dl plus fixed surface/destination params — no forbidden data."
+    blockers: "HORO-579 (DEV VERIFY): Enhanced Measurement history-tracking leak across marketing/docs streams — exact GA4 Admin fix identified, non-blocking for engineering closure. GA4 property relationship also unconfirmed, non-blocking."
 
   - product: circinus
     parent_epic: HORO-587
     implementation_ticket: HORO-590
-    docs_surface_current: "https://circinus.horo.run/docs"
-    docs_surface_target: null
+    docs_surface_current: "https://circinus.horonom.com/docs"
+    docs_surface_target: "https://circinus.horonom.com/docs"
     docs_dns_status: path_based_no_subdomain
     documentation_stream:
       name: "Documentation"
       stream_id: "15725295444"
       measurement_id: "G-436F4XKVHD"
-    marketing_stream_note: "Distinct from marketing streams G-Z2D86YKMMH (live, old domain) and G-WYMPBC7Q9C (founder target, new domain) — see domain-migration-inventory.yaml."
-    property_relationship_verified: false
-    implementation_status: not_started
-    live_browser_verification_status: not_performed
-    privacy_notes: "Do not weaken Circinus's existing CSP/CORS/cookie-scope authority boundary for docs instrumentation."
-    blockers: "Canonical docs architecture not yet decided by HORO-590."
+    marketing_stream_note: "Distinct from marketing stream G-WYMPBC7Q9C, routed via a hand-rolled docsGtagRouter.js (lazy per-destination config). Old-domain stream G-Z2D86YKMMH no longer reachable (legacy host redirects, HORO-572)."
+    property_relationship_verified: true
+    implementation_status: complete
+    live_browser_verification_status: complete
+    privacy_notes: "Do not weaken Circinus's existing CSP/CORS/cookie-scope authority boundary — confirmed untouched (HORO-590)."
+    blockers: null
 
   - product: fornax
     parent_epic: HORO-587
@@ -83,11 +83,11 @@ products:
       name: "Documentation"
       stream_id: "15725260666"
       measurement_id: "G-43BPHKSX8H"
-    marketing_stream_note: "Distinct from marketing target G-YD29L01E89 (fornax.horonom.com); no old marketing stream exists to conflict with."
+    marketing_stream_note: "Distinct from marketing G-YD29L01E89 (fornax.horonom.com); structurally isolated (Docusaurus gtag preset takes exactly one trackingID per site)."
     property_relationship_verified: false
-    implementation_status: not_started
-    live_browser_verification_status: not_performed
-    privacy_notes: null
+    implementation_status: complete
+    live_browser_verification_status: complete
+    privacy_notes: "Only a fixed event name plus snippet_language/snippet_type (regex-derived, never raw content) ever sent."
     blockers: null
 
   - product: horologium
@@ -100,12 +100,12 @@ products:
       name: "Documentation"
       stream_id: "15725286483"
       measurement_id: "G-46CVCDFC4G"
-    marketing_stream_note: "Third distinct ID alongside marketing G-R4QEL954T0 and application G-YHE60HB2FV — see domain-migration-inventory.yaml. Marketing stream currently covers nested /docs/* by virtue of nesting; must not double-fire once the Documentation stream is wired."
+    marketing_stream_note: "Third distinct ID alongside marketing G-R4QEL954T0 and application G-YHE60HB2FV. Own dedicated Docusaurus client module — confirmed zero cross-firing among all 3 streams."
     property_relationship_verified: false
-    implementation_status: not_started
-    live_browser_verification_status: not_performed
-    privacy_notes: "Product Truth / Public Alpha security constraints apply unchanged; forbidden-payload list explicitly includes Product Truth content."
-    blockers: "A dedicated docs.horologium.horonom.com subdomain was already attempted and reverted (Cloudflare Universal SSL does not cover this second-level subdomain on the current plan) — do not re-attempt without a separate, already-approved TLS/domain change."
+    implementation_status: complete
+    live_browser_verification_status: complete
+    privacy_notes: "Only page_path/page_location/page_title/destination (2-value enum) ever sent — no Product Truth/repo/ticket/entity data."
+    blockers: "Dedicated docs.horologium.horonom.com subdomain remains reverted (Cloudflare Universal SSL constraint) — nested /docs/* path is the confirmed final architecture, not re-litigated. GA4 property relationship across all 3 streams unconfirmed — non-blocking."
 
   - product: eridanus
     parent_epic: HORO-587
