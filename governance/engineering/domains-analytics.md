@@ -53,6 +53,35 @@ domain/analytics migration ticket.
   current domain/analytics state; do not re-derive it from memory or an
   old Jira comment.
 
+## Reporting identity: hostname + page path, never path alone (HORO-596)
+
+A GA4 **property** is the company/product analytics boundary; a **web
+stream** is a distinct public surface within it (a property can hold more
+than one stream — the Horonom company property does). A Measurement ID is
+issued **per stream**, not per property, so it is the authoritative,
+platform-enforced way to attribute an event to one specific surface — see
+[`metadata/company-analytics-registry.yaml`](../../metadata/company-analytics-registry.yaml)
+for the recorded stream/Measurement ID pairs.
+
+**Never treat page path alone as a unique reporting identity** when a
+property has more than one stream/host — `/` exists on every surface.
+Report and reconcile by **hostname + page path**: `horonom.com` + `/`,
+`horo.run` + `/`, `horonom.com` + `/blog`,
+`docs.fornax.horonom.com` + `/quick-start`, etc. A meaningful interaction
+beyond a page view is a privacy-safe custom event (see the docs-analytics
+convention below for the vocabulary constraints that apply to those).
+
+Cross-domain session continuity (GA4's `linker`/cross-domain measurement
+feature) across the `horonom.com → horo.run → product surface` journey is
+**intentionally not configured** — each hop is a deliberate property
+boundary by design (ADR-0006 §6, ADR-0008), and stitching sessions across
+them would blur exactly the ownership/privacy separation those ADRs
+establish. Attribution across the journey instead relies on each
+property's own referrer-based acquisition reporting, which requires
+outbound links to preserve the `Referer` header (`rel="noopener"`, not
+`rel="noopener noreferrer"`) — see HORO-614 for a known gap in this on
+`horonom.com`'s own outbound links.
+
 ## Precedence
 
 Company constitution (ADR-0006) → a product's own deliberate, recorded
