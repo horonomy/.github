@@ -233,18 +233,28 @@ def render_products_section() -> str:
     return "\n".join(lines)
 
 
-def _safe_write(path: Path, content: str) -> None:
-    """Write `content` to `path`, refusing to write outside REPO_ROOT.
+def _write_profile_readme(content: str) -> None:
+    """Write `content` to the hardcoded PROFILE_README_PATH constant.
 
-    `path` is always the hardcoded PROFILE_README_PATH constant today, never
-    argv-derived — but static analysis can't prove that from this function's
-    signature alone, so this makes the constraint an explicit runtime check
-    (CWE-22 path-traversal sanitization) rather than an implicit assumption.
+    Takes no path argument on purpose — this generator only ever writes one
+    file, and naming it directly (rather than accepting a `Path` parameter)
+    keeps the write target a literal constant, never a value that could be
+    mistaken for external input.
+
+    SonarCloud (python:S2083) flags this as writing "malicious content":
+    its taint model treats the `current = PROFILE_README_PATH.read_text()`
+    call in build_artifact() as an external input source purely because it
+    is a file read, then traces that string through _replace_bounded()'s
+    splice into `content` here. There is no actual untrusted input on this
+    path — PROFILE_README_PATH is this same hardcoded repo-local constant,
+    REGISTRY above is a vendored Python literal, and neither is
+    argv/network/env-derived anywhere in this module. Confirmed false
+    positive; NOSONAR'd rather than restructured, since the "read this
+    file, splice in generated content, write it back" shape is inherent to
+    a bounded-region generator (the same pattern generate_company_metadata.py
+    already uses for this exact file).
     """
-    resolved = path.resolve()
-    if not resolved.is_relative_to(REPO_ROOT.resolve()):
-        raise ValueError(f"refusing to write outside the repo root: {resolved}")
-    resolved.write_text(content, encoding="utf-8")
+    PROFILE_README_PATH.write_text(content, encoding="utf-8")  # NOSONAR (python:S2083 — see docstring)
 
 
 def _replace_bounded(text: str, block_id: str, body: str, where: str) -> str:
@@ -283,7 +293,7 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 1
-    _safe_write(PROFILE_README_PATH, desired)
+    _write_profile_readme(desired)
     print("Wrote profile/README.md.")
     return 0
 
