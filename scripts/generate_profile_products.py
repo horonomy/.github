@@ -205,25 +205,31 @@ def render_products_section() -> str:
     _validate()
     lines: list[str] = []
     for p in sorted(REGISTRY, key=lambda x: x["order"]):
+        host = _host(p["canonical_url"])
+        if host not in LIVE_HOSTS:
+            # HORO-688: omit the entry entirely, not just its link. A bare
+            # name mention (even unlinked, even labeled "not yet available")
+            # is enough to fail horonomy/.github's own
+            # scripts/public_release_reconcile.py for a product whose
+            # release-evidence record claims not_yet_public — that gate
+            # checks for the product name appearing anywhere in this file's
+            # text, not just for a live href. Confirmed live: Eridanus's
+            # "Not yet available" line here was flagged FAILED
+            # ("premature exposure") the same way the corporate site's own
+            # unlinked mentions were. Say nothing until the host is real.
+            continue
         label = _MATURITY_LABELS[p["maturity"]]
         lines.append(f"### {p['emoji']} {p['name']} — {label}")
         lines.append("")
         lines.append(f"{p['category']} — {p['problem']}")
         lines.append("")
-        host = _host(p["canonical_url"])
-        if host in LIVE_HOSTS:
-            link_parts = [f"🌐 [{host}]({p['canonical_url']})"]
-            if p["docs_url"]:
-                link_parts.append(f"📚 [docs]({p['docs_url']})")
-            if p["github_url"]:
-                org = p["github_url"].rstrip("/").rsplit("/", 1)[-1]
-                link_parts.append(f"💻 [github.com/{org}]({p['github_url']})")
-            lines.append(" · ".join(link_parts))
-        else:
-            # Fail-closed: no canonical host verified live yet — no link, no
-            # fabricated public surface. Matches the Atlas's own "Not yet
-            # available." treatment of the same registry entry.
-            lines.append("*Not yet available — in development.*")
+        link_parts = [f"🌐 [{host}]({p['canonical_url']})"]
+        if p["docs_url"]:
+            link_parts.append(f"📚 [docs]({p['docs_url']})")
+        if p["github_url"]:
+            org = p["github_url"].rstrip("/").rsplit("/", 1)[-1]
+            link_parts.append(f"💻 [github.com/{org}]({p['github_url']})")
+        lines.append(" · ".join(link_parts))
         lines.append("")
     lines.append(
         "> More systems are awaiting stars. Additional research tracks — "
