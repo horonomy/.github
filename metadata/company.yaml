@@ -109,11 +109,25 @@ products:
     website: "https://horologium.horonom.com"
     github_org: null
     lifecycle: "coming_soon"
+    # DISPOSITION (HORO-598, founder decision 2026-09-06): dormant incubating
+    # initiative — real product intent (AW-1/AW-2 epics, both still To Do
+    # since 2026-07-01), but not actively funded or currently executing.
+    # `coming_soon` is this catalog's closest lifecycle fit; there is no
+    # dedicated "dormant"/"parked" lifecycle value, and one is deliberately
+    # not being added for a single-product distinction — the founder's
+    # explicit instruction is to record the disposition here rather than
+    # invent a schema field. Absence of current execution is not grounds to
+    # remove a genuine, still-intended initiative from the catalog.
   - id: "archeweave"
     name: "ArcheWeave"
     website: null
     github_org: null
     lifecycle: "coming_soon"
+    # DISPOSITION (HORO-598, founder decision 2026-09-06): dormant incubating
+    # initiative, same terms as ArcheWeave above — no product-definition
+    # ticket has ever existed for Harbinger (unlike ArcheWeave's AW-1/AW-2),
+    # but the founder's decision is to keep both listed rather than treat
+    # that asymmetry as grounds for retiring only this one.
   - id: "harbinger"
     name: "Harbinger"
     website: null
