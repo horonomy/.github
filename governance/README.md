@@ -67,7 +67,10 @@ see [`engineering/security.md`](./engineering/security.md).
   ([`engineering/domains-analytics.md`](./engineering/domains-analytics.md),
   full constitution at ADR-0006, HORO-566;
   [`engineering/docs-analytics.md`](./engineering/docs-analytics.md), full
-  constitution at ADR-0007, HORO-587).
+  constitution at ADR-0007, HORO-587), and scenario-first documentation
+  vocabulary/process
+  ([`engineering/docs-scenario-quality.md`](./engineering/docs-scenario-quality.md),
+  distilled from the HORO-638 cross-product campaign).
 - [`releases/`](./releases/) — release and public-surface invariants, plus
   the [Public Release Surface Contract](./releases/public-release-contract.md)
   (7-state model, per-surface derivation rules; implementation at
