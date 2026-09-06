@@ -14,44 +14,58 @@ Our namesake does not create the sky. It observes it, understands it, records it
 ## Products
 
 The current public product portfolio — see the [Product Atlas](https://horo.run)
-for the full system map and how these relate. This list is kept in step by
-hand with two upstream sources, each authoritative for a different axis:
-`metadata/company.yaml` (this repo) owns catalog-level portfolio lifecycle
-for products that have crossed a real public-release threshold (AI Agent
-Assembly's "Beta" below); `horonomy/official-website`'s
+for the full system map and how these relate. Source of truth:
+`horonomy/official-website`'s
 [Product Registry](https://github.com/horonomy/official-website/blob/main/src/data/productRegistry.ts)
-(HORO-282) owns Atlas presentation and the `experimental` tier used by
-Octans/Circinus/Ophiuchus below. Neither file redefines the other's axis —
-see `governance/releases/public-surfaces.md` — so this page never disagrees
-with either upstream source by construction; it can only fall behind one.
+(HORO-282). This section is machine-generated from a pinned snapshot of that
+Registry — see `scripts/generate_profile_products.py` (HORO-599). Do not
+hand-edit between the markers; re-pin and regenerate instead.
 
-### 🤖 AI Agent Assembly — Product stage: Beta
+<!-- BEGIN GENERATED: products_section -->
+### 🤖 AI Agent Assembly — Beta
 
-[![release](https://img.shields.io/github/v/release/ai-agent-assembly/agent-assembly?include_prereleases&sort=semver&label=release&logo=github)](https://github.com/ai-agent-assembly/agent-assembly/releases) [![CI](https://github.com/ai-agent-assembly/agent-assembly/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/ai-agent-assembly/agent-assembly/actions/workflows/ci.yml?query=branch%3Amaster) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+Agent runtime & governance — Gives AI agents a runtime with permissions, approval checkpoints, and an audit trail instead of unrestricted tool access.
 
-Governance platform for AI agents — assemble autonomous agents with explicit roles, tools, policies, and operating boundaries, enforced across three interception layers (SDK, sidecar proxy, eBPF).
-
-🌐 [agent-assembly.com](https://agent-assembly.com) · 📚 [docs](https://docs.agent-assembly.com) · 💻 [github.com/ai-agent-assembly](https://github.com/ai-agent-assembly)
+🌐 [agent-assembly.com](https://agent-assembly.com) · 💻 [github.com/ai-agent-assembly](https://github.com/ai-agent-assembly)
 
 ### 🧭 Octans — Experimental
 
-Change safety — verifies a change is safe to ship before it reaches production, across distributed services. Standalone; usable without any other Horonom product.
+Change safety — Verifies a change is safe to ship before it reaches production, across distributed services.
 
 🌐 [octans.horo.run](https://octans.horo.run)
 
 ### 📐 Circinus — Experimental
 
-Provenance & authority — establishes who or what is authorized to take a sensitive action, and proves it after the fact. Standalone; usable without any other Horonom product.
+Provenance & authority — Establishes who or what is authorized to take a sensitive action, and proves it after the fact.
 
-🌐 [circinus.horo.run](https://circinus.horo.run)
+🌐 [circinus.horonom.com](https://circinus.horonom.com) · 📚 [docs](https://circinus.horonom.com/docs)
 
 ### 🐍 Ophiuchus — Experimental
 
-Context continuity — carries context across machine, tool, and user boundaries so it is not re-derived or lost at each hop. Standalone; usable without any other Horonom product.
+Context continuity — Carries context across machine, tool, and user boundaries so it is not re-derived or lost at each hop.
 
-🌐 [ophiuchus.horo.run](https://ophiuchus.horo.run)
+🌐 [ophiuchus.horonom.com](https://ophiuchus.horonom.com) · 📚 [docs](https://ophiuchus.horonom.com/docs)
+
+### 🔥 Fornax — Experimental
+
+Agent integrity — Verifies real evidence for what an AI coding agent claims it did.
+
+🌐 [fornax.horonom.com](https://fornax.horonom.com) · 📚 [docs](https://docs.fornax.horonom.com)
+
+### ⏱️ Horologium — Experimental
+
+Product truth & integrity — Keeps what a product claims and what a product actually does from silently drifting apart.
+
+🌐 [horologium.horonom.com](https://horologium.horonom.com) · 📚 [docs](https://horologium.horonom.com/docs)
+
+### 🌊 Eridanus — Experimental
+
+Forensic provenance — Traces a data leak back through transformations to its point of origin, after the fact.
+
+*Not yet available — in development.*
 
 > More systems are awaiting stars. Additional research tracks — governance runtimes, change intelligence, and workflow primitives for autonomous software — are uncharted for now.
+<!-- END GENERATED: products_section -->
 
 ## Learn more
 

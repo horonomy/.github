@@ -1,0 +1,49 @@
+# profile/README.md's "## Products" section is generated from a pinned
+# snapshot of horonomy/official-website's productRegistry.ts (HORO-282,
+# HORO-599) by scripts/generate_profile_products.py. This gate fails if the
+# committed section drifted from what the generator would produce — on any
+# PR/push that touches the snapshot, generator, or the generated section, and
+# weekly to catch stealth hand-edits. The drift-prevention unit tests
+# (missing product, disagreeing canonical URL, retired hostname reappearing,
+# unpublished product gaining a public link) live in
+# scripts/test_generate_profile_products.py and run under Scripts tests
+# (scripts-tests.yml), which already covers all of scripts/.
+name: Profile products drift check
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - scripts/generate_profile_products.py
+      - scripts/test_generate_profile_products.py
+      - profile/README.md
+      - .github/workflows/profile-products-drift.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/generate_profile_products.py
+      - scripts/test_generate_profile_products.py
+      - profile/README.md
+      - .github/workflows/profile-products-drift.yml
+  schedule:
+    - cron: "37 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    name: generated Products section matches the pinned registry snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: Show Python version
+        run: python3 --version
+      - name: Run generator in --check mode
+        run: python3 scripts/generate_profile_products.py --check
