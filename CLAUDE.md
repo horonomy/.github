@@ -50,7 +50,10 @@ architecture decisions are recorded as ADRs in
 docs exist; `app/api/ingest.<product>.horo.run` are executable/runtime
 boundaries only, provisioned only when the real service exists —
 `<product>.horo.run` is not the default marketing hostname after
-migration. GA4 is allowed only on approved public marketing/docs surfaces
+migration. **Exception:** the bare root `horo.run` is the deliberate
+Horonom Product Atlas / product-directory entry point, using the Horonom
+**company** GA4 property — never a product property — see ADR-0008
+(HORO-594/595). GA4 is allowed only on approved public marketing/docs surfaces
 and never carries prompt/agent/repo/tenant/PII/credential/authenticated-
 SaaS content; authenticated product telemetry is a separate privacy
 domain. Full constitution, security checklist, and precedence:
