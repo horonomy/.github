@@ -25,10 +25,12 @@ class RenderIsStableTest(unittest.TestCase):
         # output — this is what CI's --check run enforces on every PR.
         self.assertEqual(gpp.main(["--check"]), 0)
 
-    def test_every_registry_product_is_rendered(self) -> None:
+    def test_every_live_registry_product_is_rendered(self) -> None:
         section = gpp.render_products_section()
         for product in gpp.REGISTRY:
-            self.assertIn(product["name"], section, f"{product['id']} missing from rendered section")
+            host = gpp._host(product["canonical_url"])
+            if host in gpp.LIVE_HOSTS:
+                self.assertIn(product["name"], section, f"{product['id']} missing from rendered section")
 
     def test_write_mode_updates_the_file_when_drifted(self) -> None:
         # Exercise main()'s write branch (only --check is covered above) by
@@ -60,12 +62,14 @@ class DriftPreventionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "retired host"):
             gpp.render_products_section()
 
-    def test_unpublished_product_gets_no_link(self) -> None:
+    def test_unpublished_product_is_omitted_entirely(self) -> None:
+        # HORO-688: a not-yet-live product must not appear at all, not even
+        # unlinked — public_release_reconcile.py's org_profile check treats
+        # any bare mention of a not_yet_public product's name as premature
+        # exposure, regardless of whether it carries a link.
         section = gpp.render_products_section()
-        eridanus_block = section.split("### 🌊 Eridanus")[1].split("### ")[0]
-        self.assertIn("Not yet available", eridanus_block)
-        self.assertNotIn("eridanus.horo.run", eridanus_block)
-        self.assertNotIn("http", eridanus_block)
+        self.assertNotIn("Eridanus", section)
+        self.assertNotIn("eridanus.horo.run", section)
 
     def test_duplicate_product_id_is_rejected(self) -> None:
         gpp.REGISTRY.append(dict(gpp.REGISTRY[0]))

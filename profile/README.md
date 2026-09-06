@@ -58,12 +58,6 @@ Product truth & integrity — Keeps what a product claims and what a product act
 
 🌐 [horologium.horonom.com](https://horologium.horonom.com) · 📚 [docs](https://horologium.horonom.com/docs)
 
-### 🌊 Eridanus — Experimental
-
-Forensic provenance — Traces a data leak back through transformations to its point of origin, after the fact.
-
-*Not yet available — in development.*
-
 > More systems are awaiting stars. Additional research tracks — governance runtimes, change intelligence, and workflow primitives for autonomous software — are uncharted for now.
 <!-- END GENERATED: products_section -->
 
