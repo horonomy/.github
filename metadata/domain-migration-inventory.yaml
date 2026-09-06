@@ -28,52 +28,52 @@
 #   blockers: free text, or null
 
 schema_version: 1
-reviewed_at: "2026-09-05"
+reviewed_at: "2026-09-06"
 
 products:
   - product: circinus
     discovery_ticket: HVDL-13
     migration_ticket: HORO-569
-    current_site: "https://circinus.horo.run"
+    current_site: "https://circinus.horonom.com"
     target_site: "https://circinus.horonom.com"
-    current_docs: "https://circinus.horo.run/docs"
-    target_docs: "docs.circinus.horonom.com (if warranted) or circinus.horonom.com/docs"
-    dns_status: not_provisioned
+    current_docs: "https://circinus.horonom.com/docs"
+    target_docs: "https://circinus.horonom.com/docs"
+    dns_status: redirect_only  # circinus.horo.run now 301s to circinus.horonom.com
     ga4:
-      current_id: "G-Z2D86YKMMH"
+      current_id: "G-WYMPBC7Q9C"
       target_id: "G-WYMPBC7Q9C"
-      status: live_old_domain
-    migration_status: not_started
+      status: live_new_domain
+    migration_status: complete
     blockers: null
 
   - product: ophiuchus
     discovery_ticket: HVDL-14
     migration_ticket: HORO-568
-    current_site: "https://ophiuchus.horo.run"
+    current_site: "https://ophiuchus.horonom.com"
     target_site: "https://ophiuchus.horonom.com"
-    current_docs: "https://ophiuchus.horo.run/docs"
-    target_docs: "docs.ophiuchus.horonom.com (if warranted) or ophiuchus.horonom.com/docs"
-    dns_status: not_provisioned
+    current_docs: "https://ophiuchus.horonom.com/docs"
+    target_docs: "https://ophiuchus.horonom.com/docs"
+    dns_status: redirect_only  # ophiuchus.horo.run now 301s via ophiuchus-edge Worker (HORO-579)
     ga4:
-      current_id: "G-RE2P2Q3J08"
+      current_id: "G-SK9BL6R66J"
       target_id: "G-SK9BL6R66J"
-      status: live_old_domain
-    migration_status: not_started
-    blockers: null
+      status: live_new_domain
+    migration_status: complete
+    blockers: "HORO-579: GA4 property-relationship confirmation + Enhanced Measurement history-tracking toggle both require GA4 Admin UI access not available in this environment — non-blocking for engineering/deployment closure."
 
   - product: fornax
     discovery_ticket: HVDL-15
     migration_ticket: FORNX-328
-    current_site: "https://fornax.horo.run"
+    current_site: "https://fornax.horonom.com"
     target_site: "https://fornax.horonom.com"
-    current_docs: "https://fornax.horo.run/docs"
-    target_docs: "docs.fornax.horonom.com (if warranted) or fornax.horonom.com/docs"
-    dns_status: not_provisioned
+    current_docs: "https://docs.fornax.horonom.com"
+    target_docs: "https://docs.fornax.horonom.com"
+    dns_status: redirect_only  # fornax.horo.run now 301s via fornax-edge Worker (HORO-572, fixed 2026-09-06 — was previously a live duplicate)
     ga4:
-      current_id: null
+      current_id: "G-YD29L01E89"
       target_id: "G-YD29L01E89"
-      status: not_installed
-    migration_status: not_started
+      status: live_new_domain
+    migration_status: complete
     blockers: null
 
   - product: eridanus
@@ -94,17 +94,17 @@ products:
   - product: horologium
     discovery_ticket: HVDL-17
     migration_ticket: HORO-571
-    current_site: "https://horologium.horo.run"
+    current_site: "https://horologium.horonom.com"
     target_site: "https://horologium.horonom.com"
-    current_docs: null
-    target_docs: "docs.horologium.horonom.com (if warranted) or horologium.horonom.com/docs"
-    dns_status: not_provisioned
+    current_docs: "https://horologium.horonom.com/docs"
+    target_docs: "https://horologium.horonom.com/docs"
+    dns_status: redirect_only  # horologium.horo.run redirects non-runtime paths; runtime endpoints remain live there by design
     ga4:
-      current_id: null
-      target_id: null
-      status: blocked_on_founder_input
-    migration_status: not_started
-    blockers: "GA4 Measurement ID not yet provided by founder — do not invent one."
+      current_id: "G-R4QEL954T0"
+      target_id: "G-R4QEL954T0"
+      status: live_new_domain
+    migration_status: complete
+    blockers: "Application stream G-YHE60HB2FV provisioned but not wired into any code (/app's CSP blocks googletagmanager.com by design) — documented, not a defect. GA4 property relationship across the 3 streams not confirmed via Admin API — non-blocking."
 
   - product: pet-life-simulator
     discovery_ticket: HVDL-18
