@@ -25,6 +25,13 @@ domain/analytics migration ticket.
 - **`<product>.horo.run` is not the default canonical marketing hostname**
   for a product that has migrated. It may remain as a redirect/alias to
   `<product>.horonom.com`, per ADR-0006 §3.
+- **The bare root `horo.run` is a deliberate, permanent exception**: it is
+  the Horonom Product Atlas / product-directory entry point (source:
+  `horonomy/official-website`'s `atlas/`), not a runtime endpoint and not a
+  second corporate site. It uses the Horonom **company** GA4 property, never
+  a product-specific one. Full rationale and the Atlas's analytics boundary:
+  [ADR-0008](https://github.com/horonomy/internal-docs/blob/main/docs/engineering/adr-0008-product-atlas-root-exception-and-analytics-boundary.md)
+  (HORO-594/595).
 - A domain change is never "just DNS" — it requires reconciling OAuth/OIDC
   redirect URIs, CORS allowed origins, CSP, cookie scope, and
   webhook/callback URLs (ADR-0006 §5). Do not treat a hostname migration as

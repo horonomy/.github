@@ -1,0 +1,49 @@
+# Horonom company-owned analytics registry (HORO-595).
+#
+# Distinct from metadata/domain-migration-inventory.yaml and
+# metadata/docs-analytics-registry.yaml — those track PRODUCT-owned
+# marketing/docs GA4 streams. This file tracks GA4 surfaces that belong to
+# the Horonom COMPANY analytics boundary itself: surfaces that are not any
+# one product's marketing/docs site, so must never use a product-specific
+# Measurement ID. See governance/engineering/domains-analytics.md and
+# ADR-0008 (horonomy/internal-docs) for the full rationale.
+#
+# Schema:
+#   surface: human-readable name of the company-owned surface
+#   canonical_url: the surface's canonical public URL
+#   ga4_property: GA4 property display name (not an API-resolvable ID —
+#                 no GA4 Admin API credential is available in this
+#                 environment; recorded as founder-provided ground truth)
+#   stream_id: GA4 Stream ID
+#   measurement_id: GA4 Measurement ID
+#   analytics_owner: company-common | product-owned
+#   purpose: one-line statement of what this surface's analytics answer
+#   forbidden_ids: product-specific Measurement IDs that must NEVER fire on
+#                  this surface (cross-reference, not exhaustive beyond the
+#                  currently known product set)
+#   live_browser_verification_status: not_performed | partial | complete
+#   notes: free text, or null
+
+schema_version: 1
+reviewed_at: "2026-09-06"
+
+surfaces:
+  - surface: "Horonom Product Atlas"
+    canonical_url: "https://horo.run/"
+    ga4_property: "Horonom"
+    stream_id: "15727055597"
+    measurement_id: "G-J14S6YWLNL"
+    analytics_owner: company-common
+    purpose: "public product discovery / portfolio navigation"
+    forbidden_ids:
+      - "G-YD29L01E89"   # Fornax marketing
+      - "G-43BPHKSX8H"   # Fornax docs
+      - "G-WYMPBC7Q9C"   # Circinus marketing
+      - "G-436F4XKVHD"   # Circinus docs
+      - "G-SK9BL6R66J"   # Ophiuchus marketing
+      - "G-2X3VEZ2SG4"   # Ophiuchus docs
+      - "G-R4QEL954T0"   # Horologium marketing
+      - "G-46CVCDFC4G"   # Horologium docs
+      - "G-YHE60HB2FV"   # Horologium application
+    live_browser_verification_status: not_performed
+    notes: "Founder-provided ground truth (2026-09-06), HORO-595. To be updated to complete once real-browser production verification lands (HORO-595 implementation)."

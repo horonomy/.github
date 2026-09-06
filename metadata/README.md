@@ -74,6 +74,17 @@ program. Structured mirror of `horonomy/internal-docs`'s
 machine-readable copy for tooling. See
 [`../governance/engineering/docs-analytics.md`](../governance/engineering/docs-analytics.md).
 
+## `company-analytics-registry.yaml`
+
+Separate from both product registries above: tracks GA4 surfaces that
+belong to the **Horonom company** analytics boundary itself — not any one
+product's marketing/docs site (e.g. the Product Atlas at `horo.run` root,
+HORO-595). Records the company GA4 property/stream/Measurement ID and the
+explicit list of product-specific Measurement IDs that must never fire on
+a company-owned surface. See
+[`../governance/engineering/domains-analytics.md`](../governance/engineering/domains-analytics.md)
+and ADR-0008 in `horonomy/internal-docs`.
+
 ## `governance.yaml`
 
 Separate from the company registry above: `governance.yaml` carries a
