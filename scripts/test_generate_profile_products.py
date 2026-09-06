@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import unittest
+from unittest import mock
 
 import generate_profile_products as gpp
 
@@ -28,6 +29,20 @@ class RenderIsStableTest(unittest.TestCase):
         section = gpp.render_products_section()
         for product in gpp.REGISTRY:
             self.assertIn(product["name"], section, f"{product['id']} missing from rendered section")
+
+    def test_write_mode_updates_the_file_when_drifted(self) -> None:
+        # Exercise main()'s write branch (only --check is covered above) by
+        # feeding it a deliberately stale "current" file content.
+        with mock.patch.object(
+            gpp.PROFILE_README_PATH.__class__,
+            "read_text",
+            return_value="<!-- BEGIN GENERATED: products_section -->\nstale\n<!-- END GENERATED: products_section -->\n",
+        ), mock.patch.object(gpp, "_write_profile_readme") as write_mock:
+            self.assertEqual(gpp.main([]), 0)
+        write_mock.assert_called_once()
+        (written_content,) = write_mock.call_args.args
+        self.assertIn("AI Agent Assembly", written_content)
+        self.assertNotIn("stale", written_content)
 
 
 class DriftPreventionTest(unittest.TestCase):

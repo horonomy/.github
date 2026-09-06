@@ -254,7 +254,7 @@ def _write_profile_readme(content: str) -> None:
     a bounded-region generator (the same pattern generate_company_metadata.py
     already uses for this exact file).
     """
-    PROFILE_README_PATH.write_text(content, encoding="utf-8")  # NOSONAR (python:S2083 — see docstring)
+    PROFILE_README_PATH.write_text(content, encoding="utf-8")  # NOSONAR
 
 
 def _replace_bounded(text: str, block_id: str, body: str, where: str) -> str:
