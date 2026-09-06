@@ -40,6 +40,17 @@ company domain; it is unrelated to the AI Agent Assembly product's
 - **`../profile/README.md`** — the `<!-- BEGIN GENERATED: company_footer -->`
   region (company site + security-policy contact line).
 
+## `coming_soon` does not imply active execution
+
+`coming_soon` means "in design/estimation, nothing shipped" — it does not
+assert the initiative is currently funded or being worked. A product can
+sit at `coming_soon` indefinitely without active work (see ArcheWeave and
+Harbinger, HORO-598) and that is not, by itself, a reason to remove it
+from the catalog. There is deliberately no separate "dormant"/"parked"
+lifecycle value — a per-entry YAML comment recording the actual
+disposition and the decision that set it is the canonical place for that
+nuance, not a new schema field invented for a single case.
+
 ## Changing a value
 
 1. Edit `company.yaml`.
