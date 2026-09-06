@@ -84,6 +84,31 @@ products:
     # "Release candidate" (ai-agent-assembly/docs, docs/src/source-of-truth.md).
     # `beta` here contradicted that by understating it.
     lifecycle: "release_candidate"
+  - id: "octans"
+    name: "Octans"
+    website: "https://octans.horo.run"
+    github_org: null
+    lifecycle: "coming_soon"
+  - id: "circinus"
+    name: "Circinus"
+    website: "https://circinus.horonom.com"
+    github_org: null
+    lifecycle: "coming_soon"
+  - id: "ophiuchus"
+    name: "Ophiuchus"
+    website: "https://ophiuchus.horonom.com"
+    github_org: null
+    lifecycle: "coming_soon"
+  - id: "fornax"
+    name: "Fornax"
+    website: "https://fornax.horonom.com"
+    github_org: null
+    lifecycle: "coming_soon"
+  - id: "horologium"
+    name: "Horologium"
+    website: "https://horologium.horonom.com"
+    github_org: null
+    lifecycle: "coming_soon"
   - id: "archeweave"
     name: "ArcheWeave"
     website: null
