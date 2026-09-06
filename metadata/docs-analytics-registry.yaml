@@ -34,6 +34,12 @@
 #   live_browser_verification_status: not_performed | partial | complete
 #   privacy_notes: free text, or null
 #   blockers: free text, or null
+#   ga_admin_stream_url_correction: the correct Stream URL value GA Admin's
+#                                    "Stream URL" field should be edited to,
+#                                    or null if the field is already correct
+#                                    or the product has no docs stream. This
+#                                    is cosmetic reporting metadata only —
+#                                    never a reason to provision DNS.
 
 schema_version: 1
 reviewed_at: "2026-09-06"
@@ -54,7 +60,8 @@ products:
     implementation_status: complete
     live_browser_verification_status: complete
     privacy_notes: "Every hit carries only tid/en/dl plus fixed surface/destination params — no forbidden data."
-    blockers: "HORO-579 (DEV VERIFY): Enhanced Measurement history-tracking leak across marketing/docs streams — exact GA4 Admin fix identified, non-blocking for engineering closure. GA4 property relationship also unconfirmed, non-blocking."
+    blockers: "Resolved 2026-09-06: founder disabled Enhanced Measurement history-tracking on both Ophiuchus streams; re-verified live via genuine SPA crossing, zero leaked hits. GA4 property relationship (G-SK9BL6R66J vs retired G-RE2P2Q3J08) remains unconfirmed, non-blocking cosmetic item."
+    ga_admin_stream_url_correction: null  # already https://ophiuchus.horonom.com/docs
 
   - product: circinus
     parent_epic: HORO-587
@@ -71,7 +78,8 @@ products:
     implementation_status: complete
     live_browser_verification_status: complete
     privacy_notes: "Do not weaken Circinus's existing CSP/CORS/cookie-scope authority boundary — confirmed untouched (HORO-590)."
-    blockers: null
+    blockers: "Enhanced Measurement history-tracking leak reproduced live 2026-09-06 (marketing tid=G-WYMPBC7Q9C page_view leaking onto a /docs URL) — HORO-590's lazy-config mitigation does not fully prevent it under genuine SPA navigation. Exact founder action: GA4 Admin -> Data Streams -> Circinus Official website (marketing) stream -> Enhanced Measurement -> disable 'Page changes based on browser history events'. Docs stream not affected in this direction, left unchanged."
+    ga_admin_stream_url_correction: "https://circinus.horonom.com/docs"  # GA Admin still shows https://docs.circinus.horonom.com, a nonexistent host — founder-observed 2026-09-06
 
   - product: fornax
     parent_epic: HORO-587
@@ -89,6 +97,7 @@ products:
     live_browser_verification_status: complete
     privacy_notes: "Only a fixed event name plus snippet_language/snippet_type (regex-derived, never raw content) ever sent."
     blockers: null
+    ga_admin_stream_url_correction: null  # already https://docs.fornax.horonom.com, a real dedicated subdomain
 
   - product: horologium
     parent_epic: HORO-587
@@ -106,6 +115,7 @@ products:
     live_browser_verification_status: complete
     privacy_notes: "Only page_path/page_location/page_title/destination (2-value enum) ever sent — no Product Truth/repo/ticket/entity data."
     blockers: "Dedicated docs.horologium.horonom.com subdomain remains reverted (Cloudflare Universal SSL constraint) — nested /docs/* path is the confirmed final architecture, not re-litigated. GA4 property relationship across all 3 streams unconfirmed — non-blocking."
+    ga_admin_stream_url_correction: "https://horologium.horonom.com/docs"  # GA Admin still shows https://docs.horologium.horonom.com, not a valid production surface — founder-observed 2026-09-06
 
   - product: eridanus
     parent_epic: HORO-587
@@ -123,6 +133,7 @@ products:
     live_browser_verification_status: not_performed
     privacy_notes: null
     blockers: "Product remains intentionally not-yet-public — no public docs surface to instrument."
+    ga_admin_stream_url_correction: null
 
   - product: pet-life-simulator
     parent_epic: HORO-587
@@ -140,3 +151,4 @@ products:
     live_browser_verification_status: not_performed
     privacy_notes: null
     blockers: "No public web surface exists at all (iOS-first prototype/fake-door experiment). Do not create decorative DNS or a docs stream to complete this inventory."
+    ga_admin_stream_url_correction: null
