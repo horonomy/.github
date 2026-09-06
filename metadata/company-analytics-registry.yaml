@@ -45,5 +45,5 @@ surfaces:
       - "G-R4QEL954T0"   # Horologium marketing
       - "G-46CVCDFC4G"   # Horologium docs
       - "G-YHE60HB2FV"   # Horologium application
-    live_browser_verification_status: not_performed
-    notes: "Founder-provided ground truth (2026-09-06), HORO-595. To be updated to complete once real-browser production verification lands (HORO-595 implementation)."
+    live_browser_verification_status: complete
+    notes: "Founder-provided ground truth (2026-09-06), HORO-595. Real-browser production verification (Playwright against https://horo.run/, 2026-09-06): pre-consent page_view fires denied/cookieless (gcs=G100, pscdl=denied); post-accept page_view + product_card_click (2 distinct products) + company_home_click all fire with gcs=G101 (analytics_storage granted) and correct low-cardinality params (surface/product_slug/product_status/destination_type); every captured hit across the full session carries tid=G-J14S6YWLNL only, no product-specific ID ever observed. GA4 Realtime dashboard receipt not independently confirmed — no GA4 Admin/Realtime access in this environment, same standing gap as every other product's GA4 property in this program."
