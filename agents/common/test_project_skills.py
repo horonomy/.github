@@ -289,11 +289,23 @@ class ResolveApplicableSkillsTest(unittest.TestCase):
 
 
 class BuildAssetProjectionsTest(unittest.TestCase):
-    def test_real_skills_have_no_assets_yet(self) -> None:
-        # As of HORO-970 landing, none of the five pre-existing skills use
-        # the optional asset dirs — this pins that current-state fact so a
-        # future skill adding assets updates this test deliberately.
-        self.assertEqual(ps.build_asset_projections(), {})
+    def test_real_engineering_loop_assets_project_correctly(self) -> None:
+        # engineering-loop (HORO-971) is the first real skill to use the
+        # optional asset dirs — pins that its 4 real reference/example
+        # files (not the other 5 pre-existing assetless skills) are
+        # exactly what gets projected, deliberately updated from this
+        # test's HORO-970-era "no skill has assets yet" version.
+        projections = ps.build_asset_projections()
+        expected_rel_paths = {
+            "references/diagnostic-contract.md",
+            "references/optional-tool-fallback.md",
+            "examples/targeted-loop-then-full-gate.md",
+            "examples/escalation-from-compact-to-raw.md",
+        }
+        actual_rel_paths = {
+            str(p.relative_to(ps.CLAUDE_SKILLS_DIR / "engineering-loop")) for p in projections
+        }
+        self.assertEqual(actual_rel_paths, expected_rel_paths)
 
     def test_asset_file_projects_verbatim_under_claude_skills(self) -> None:
         fixture = _skills_fixture()
