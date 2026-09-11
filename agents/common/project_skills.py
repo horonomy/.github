@@ -43,6 +43,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -228,6 +229,46 @@ def _repo_has_stack_evidence(repo_root: Path, stack: str) -> bool:
     return False
 
 
+# HORO-969 §3 point 2's framework/build evidence for a rendered surface —
+# used only for design-qa below. Every other no-manifest skill stays
+# always-applicable (§3 point 4: product-validation/documentation-experience
+# are deliberately broad); design-qa is the one skill whose own SKILL.md
+# (§"Type") declares a default of NOT_APPLICABLE absent this evidence, so it
+# needs its own detection rather than the blanket "no manifest = always on"
+# rule the other no-manifest skills correctly rely on.
+_FRONTEND_FRAMEWORK_DEPS = (
+    "react", "vue", "svelte", "next", "nuxt", "@angular/core", "solid-js", "astro", "@docusaurus/core",
+)
+
+
+def _repo_has_rendered_surface_evidence(repo_root: Path) -> bool:
+    package_json = repo_root / "package.json"
+    if package_json.is_file():
+        try:
+            data = json.loads(package_json.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            data = None
+        if isinstance(data, dict):
+            deps: dict = {}
+            for key in ("dependencies", "devDependencies"):
+                section = data.get(key)
+                if isinstance(section, dict):
+                    deps.update(section)
+            if any(dep in deps for dep in _FRONTEND_FRAMEWORK_DEPS):
+                return True
+    if any(repo_root.glob("docusaurus.config.*")):
+        return True
+    # iOS/native UI target: an .xcodeproj/.xcworkspace at all is treated as
+    # UI-target evidence here — distinguishing a pure SwiftPM library
+    # package from one with a real UI target needs reading the project
+    # file's target list, which is out of scope for this repo-root-only
+    # evidence pass; a false-applicable here is a design-qa NOT_APPLICABLE
+    # judgment call downstream, not a wrong file write.
+    if any(repo_root.glob("*.xcodeproj")) or any(repo_root.glob("*.xcworkspace")):
+        return True
+    return False
+
+
 def resolve_applicable_skills(repo_root: Path, *, overrides: dict[str, bool] | None = None) -> list[str]:
     """Which canonical skills apply to `repo_root`, evidence-based.
 
@@ -235,7 +276,11 @@ def resolve_applicable_skills(repo_root: Path, *, overrides: dict[str, bool] | N
     compatible with the five pre-HORO-970 skills — "every repo receives
     every skill" is forbidden by HORO-969 §3 only for *stack-tagged*
     skills, not for company-process skills like jira-delivery that have
-    no stack dependency at all).
+    no stack dependency at all) — **except `design-qa`**, which HORO-969
+    §3 points 2/3 requires to default `NOT_APPLICABLE` absent rendered-
+    surface evidence even though it carries no manifest.yaml (its
+    applicability question isn't stack-shaped, so it can't use the
+    manifest mechanism — see `_repo_has_rendered_surface_evidence`).
 
     `overrides`, keyed by skill name, forces a skill in (`True`) or out
     (`False`) regardless of evidence — HORO-969 §3's "explicit override
@@ -256,6 +301,10 @@ def resolve_applicable_skills(repo_root: Path, *, overrides: dict[str, bool] | N
             continue
         manifest = load_manifest(name)
         if manifest is None:
+            if name == "design-qa":
+                if _repo_has_rendered_surface_evidence(repo_root):
+                    applicable.append(name)
+                continue
             applicable.append(name)
             continue
         matches = [_repo_has_stack_evidence(repo_root, stack) for stack in manifest["stacks"]]
@@ -288,43 +337,73 @@ def render_codex_projection(name: str, canonical: str) -> str:
     )
 
 
-def build_projections(dest_root: Path | None = None) -> dict[Path, str]:
+def build_projections(dest_root: Path | None = None, *, applicable_only: list[str] | None = None) -> dict[Path, str]:
     """`dest_root` defaults to this repo (self-projection). Passing a
     different repo's path projects the *same* canonical content there —
-    used by scripts/repo_bootstrap.py's cross-repo adoption path.
+    used by scripts/repo_bootstrap.py's cross-repo adoption/consumption
+    paths.
+
+    `applicable_only`, when given, restricts projection to exactly those
+    skill names (typically `resolve_applicable_skills(dest_root)`'s
+    result) instead of every canonical skill — HORO-982's consumption
+    path uses this so a non-Horonom repo only receives the skills real
+    evidence supports, never the full catalog regardless of stack
+    (HORO-969 §3's "every repo receives every skill" is a forbidden
+    shortcut). `None` (the default) keeps every existing caller's
+    behavior — `scripts/repo_bootstrap.py adopt` intentionally still
+    projects the full catalog unfiltered, unchanged by this parameter.
 
     SKILL.md only — see build_asset_projections() for the separate
-    references/examples/scripts/tests asset tree, which today is
-    self-projection only (see module docstring)."""
+    references/examples/scripts/tests asset tree."""
     claude_dir = (dest_root / ".claude" / "skills") if dest_root else CLAUDE_SKILLS_DIR
     codex_dir = (dest_root / ".codex" / "skills") if dest_root else CODEX_SKILLS_DIR
+    names = discover_skills()
+    if applicable_only is not None:
+        unknown = set(applicable_only) - set(names)
+        if unknown:
+            raise SkillProjectionError(f"applicable_only names unknown skill(s): {sorted(unknown)}")
+        names = [n for n in names if n in set(applicable_only)]
     projections: dict[Path, str] = {}
-    for name in discover_skills():
+    for name in names:
         canonical = (SKILLS_DIR / name / "SKILL.md").read_text(encoding="utf-8")
         projections[claude_dir / name / "SKILL.md"] = render_claude_projection(name, canonical)
         projections[codex_dir / f"{name}.md"] = render_codex_projection(name, canonical)
     return projections
 
 
-def build_asset_projections() -> dict[Path, bytes]:
+def build_asset_projections(dest_root: Path | None = None, *, applicable_only: list[str] | None = None) -> dict[Path, bytes]:
     """Verbatim copies of every skill's references/examples/scripts/tests
-    files, keyed by their destination path under this repo's own
-    `.claude/skills/<name>/...`. Content is copied byte-for-byte (no
-    provenance-header injection, unlike SKILL.md's projection) because an
-    asset may be a script or fixture where a prepended HTML comment would
-    corrupt it — the generated-ness of the whole `.claude/skills/<name>/`
-    tree is the existing, already-established invariant (matches how
-    SKILL.md's own self-projection already gets blindly overwritten on
-    drift with no per-file collision check — see main()).
+    files, keyed by their destination path under `dest_root`'s (default:
+    this repo's own) `.claude/skills/<name>/...`. Content is copied
+    byte-for-byte (no provenance-header injection, unlike SKILL.md's
+    projection) because an asset may be a script or fixture where a
+    prepended HTML comment would corrupt it — the generated-ness of the
+    whole `.claude/skills/<name>/` tree is the existing, already-
+    established invariant (matches how SKILL.md's own self-projection
+    already gets blindly overwritten on drift with no per-file collision
+    check — see main()).
+
+    `dest_root`/`applicable_only` mirror `build_projections()` — HORO-982
+    extends this from self-projection-only (its original scope) to
+    cross-repo, the same way `build_projections()` already was, so an
+    adopted/consumer repo gets real reference/example/script content
+    alongside its SKILL.md, not just the top-level file.
 
     Read as bytes, not text, so a binary fixture under tests/ round-trips
     correctly.
     """
+    claude_dir = (dest_root / ".claude" / "skills") if dest_root else CLAUDE_SKILLS_DIR
+    names = discover_skills()
+    if applicable_only is not None:
+        unknown = set(applicable_only) - set(names)
+        if unknown:
+            raise SkillProjectionError(f"applicable_only names unknown skill(s): {sorted(unknown)}")
+        names = [n for n in names if n in set(applicable_only)]
     projections: dict[Path, bytes] = {}
-    for name in discover_skills():
+    for name in names:
         for rel_path in discover_skill_assets(name):
             content = (SKILLS_DIR / name / rel_path).read_bytes()
-            projections[CLAUDE_SKILLS_DIR / name / rel_path] = content
+            projections[claude_dir / name / rel_path] = content
     return projections
 
 
