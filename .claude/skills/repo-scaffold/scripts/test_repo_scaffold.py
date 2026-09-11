@@ -19,8 +19,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import repo_scaffold as rs  # noqa: E402
-
+import repo_scaffold as rs
 
 # ---------------------------------------------------------------------------
 # Profile validation
@@ -321,7 +320,8 @@ class TestCollisionDetection:
         plan = rs.resolve(profile)
         (tmp_path / "README.md").write_text("pre-existing repo readme, not part of the scaffold\n", encoding="utf-8")
         rs.write_plan(plan, tmp_path)
-        assert (tmp_path / "README.md").read_text(encoding="utf-8") == "pre-existing repo readme, not part of the scaffold\n"
+        expected = "pre-existing repo readme, not part of the scaffold\n"
+        assert (tmp_path / "README.md").read_text(encoding="utf-8") == expected
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +369,9 @@ class TestCli:
         path.write_text(json.dumps(profile), encoding="utf-8")
         return path
 
-    def test_plan_command_prints_file_list_and_exits_zero(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_plan_command_prints_file_list_and_exits_zero(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         profile_path = self._write_profile(tmp_path, {"archetype": "cli", "stacks": ["rust"]})
         rc = rs.main(["plan", str(profile_path)])
         out = capsys.readouterr().out
@@ -390,7 +392,9 @@ class TestCli:
         assert rs.main(["write", str(profile_path), str(target)]) == 0
         assert rs.main(["check", str(profile_path), str(target)]) == 0
 
-    def test_write_command_second_run_reports_nothing_written(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_write_command_second_run_reports_nothing_written(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         profile_path = self._write_profile(tmp_path, {"archetype": "cli", "stacks": ["rust"]})
         target = tmp_path / "repo"
         target.mkdir()

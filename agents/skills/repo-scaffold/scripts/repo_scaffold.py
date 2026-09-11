@@ -134,7 +134,7 @@ class Profile:
     capabilities: tuple[str, ...]
 
     @staticmethod
-    def from_dict(raw: dict) -> "Profile":
+    def from_dict(raw: dict) -> Profile:
         if not isinstance(raw, dict):
             raise ProfileError("profile must be a JSON object")
         unknown_keys = set(raw) - {"archetype", "stacks", "capabilities"}
@@ -161,7 +161,9 @@ class Profile:
             raise ProfileError("profile.capabilities must be a list if present")
         for c in capabilities:
             if c not in CAPABILITIES:
-                raise ProfileError(f"profile.capabilities: unknown capability {c!r}, expected one of {sorted(CAPABILITIES)}")
+                raise ProfileError(
+                    f"profile.capabilities: unknown capability {c!r}, expected one of {sorted(CAPABILITIES)}"
+                )
         if len(set(capabilities)) != len(capabilities):
             raise ProfileError("profile.capabilities must not repeat a capability")
 
@@ -292,7 +294,10 @@ def _stamp(path: str, body: str) -> str:
         # on the next run (e.g. plain JSON) are deliberately excluded from
         # v1's emitted file set rather than emitted unmarked — see
         # references/archetype-composition.md's "explicit v1 deferrals".
-        raise ProfileError(f"repo_scaffold.py has no provenance-comment style for {path!r} — extend _stamp() before emitting this format")
+        raise ProfileError(
+            f"repo_scaffold.py has no provenance-comment style for {path!r}"
+            " — extend _stamp() before emitting this format"
+        )
     return header + body
 
 
@@ -341,7 +346,8 @@ def _dependabot_config(profile: Profile) -> str:
     }
     ecosystems = sorted({eco[s] for s in profile.stacks if s in eco})
     ecosystems.append("github-actions")
-    updates = "\n".join(f'  - package-ecosystem: "{e}"\n    directory: "/"\n    schedule:\n      interval: "weekly"' for e in ecosystems)
+    entry = '  - package-ecosystem: "{e}"\n    directory: "/"\n    schedule:\n      interval: "weekly"'
+    updates = "\n".join(entry.format(e=e) for e in ecosystems)
     return f'version: 2\nupdates:\n{updates}\n'
 
 
@@ -423,7 +429,11 @@ def _stack_ci_files(profile: Profile) -> dict[str, str]:
         # workflow per stack, delegating actual commands to that stack's
         # own skill rather than re-deriving them here.
         job_steps = {
-            "rust": ["cargo check --workspace", "cargo nextest run --workspace", "cargo clippy --workspace -- -D warnings"],
+            "rust": [
+                "cargo check --workspace",
+                "cargo nextest run --workspace",
+                "cargo clippy --workspace -- -D warnings",
+            ],
             "python": ["uv sync", "uv run pytest", "uv run ruff check .", "uv run mypy ."],
             "typescript": ["pnpm install --frozen-lockfile", "pnpm typecheck", "pnpm test", "pnpm lint"],
             "go": ["go build ./...", "go vet ./...", "go test ./..."],

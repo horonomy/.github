@@ -372,6 +372,26 @@ class ConsumeTest(unittest.TestCase):
         outcomes = rb.consume(self.repo, org="ai-agent-assembly", now="2026-01-01T00:00:01+00:00")
         self.assertIn("unchanged", outcomes["skills"])
 
+    def test_reconsume_overwrites_a_drifted_canonical_asset_file(self) -> None:
+        """See the matching adopt() test + fix comment (HORO-983 real
+        dogfood): asset files never carry GENERATED_MARKER, so consume()
+        had the identical bug — a content-changed asset file was treated
+        as hand-authored on every re-consume, even when nothing was
+        hand-edited, permanently blocking upstream fixes from propagating
+        to any already-consumed repo (e.g. AI-agent-assembly/homebrew-tap)."""
+        (self.repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")  # keeps rust-development applicable
+        rb.consume(self.repo, org="ai-agent-assembly", now="2026-01-01T00:00:00+00:00")
+        asset_files = list((self.repo / ".claude" / "skills" / "rust-development" / "references").glob("*.md"))
+        if not asset_files:
+            self.skipTest("rust-development currently has no reference asset files to verify against")
+        drifted = asset_files[0]
+        canonical_bytes = drifted.read_bytes()
+        drifted.write_bytes(b"stale content from a previous canonical version, not hand-edited\n")
+
+        outcomes = rb.consume(self.repo, org="ai-agent-assembly", now="2026-01-01T00:00:01+00:00")
+        self.assertNotIn("skipped-conflict", outcomes["skills"])
+        self.assertEqual(drifted.read_bytes(), canonical_bytes)
+
     def test_check_consumption_passes_after_fresh_consume(self) -> None:
         rb.consume(self.repo, org="ai-agent-assembly", now="2026-01-01T00:00:00+00:00")
         results = rb.check_consumption(self.repo, expected_governance_version=1)
@@ -445,6 +465,33 @@ class CrossRepoSkillProjectionTest(unittest.TestCase):
             self.skipTest("rust-development currently has no asset files to verify against")
         for rel_path in canonical_assets:
             self.assertTrue((repo / ".claude" / "skills" / "rust-development" / rel_path).is_file())
+
+    def test_readopt_overwrites_a_drifted_canonical_asset_file(self) -> None:
+        """HORO-983 real dogfood (horonomy/GearMeshing-AI): asset files
+        (references/examples/scripts/tests) never carry GENERATED_MARKER —
+        a script can't start with an HTML comment without corrupting it —
+        so the marker-gated collision check used to treat every
+        content-changed asset file as hand-authored on every re-adopt,
+        even when nothing was ever hand-edited. That meant a real upstream
+        fix to a vendored skill script (e.g. a lint fix) could never
+        propagate to an already-adopted repo: skipped-conflict forever.
+        Simulates exactly that — the projected file on disk represents
+        stale content from a previous canonical version, not a hand edit —
+        and confirms the next adopt() overwrites it to match the current
+        canonical bytes rather than skipping it as a conflict."""
+        repo = _tmp_git_repo()
+        (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")  # keeps rust-development applicable
+        rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        asset_files = list((repo / ".claude" / "skills" / "rust-development" / "references").glob("*.md"))
+        if not asset_files:
+            self.skipTest("rust-development currently has no reference asset files to verify against")
+        drifted = asset_files[0]
+        canonical_bytes = drifted.read_bytes()
+        drifted.write_bytes(b"stale content from a previous canonical version, not hand-edited\n")
+
+        outcomes = rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:01+00:00")
+        self.assertNotIn("skipped-conflict", outcomes["skills"])
+        self.assertEqual(drifted.read_bytes(), canonical_bytes)
 
     def test_readopt_removes_now_inapplicable_skill_projection(self) -> None:
         """The counterpart to filtering: a repo whose applicable set
