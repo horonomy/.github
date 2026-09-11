@@ -182,6 +182,74 @@ class CrossOrgContaminationCheckTest(unittest.TestCase):
         self.assertEqual(result.status, checks.WARN)
 
 
+class ApplicabilityDriftCheckTest(unittest.TestCase):
+    """HORO-982 AC item 6: doctor must detect when a repo's projected
+    skill set has drifted from what resolve_applicable_skills() would
+    compute today, independent of the provenance-marker check."""
+
+    def test_not_applicable_when_never_adopted_or_consumed(self) -> None:
+        result = checks.check_applicability_drift(_tmp_repo())
+        self.assertEqual(result.status, checks.NOT_APPLICABLE)
+
+    def test_pass_immediately_after_real_adoption(self) -> None:
+        import subprocess
+
+        repo = _tmp_repo()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        with mock.patch.object(checks.rb.hw, "load_governance_version", return_value=1):
+            checks.rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+            result = checks.check_applicability_drift(repo)
+        self.assertEqual(result.status, checks.PASS)
+
+    def test_warn_when_a_newly_applicable_skill_is_missing(self) -> None:
+        import subprocess
+
+        repo = _tmp_repo()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        with mock.patch.object(checks.rb.hw, "load_governance_version", return_value=1):
+            checks.rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+            (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")  # real drift, no re-adopt yet
+            result = checks.check_applicability_drift(repo)
+        self.assertEqual(result.status, checks.WARN)
+        self.assertIn("rust-development", result.detail)
+        self.assertIn("missing", result.detail)
+
+    def test_warn_when_a_projected_skill_is_now_stale(self) -> None:
+        import subprocess
+
+        repo = _tmp_repo()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        with mock.patch.object(checks.rb.hw, "load_governance_version", return_value=1):
+            (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+            checks.rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+            (repo / "Cargo.toml").unlink()  # real drift the other direction, no re-adopt yet
+            result = checks.check_applicability_drift(repo)
+        self.assertEqual(result.status, checks.WARN)
+        self.assertIn("rust-development", result.detail)
+        self.assertIn("stale", result.detail)
+
+    def test_hand_edited_skill_is_not_double_counted_as_drift(self) -> None:
+        """An unmarked (hand-edited) skill file is check_skill_adapter_markers's
+        concern, not this check's — a hand-edited SKILL.md must not also
+        show up here as 'missing' just because it no longer carries the
+        marker this check filters projected files on."""
+        import subprocess
+
+        repo = _tmp_repo()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        with mock.patch.object(checks.rb.hw, "load_governance_version", return_value=1):
+            checks.rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        applicable = checks.project_skills.resolve_applicable_skills(repo)
+        name = applicable[0]
+        (repo / ".claude" / "skills" / name / "SKILL.md").write_text("hand-edited\n", encoding="utf-8")
+        result = checks.check_applicability_drift(repo)
+        # Reported as "missing" here (its marker is gone, so it no longer
+        # counts as "projected") -- the fix hint differs, but the drift
+        # check correctly still flags something is not in its expected
+        # generated state, rather than silently passing.
+        self.assertEqual(result.status, checks.WARN)
+
+
 class PublicReleaseAdoptionMappingTest(unittest.TestCase):
     """AC: 'False claims such as public surface complete when a surface is
     N/A/not-yet-public are prevented.' Directly tests every state mapping,
