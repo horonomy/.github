@@ -360,28 +360,128 @@ def adopt(
     # an adopted repo gets the same shared-skill content Claude/Codex read
     # from horonomy/.github itself, never a second hand-copied
     # implementation (HORO-509/ADR-0005 decision #6).
-    skill_projections = project_skills.build_projections(dest_root=repo)
+    #
+    # HORO-982: filtered to `applicable` (resolve_applicable_skills(repo))
+    # rather than the full catalog — "every repo receives every skill" is
+    # a forbidden shortcut (HORO-969 §3), and this was the one remaining
+    # AC gap left open across the ticket's first two PRs specifically
+    # because filtering an already-established unfiltered projection for
+    # every already-adopted horonomy repo is a real behavior change that
+    # needs matching orphan-removal, not just a filter added in isolation
+    # (see the orphan-removal block below). Also now includes asset
+    # projection (build_asset_projections) — adopt() previously projected
+    # SKILL.md only, never references/examples/scripts/tests, unlike
+    # consume() which got both from the start.
+    applicable = project_skills.resolve_applicable_skills(repo)
+    skill_projections: dict[Path, bytes] = {
+        path: content.encode("utf-8")
+        for path, content in project_skills.build_projections(dest_root=repo, applicable_only=applicable).items()
+    }
+    for path, content in project_skills.build_asset_projections(dest_root=repo, applicable_only=applicable).items():
+        if path in skill_projections:
+            raise AdoptionError(f"asset projection collides with a SKILL.md projection path: {path}")
+        skill_projections[path] = content
+
     skill_outcomes = {"written": 0, "unchanged": 0, "skipped-conflict": 0}
     for path, content in skill_projections.items():
         _reject_unsafe_symlink(path, repo=repo)
         if path.exists():
-            current = path.read_text(encoding="utf-8", errors="replace")
+            current = path.read_bytes()
             if current == content:
                 skill_outcomes["unchanged"] += 1
                 continue
-            if not current.startswith(project_skills.GENERATED_MARKER):
+            if not current.startswith(project_skills.GENERATED_MARKER.encode("utf-8")):
                 skill_outcomes["skipped-conflict"] += 1
                 continue
         if not dry_run:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
+            path.write_bytes(content)
         skill_outcomes["written"] += 1
+
+    orphaned = _remove_inapplicable_skill_projections(repo, applicable=applicable, dry_run=dry_run)
     outcomes["skills"] = (
+        f"{len(applicable)} applicable ({', '.join(sorted(applicable)) or 'none'}); "
         f"{skill_outcomes['written']} {write_verb}, {skill_outcomes['unchanged']} unchanged"
         + (f", {skill_outcomes['skipped-conflict']} skipped-conflict" if skill_outcomes["skipped-conflict"] else "")
+        + (f", {orphaned} removed (no longer applicable)" if orphaned else "")
     )
 
     return outcomes
+
+
+def _remove_inapplicable_skill_projections(repo: Path, *, applicable: list[str], dry_run: bool) -> int:
+    """Removes exactly the generated files this tool itself would ever
+    have projected for a now-inapplicable skill — the counterpart to
+    filtering `build_projections()`/`build_asset_projections()` above:
+    without this, an already-adopted repo would accumulate dead skill
+    content forever every time its applicable set shrinks (a stack
+    removed, a dependency dropped), exactly the "stale shared skills"
+    drift HORO-982's doctor AC asks to be detected, self-inflicted by this
+    tool if left unremoved.
+
+    Independent review (HORO-982, PR #45) found two real, live-reproduced
+    content-loss bugs in an earlier `shutil.rmtree()`-based version of
+    this function: (1) a skill directory with no `SKILL.md` at all but
+    real user-authored content (e.g. hand-added notes) got deleted
+    wholesale, since the guard only ever checked `SKILL.md`'s marker; (2)
+    a hand-edited asset file sitting beside an untouched `SKILL.md` got
+    destroyed too, since asset files carry no provenance marker of their
+    own to check (`project_skills.py`'s own docstring: assets are "copied
+    byte-for-byte, no provenance-header injection"). Fixed by removing a
+    file ONLY when it still exists on disk AND its current content
+    exactly matches what this tool would generate for it right now — the
+    same "unchanged" comparison the write path above already uses,
+    applied in reverse, uniformly across `SKILL.md`, the Codex adapter
+    file, and every asset file (no per-file-type marker logic needed,
+    since content equality is a strictly stronger safety check than a
+    marker prefix). A file whose content differs from canonical — hand-
+    edited, whether or not it happens to carry a marker — is left in
+    place; a path this tool never projects at all (a stray user file) is
+    never even considered, since it's never a key in the projection dict.
+    Directories are pruned bottom-up only once genuinely empty, so any
+    surviving hand-edited content keeps its containing directory intact.
+
+    Returns the count of skills that had at least one file actually
+    removed (or that would be, under `dry_run`)."""
+    try:
+        canonical_names = set(project_skills.discover_skills())
+    except project_skills.SkillProjectionError:
+        return 0  # can't safely determine orphans without a healthy canonical skill set
+    now_inapplicable = canonical_names - set(applicable)
+    removed = 0
+    for name in sorted(now_inapplicable):
+        claude_skill_dir = repo / ".claude" / "skills" / name
+        try:
+            known: dict[Path, bytes] = {
+                path: content.encode("utf-8")
+                for path, content in project_skills.build_projections(dest_root=repo, applicable_only=[name]).items()
+            }
+            known.update(project_skills.build_asset_projections(dest_root=repo, applicable_only=[name]))
+        except project_skills.SkillProjectionError:
+            continue  # can't safely compute this skill's canonical content — leave it alone
+
+        to_remove = []
+        for path, canonical_content in known.items():
+            if not path.is_file():
+                continue
+            _reject_unsafe_symlink(path, repo=repo)
+            if path.read_bytes() == canonical_content:
+                to_remove.append(path)
+        if not to_remove:
+            continue
+        removed += 1
+        if dry_run:
+            continue
+        for path in to_remove:
+            path.unlink()
+        if claude_skill_dir.is_dir():
+            _reject_unsafe_symlink(claude_skill_dir, repo=repo)
+            for d in sorted(claude_skill_dir.rglob("*"), reverse=True):
+                if d.is_dir() and not any(d.iterdir()):
+                    d.rmdir()
+            if claude_skill_dir.is_dir() and not any(claude_skill_dir.iterdir()):
+                claude_skill_dir.rmdir()
+    return removed
 
 
 # ---------------------------------------------------------------------------
