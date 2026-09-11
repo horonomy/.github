@@ -88,6 +88,11 @@ def discover_skills() -> list[str]:
     return names
 
 
+_IGNORED_ASSET_DIR_NAMES = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules"})
+_IGNORED_ASSET_FILE_SUFFIXES = (".pyc", ".pyo")
+_IGNORED_ASSET_FILE_NAMES = frozenset({".DS_Store"})
+
+
 def discover_skill_assets(name: str) -> list[Path]:
     """Return every asset file under agents/skills/<name>/{references,
     examples,scripts,tests}/, as paths relative to the skill directory.
@@ -99,6 +104,20 @@ def discover_skill_assets(name: str) -> list[Path]:
       * a resolved path that is not actually inside the skill directory
         (belt-and-suspenders against the symlink check, and against a
         pathological name components can't normally produce).
+
+    Skips known local-build-artifact directories/files
+    (`_IGNORED_ASSET_DIR_NAMES`/`_IGNORED_ASSET_FILE_SUFFIXES`/
+    `_IGNORED_ASSET_FILE_NAMES`) even when present on disk under a
+    `scripts/` directory — these are never canonical skill content, only
+    a side effect of having run a skill's own local tests
+    (`__pycache__`) or of the OS (`.DS_Store`). This repo's own
+    `.gitignore` keeps them out of `agents/skills/` commits, but
+    `discover_skill_assets()` walks the real filesystem, not git, so a
+    local pytest run leaves a `.pyc` on disk that this function used to
+    pick up and project as if it were real canonical content — reproduced
+    live (HORO-983): a real `.pyc` file landed in an actual consumer
+    repo's git history (`ai-agent-assembly/homebrew-tap`) via `consume()`
+    before this fix, caught before that commit was ever pushed.
 
     Does not require any of the four asset dirs to exist — all optional.
     """
@@ -112,6 +131,10 @@ def discover_skill_assets(name: str) -> list[Path]:
             raise SkillProjectionError(f"{name}/{asset_dir_name} is a symlink — refusing to follow it")
         for path in sorted(asset_dir.rglob("*")):
             if path.is_dir():
+                continue
+            if any(part in _IGNORED_ASSET_DIR_NAMES for part in path.relative_to(asset_dir).parts[:-1]):
+                continue
+            if path.name in _IGNORED_ASSET_FILE_NAMES or path.suffix in _IGNORED_ASSET_FILE_SUFFIXES:
                 continue
             if any(part.is_symlink() for part in _ancestors_within(path, asset_dir)):
                 raise SkillProjectionError(f"{name}: asset path contains a symlink: {path}")
