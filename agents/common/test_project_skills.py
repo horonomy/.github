@@ -15,7 +15,7 @@ import project_skills as ps
 
 
 class DiscoverSkillsTest(unittest.TestCase):
-    def test_real_skills_directory_has_all_five(self) -> None:
+    def test_real_skills_directory_has_the_expected_skills(self) -> None:
         names = set(ps.discover_skills())
         self.assertEqual(
             names,
@@ -25,6 +25,7 @@ class DiscoverSkillsTest(unittest.TestCase):
                 "jira-delivery",
                 "release-assurance",
                 "public-release-reconcile",
+                "engineering-loop",
             },
         )
 
