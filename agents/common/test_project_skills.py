@@ -34,6 +34,8 @@ class DiscoverSkillsTest(unittest.TestCase):
                 "container-development",
                 "shell-development",
                 "swift-development",
+                "credential-operations",
+                "repo-scaffold",
             },
         )
 
