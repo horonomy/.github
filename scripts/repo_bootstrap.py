@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import argparse
 import re
-import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -411,26 +410,39 @@ def adopt(
 
 
 def _remove_inapplicable_skill_projections(repo: Path, *, applicable: list[str], dry_run: bool) -> int:
-    """Removes a previously-projected skill's `.claude/skills/<name>/` tree
-    and `.codex/skills/<name>.md` when that skill is no longer in
-    `applicable` — the counterpart to filtering `build_projections()`/
-    `build_asset_projections()` above: without this, an already-adopted
-    repo would accumulate dead skill content forever every time its
-    applicable set shrinks (a stack removed, a dependency dropped),
-    exactly the "stale shared skills" drift HORO-982's doctor AC asks to
-    be detected, self-inflicted by this tool if left unremoved.
+    """Removes exactly the generated files this tool itself would ever
+    have projected for a now-inapplicable skill — the counterpart to
+    filtering `build_projections()`/`build_asset_projections()` above:
+    without this, an already-adopted repo would accumulate dead skill
+    content forever every time its applicable set shrinks (a stack
+    removed, a dependency dropped), exactly the "stale shared skills"
+    drift HORO-982's doctor AC asks to be detected, self-inflicted by this
+    tool if left unremoved.
 
-    Only ever removes a skill whose `.claude/skills/<name>/SKILL.md` is
-    either absent or still carries the generated-provenance marker — the
-    same "generated-ness of the whole tree" invariant `project_skills.py`
-    already establishes for its own self-projection (a skill's projected
-    subtree is either fully generated or the operator never hand-edits
-    inside it) means checking the one marker-bearing file is sufficient
-    to know the whole tree is safe to remove; a hand-edited SKILL.md
-    (skipped-conflict) makes this function leave that skill's entire
-    projected tree untouched, never partially deleting around it.
-    Returns the count of skills actually removed (or that would be, under
-    `dry_run`)."""
+    Independent review (HORO-982, PR #45) found two real, live-reproduced
+    content-loss bugs in an earlier `shutil.rmtree()`-based version of
+    this function: (1) a skill directory with no `SKILL.md` at all but
+    real user-authored content (e.g. hand-added notes) got deleted
+    wholesale, since the guard only ever checked `SKILL.md`'s marker; (2)
+    a hand-edited asset file sitting beside an untouched `SKILL.md` got
+    destroyed too, since asset files carry no provenance marker of their
+    own to check (`project_skills.py`'s own docstring: assets are "copied
+    byte-for-byte, no provenance-header injection"). Fixed by removing a
+    file ONLY when it still exists on disk AND its current content
+    exactly matches what this tool would generate for it right now — the
+    same "unchanged" comparison the write path above already uses,
+    applied in reverse, uniformly across `SKILL.md`, the Codex adapter
+    file, and every asset file (no per-file-type marker logic needed,
+    since content equality is a strictly stronger safety check than a
+    marker prefix). A file whose content differs from canonical — hand-
+    edited, whether or not it happens to carry a marker — is left in
+    place; a path this tool never projects at all (a stray user file) is
+    never even considered, since it's never a key in the projection dict.
+    Directories are pruned bottom-up only once genuinely empty, so any
+    surviving hand-edited content keeps its containing directory intact.
+
+    Returns the count of skills that had at least one file actually
+    removed (or that would be, under `dry_run`)."""
     try:
         canonical_names = set(project_skills.discover_skills())
     except project_skills.SkillProjectionError:
@@ -438,25 +450,37 @@ def _remove_inapplicable_skill_projections(repo: Path, *, applicable: list[str],
     now_inapplicable = canonical_names - set(applicable)
     removed = 0
     for name in sorted(now_inapplicable):
-        claude_skill_md = repo / ".claude" / "skills" / name / "SKILL.md"
-        codex_skill_md = repo / ".codex" / "skills" / f"{name}.md"
-        if claude_skill_md.is_file():
-            _reject_unsafe_symlink(claude_skill_md, repo=repo)
-            current = claude_skill_md.read_text(encoding="utf-8", errors="replace")
-            if not current.startswith(project_skills.GENERATED_MARKER):
-                continue  # hand-edited — leave this skill's whole tree alone
-        elif not (repo / ".claude" / "skills" / name).is_dir() and not codex_skill_md.exists():
-            continue  # nothing projected for this skill here at all
+        claude_skill_dir = repo / ".claude" / "skills" / name
+        try:
+            known: dict[Path, bytes] = {
+                path: content.encode("utf-8")
+                for path, content in project_skills.build_projections(dest_root=repo, applicable_only=[name]).items()
+            }
+            known.update(project_skills.build_asset_projections(dest_root=repo, applicable_only=[name]))
+        except project_skills.SkillProjectionError:
+            continue  # can't safely compute this skill's canonical content — leave it alone
+
+        to_remove = []
+        for path, canonical_content in known.items():
+            if not path.is_file():
+                continue
+            _reject_unsafe_symlink(path, repo=repo)
+            if path.read_bytes() == canonical_content:
+                to_remove.append(path)
+        if not to_remove:
+            continue
         removed += 1
         if dry_run:
             continue
-        claude_skill_dir = repo / ".claude" / "skills" / name
+        for path in to_remove:
+            path.unlink()
         if claude_skill_dir.is_dir():
             _reject_unsafe_symlink(claude_skill_dir, repo=repo)
-            shutil.rmtree(claude_skill_dir)
-        if codex_skill_md.is_file():
-            _reject_unsafe_symlink(codex_skill_md, repo=repo)
-            codex_skill_md.unlink()
+            for d in sorted(claude_skill_dir.rglob("*"), reverse=True):
+                if d.is_dir() and not any(d.iterdir()):
+                    d.rmdir()
+            if claude_skill_dir.is_dir() and not any(claude_skill_dir.iterdir()):
+                claude_skill_dir.rmdir()
     return removed
 
 
