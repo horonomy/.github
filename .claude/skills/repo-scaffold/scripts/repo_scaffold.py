@@ -68,7 +68,7 @@ and the stack module functions below for the actual rules, and
 ## CLI
 
     python3 repo_scaffold.py plan <profile.json>                 # print resolved file list, no writes
-    python3 repo_scaffold.py --check <profile.json> <target-dir>  # dry-run: exit 1 if target would change
+    python3 repo_scaffold.py check <profile.json> <target-dir>    # dry-run: exit 1 if target would change
     python3 repo_scaffold.py write <profile.json> <target-dir>     # write mode
 
 `write` is idempotent: running the same profile against the same target a
@@ -124,7 +124,7 @@ STACK_SKILL = {
 
 
 class ProfileError(RuntimeError):
-    """A profile (or a --check/write invocation's target) is malformed."""
+    """A profile (or a check/write invocation's target) is malformed."""
 
 
 @dataclass(frozen=True)

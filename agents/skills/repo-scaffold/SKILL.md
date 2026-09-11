@@ -28,6 +28,14 @@ Company baseline  +  archetype defaults  +  stack module(s)  +  optional capabil
   archetype denies outright is a profile error, not a silently-omitted
   no-op and never a decorative empty file.
 
+## Type
+
+Auto-used, always-applicable (no `manifest.yaml` — see "No `manifest.yaml`"
+below for why). Invoke when creating a brand-new Horonom repository from an
+explicit archetype/stack/capability profile — never for governance
+adoption/refresh in a repo that already exists (that's `repo-bootstrap`;
+see the boundary section immediately below).
+
 ## Boundary with `repo-bootstrap` — read this before using either skill
 
 **`repo-scaffold` (this skill) creates/migrates a repo's initial shape
@@ -72,7 +80,7 @@ Full per-surface rationale, including the "why withheld" cases, is in
   contain before the first commit.
 - Migrating an existing repo's shape onto this profile model (e.g.
   normalizing which CI/coverage/Sonar surfaces it carries) — run in
-  `--check` mode first against the existing tree.
+  `check` mode first against the existing tree.
 
 ## When NOT to use
 
