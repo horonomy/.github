@@ -244,19 +244,39 @@ class TestIdempotentReRun:
         rs.plan_diff(plan, tmp_path)  # dry-run equivalent
         assert list(tmp_path.iterdir()) == []
 
-    def test_rerun_after_upstream_content_change_updates_only_generator_owned_files(self, tmp_path: Path) -> None:
+    def test_rerun_with_a_wider_profile_creates_new_files_without_touching_existing_ones(self, tmp_path: Path) -> None:
         profile = rs.Profile.from_dict({"archetype": "cli", "stacks": ["rust"]})
         plan_v1 = rs.resolve(profile)
         rs.write_plan(plan_v1, tmp_path)
 
-        # Simulate the generator's own template content changing between
-        # runs (e.g. a workflow command tweak) — this must be treated as an
-        # update, not a collision, because the file is still marked.
+        # A wider profile (new capability) only adds the new file(s); it
+        # must not touch or collide with anything already on disk.
         profile_v2 = rs.Profile.from_dict({"archetype": "cli", "stacks": ["rust"], "capabilities": ["docker"]})
         plan_v2 = rs.resolve(profile_v2)
         diff = rs.write_plan(plan_v2, tmp_path)
         assert "Dockerfile" in diff.to_create
         assert diff.collisions == ()
+
+    def test_marked_file_whose_template_content_changed_is_an_update_not_a_collision(self, tmp_path: Path) -> None:
+        profile = rs.Profile.from_dict({"archetype": "cli", "stacks": ["rust"]})
+        plan = rs.resolve(profile)
+        rs.write_plan(plan, tmp_path)
+
+        # Simulate the generator's own template output changing between
+        # runs (e.g. a workflow command tweak): rewrite an already-marked
+        # file with different-but-still-marked content, then re-resolve
+        # the identical profile. The differing marked file must be
+        # detected as an update, never a collision.
+        target = tmp_path / "Cargo.toml"
+        marked_but_different = rs._stamp("Cargo.toml", '[workspace]\nmembers = ["changed"]\n')
+        target.write_text(marked_but_different, encoding="utf-8")
+
+        diff = rs.plan_diff(plan, tmp_path)
+        assert "Cargo.toml" in diff.to_update
+        assert diff.collisions == ()
+
+        rs.write_plan(plan, tmp_path)
+        assert target.read_text(encoding="utf-8") == plan.files["Cargo.toml"]
 
 
 # ---------------------------------------------------------------------------
@@ -333,3 +353,62 @@ class TestProvenanceMarkerCoversEveryFamily:
         unowned.write_text("x=1\n", encoding="utf-8")
         assert rs._is_marked(owned) is True
         assert rs._is_marked(unowned) is False
+
+
+# ---------------------------------------------------------------------------
+# CLI (main()) — exit codes are the headline `--check`/dry-run deliverable,
+# so they're tested directly rather than only through plan_diff().
+# ---------------------------------------------------------------------------
+
+
+class TestCli:
+    def _write_profile(self, tmp_path: Path, profile: dict) -> Path:
+        import json
+
+        path = tmp_path / "profile.json"
+        path.write_text(json.dumps(profile), encoding="utf-8")
+        return path
+
+    def test_plan_command_prints_file_list_and_exits_zero(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        profile_path = self._write_profile(tmp_path, {"archetype": "cli", "stacks": ["rust"]})
+        rc = rs.main(["plan", str(profile_path)])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "Cargo.toml" in out
+
+    def test_check_exits_nonzero_when_target_is_empty(self, tmp_path: Path) -> None:
+        profile_path = self._write_profile(tmp_path, {"archetype": "cli", "stacks": ["rust"]})
+        target = tmp_path / "repo"
+        target.mkdir()
+        rc = rs.main(["check", str(profile_path), str(target)])
+        assert rc == 1
+
+    def test_check_exits_zero_after_write(self, tmp_path: Path) -> None:
+        profile_path = self._write_profile(tmp_path, {"archetype": "cli", "stacks": ["rust"]})
+        target = tmp_path / "repo"
+        target.mkdir()
+        assert rs.main(["write", str(profile_path), str(target)]) == 0
+        assert rs.main(["check", str(profile_path), str(target)]) == 0
+
+    def test_write_command_second_run_reports_nothing_written(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        profile_path = self._write_profile(tmp_path, {"archetype": "cli", "stacks": ["rust"]})
+        target = tmp_path / "repo"
+        target.mkdir()
+        rs.main(["write", str(profile_path), str(target)])
+        capsys.readouterr()
+        rs.main(["write", str(profile_path), str(target)])
+        out = capsys.readouterr().out
+        assert "already up to date" in out
+
+    def test_check_exits_nonzero_on_collision(self, tmp_path: Path) -> None:
+        profile_path = self._write_profile(tmp_path, {"archetype": "cli", "stacks": ["rust"]})
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "CODEOWNERS").write_text("hand-authored, no marker\n", encoding="utf-8")
+        rc = rs.main(["check", str(profile_path), str(target)])
+        assert rc == 1
+
+    def test_malformed_profile_exits_two(self, tmp_path: Path) -> None:
+        bad = tmp_path / "profile.json"
+        bad.write_text('{"archetype": "not-a-real-archetype", "stacks": ["python"]}', encoding="utf-8")
+        assert rs.main(["plan", str(bad)]) == 2
