@@ -137,7 +137,7 @@ def test_parse_dotenv_keys_duplicate_keys_dedupe(tmp_path: Path) -> None:
 
 def test_parse_dotenv_keys_bom_does_not_corrupt_first_key(tmp_path: Path) -> None:
     fixture = tmp_path / ".env"
-    fixture.write_bytes(f"﻿FIRST_KEY={CANARY}\nSECOND_KEY=fine\n".encode("utf-8"))
+    fixture.write_bytes(f"﻿FIRST_KEY={CANARY}\nSECOND_KEY=fine\n".encode())
     result = _run([str(PARSE_DOTENV), str(fixture)])
     _assert_no_canary(result, "parse_dotenv_keys (BOM)")
     keys = result.stdout.splitlines()
