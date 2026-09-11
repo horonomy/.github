@@ -89,13 +89,9 @@ from pathlib import Path
 # Profile schema
 # ---------------------------------------------------------------------------
 
-ARCHETYPES = frozenset(
-    {"library", "sdk", "cli", "service", "web-app", "infra", "docs", "monorepo"}
-)
+ARCHETYPES = frozenset({"library", "sdk", "cli", "service", "web-app", "infra", "docs", "monorepo"})
 
-STACKS = frozenset(
-    {"rust", "python", "typescript", "go", "swift", "terraform", "container", "shell"}
-)
+STACKS = frozenset({"rust", "python", "typescript", "go", "swift", "terraform", "container", "shell"})
 
 CAPABILITIES = frozenset(
     {
@@ -143,9 +139,7 @@ class Profile:
 
         archetype = raw.get("archetype")
         if archetype not in ARCHETYPES:
-            raise ProfileError(
-                f"profile.archetype must be one of {sorted(ARCHETYPES)}, got {archetype!r}"
-            )
+            raise ProfileError(f"profile.archetype must be one of {sorted(ARCHETYPES)}, got {archetype!r}")
 
         stacks = raw.get("stacks")
         if not isinstance(stacks, list) or not stacks:
@@ -348,7 +342,7 @@ def _dependabot_config(profile: Profile) -> str:
     ecosystems.append("github-actions")
     entry = '  - package-ecosystem: "{e}"\n    directory: "/"\n    schedule:\n      interval: "weekly"'
     updates = "\n".join(entry.format(e=e) for e in ecosystems)
-    return f'version: 2\nupdates:\n{updates}\n'
+    return f"version: 2\nupdates:\n{updates}\n"
 
 
 def _gitignore_for(profile: Profile) -> str:
@@ -464,9 +458,7 @@ def _stack_manifest_stub(profile: Profile) -> dict[str, str]:
         if stack == "rust":
             files["Cargo.toml"] = '[workspace]\nmembers = ["."]\nresolver = "2"\n'
         elif stack == "python":
-            files["pyproject.toml"] = (
-                "[project]\nname = \"REPLACE_ME\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n"
-            )
+            files["pyproject.toml"] = '[project]\nname = "REPLACE_ME"\nversion = "0.1.0"\nrequires-python = ">=3.11"\n'
         elif stack == "typescript":
             # No package.json manifest stub in v1: plain JSON has no comment
             # syntax to carry this generator's provenance marker, so it
@@ -478,8 +470,7 @@ def _stack_manifest_stub(profile: Profile) -> dict[str, str]:
             files["go.mod"] = "module REPLACE_ME\n\ngo 1.22\n"
         elif stack == "swift":
             files["Package.swift"] = (
-                "// swift-tools-version:5.9\nimport PackageDescription\n\n"
-                'let package = Package(name: "REPLACE_ME")\n'
+                '// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(name: "REPLACE_ME")\n'
             )
         # terraform/container/shell have no single canonical manifest file
         # at this level of scaffolding — nothing emitted for them here.
@@ -495,8 +486,7 @@ def _capability_files(profile: Profile, active: frozenset[str]) -> dict[str, str
     files: dict[str, str] = {}
     if "docker" in active:
         files["Dockerfile"] = (
-            "# Placeholder multi-stage build — replace FROM/steps for this "
-            "repo's actual runtime.\nFROM scratch\n"
+            "# Placeholder multi-stage build — replace FROM/steps for this repo's actual runtime.\nFROM scratch\n"
         )
     if "terraform" in active and "terraform" not in profile.stacks:
         # infra archetype without an explicit terraform *stack* entry still
@@ -594,8 +584,7 @@ def write_plan(plan: ScaffoldPlan, target: Path) -> PlanDiff:
     diff = plan_diff(plan, target)
     if diff.collisions:
         raise ProfileError(
-            "refusing to overwrite unmarked existing file(s), none written: "
-            + ", ".join(diff.collisions)
+            "refusing to overwrite unmarked existing file(s), none written: " + ", ".join(diff.collisions)
         )
     for rel in diff.to_create + diff.to_update:
         dest = target / rel

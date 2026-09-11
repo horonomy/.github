@@ -72,9 +72,7 @@ class TestProfileValidation:
 class TestPythonServiceGoldenScaffold:
     @pytest.fixture()
     def plan(self) -> rs.ScaffoldPlan:
-        profile = rs.Profile.from_dict(
-            {"archetype": "service", "stacks": ["python"], "capabilities": ["terraform"]}
-        )
+        profile = rs.Profile.from_dict({"archetype": "service", "stacks": ["python"], "capabilities": ["terraform"]})
         return rs.resolve(profile)
 
     def test_gets_company_baseline(self, plan: rs.ScaffoldPlan) -> None:
