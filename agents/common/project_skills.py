@@ -165,21 +165,20 @@ def load_manifest(name: str) -> dict | None:
     if manifest_path.is_symlink():
         raise SkillProjectionError(f"{name}/{_MANIFEST_NAME} is a symlink — refusing to follow it")
     text = manifest_path.read_text(encoding="utf-8")
-    stacks: list[str] = []
+    seen_keys: set[str] = set()
+    stacks: list[str] | None = None
     requires_all = False
-    saw_applicability = False
     lines = [line for line in text.splitlines() if line.strip() and not line.strip().startswith("#")]
-    i = 0
     if not lines or lines[0].rstrip() != "applicability:":
         raise SkillProjectionError(f"{name}/{_MANIFEST_NAME}: expected top-level 'applicability:' key")
-    saw_applicability = True
-    i = 1
-    while i < len(lines):
-        line = lines[i]
+    for line in lines[1:]:
         if not line.startswith("  "):
             raise SkillProjectionError(f"{name}/{_MANIFEST_NAME}: unexpected top-level content: {line!r}")
         stripped = line.strip()
         if stripped.startswith("stacks:"):
+            if "stacks" in seen_keys:
+                raise SkillProjectionError(f"{name}/{_MANIFEST_NAME}: duplicate key 'stacks'")
+            seen_keys.add("stacks")
             raw = stripped[len("stacks:") :].strip()
             if not (raw.startswith("[") and raw.endswith("]")):
                 raise SkillProjectionError(f"{name}/{_MANIFEST_NAME}: 'stacks' must be a flow list like [rust, python]")
@@ -189,13 +188,15 @@ def load_manifest(name: str) -> dict | None:
                     raise SkillProjectionError(f"{name}/{_MANIFEST_NAME}: unknown stack {item!r}")
             stacks = items
         elif stripped.startswith("requires_all:"):
+            if "requires_all" in seen_keys:
+                raise SkillProjectionError(f"{name}/{_MANIFEST_NAME}: duplicate key 'requires_all'")
+            seen_keys.add("requires_all")
             raw = stripped[len("requires_all:") :].strip()
             if raw not in ("true", "false"):
                 raise SkillProjectionError(f"{name}/{_MANIFEST_NAME}: 'requires_all' must be true or false")
             requires_all = raw == "true"
         else:
             raise SkillProjectionError(f"{name}/{_MANIFEST_NAME}: unrecognized key: {stripped!r}")
-        i += 1
     if not stacks:
         raise SkillProjectionError(f"{name}/{_MANIFEST_NAME}: 'applicability.stacks' must list at least one stack")
     return {"stacks": stacks, "requires_all": requires_all}
@@ -238,11 +239,17 @@ def resolve_applicable_skills(repo_root: Path, *, overrides: dict[str, bool] | N
 
     `overrides`, keyed by skill name, forces a skill in (`True`) or out
     (`False`) regardless of evidence — HORO-969 §3's "explicit override
-    always wins" rule, checked first.
+    always wins" rule, checked first. Raises SkillProjectionError if an
+    override names a skill that doesn't exist — a misspelled override
+    must fail loudly, not silently no-op.
     """
     overrides = overrides or {}
+    names = discover_skills()
+    unknown = set(overrides) - set(names)
+    if unknown:
+        raise SkillProjectionError(f"override(s) name unknown skill(s): {sorted(unknown)}")
     applicable: list[str] = []
-    for name in discover_skills():
+    for name in names:
         if name in overrides:
             if overrides[name]:
                 applicable.append(name)
@@ -321,11 +328,32 @@ def build_asset_projections() -> dict[Path, bytes]:
     return projections
 
 
-def _read_bytes_or_empty(path: Path) -> bytes:
+def _read_bytes_or_none(path: Path) -> bytes | None:
+    # None (not b"") for a missing file — an empty canonical asset file
+    # (b"") must still be recognized as drifted-from-missing and written,
+    # not treated as already matching a nonexistent destination.
     try:
         return path.read_bytes()
     except FileNotFoundError:
-        return b""
+        return None
+
+
+def _existing_projected_asset_files(name: str) -> list[Path]:
+    """Files currently on disk under `.claude/skills/<name>/{references,
+    examples,scripts,tests}/` — the *destination* side, used to detect
+    orphans: a projected asset whose canonical source was renamed/removed
+    but whose stale generated copy would otherwise sit on disk forever,
+    since drift detection alone only ever looks at current expected
+    projections, never at what's actually present."""
+    found: list[Path] = []
+    for asset_dir_name in _ASSET_DIRS:
+        d = CLAUDE_SKILLS_DIR / name / asset_dir_name
+        if not d.is_dir():
+            continue
+        for p in d.rglob("*"):
+            if p.is_file():
+                found.append(p)
+    return found
 
 
 def main(argv: list[str]) -> int:
@@ -347,7 +375,8 @@ def main(argv: list[str]) -> int:
     projections: dict[Path, bytes] = {p: c.encode("utf-8") for p, c in text_projections.items()}
     for p, c in asset_projections.items():
         if p in projections:
-            raise SkillProjectionError(f"asset projection collides with a SKILL.md projection path: {p}")
+            print(f"ERROR: asset projection collides with a SKILL.md projection path: {p}", file=sys.stderr)
+            return 2
         projections[p] = c
 
     for path in projections:
@@ -357,21 +386,48 @@ def main(argv: list[str]) -> int:
         # reject unsafe names and traversal, this is the belt-and-suspenders
         # check at the write boundary).
         if CLAUDE_SKILLS_DIR not in path.parents and CODEX_SKILLS_DIR not in path.parents:
-            raise SkillProjectionError(f"refusing to write outside adapter dirs: {path}")
+            print(f"ERROR: refusing to write outside adapter dirs: {path}", file=sys.stderr)
+            return 2
 
-    drifted = [p for p, content in projections.items() if _read_bytes_or_empty(p) != content]
-    if not drifted:
+    # Orphans: a projected asset file that exists on disk but no longer
+    # corresponds to any current canonical asset (renamed/removed source).
+    orphans: list[Path] = []
+    for name in names:
+        for existing in _existing_projected_asset_files(name):
+            if existing not in projections:
+                orphans.append(existing)
+
+    drifted = [p for p, content in projections.items() if _read_bytes_or_none(p) != content]
+    if not drifted and not orphans:
         print("Skill projections are up to date.")
         return 0
     if args.check:
         for p in drifted:
             print(f"DRIFT: {p.relative_to(REPO_ROOT)} does not match its canonical source.", file=sys.stderr)
+        for p in orphans:
+            print(f"DRIFT: {p.relative_to(REPO_ROOT)} is an orphaned generated asset (source renamed/removed).", file=sys.stderr)
         print("Run: python3 agents/common/project_skills.py", file=sys.stderr)
         return 1
     for p in drifted:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(projections[p])
+        if p in asset_projections:
+            # Preserve the canonical asset's own permission bits (e.g. a
+            # scripts/ helper's executable bit) — write_bytes() always
+            # creates the destination with the process's default mode,
+            # which would silently strip +x otherwise.
+            source = SKILLS_DIR / p.relative_to(CLAUDE_SKILLS_DIR)
+            p.chmod(source.stat().st_mode & 0o777)
         print(f"Wrote {p.relative_to(REPO_ROOT)}.")
+    for p in orphans:
+        p.unlink()
+        print(f"Removed orphaned {p.relative_to(REPO_ROOT)}.")
+        # Best-effort: drop now-empty asset directories so a fully-removed
+        # references/examples/scripts/tests dir doesn't linger empty.
+        parent = p.parent
+        while parent != CLAUDE_SKILLS_DIR and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
     return 0
 
 

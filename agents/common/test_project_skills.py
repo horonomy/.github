@@ -315,5 +315,115 @@ class BuildAssetProjectionsTest(unittest.TestCase):
         self.assertEqual(content, b"#!/bin/sh\necho hi\n")
 
 
+class DuplicateManifestKeyTest(unittest.TestCase):
+    def test_duplicate_stacks_key_raises(self) -> None:
+        fixture = _skills_fixture()
+        (fixture / "sample-skill" / "manifest.yaml").write_text(
+            "applicability:\n  stacks: [rust]\n  stacks: [python]\n",
+            encoding="utf-8",
+        )
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            with self.assertRaises(ps.SkillProjectionError):
+                ps.load_manifest("sample-skill")
+
+    def test_duplicate_requires_all_key_raises(self) -> None:
+        fixture = _skills_fixture()
+        (fixture / "sample-skill" / "manifest.yaml").write_text(
+            "applicability:\n  stacks: [rust]\n  requires_all: true\n  requires_all: false\n",
+            encoding="utf-8",
+        )
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            with self.assertRaises(ps.SkillProjectionError):
+                ps.load_manifest("sample-skill")
+
+
+class ResolveApplicableSkillsUnknownOverrideTest(unittest.TestCase):
+    def test_override_naming_nonexistent_skill_raises(self) -> None:
+        fixture = _skills_fixture()
+        repo = fixture.parent / "some-repo"
+        repo.mkdir(exist_ok=True)
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            with self.assertRaises(ps.SkillProjectionError):
+                ps.resolve_applicable_skills(repo, overrides={"typo-skill-name": True})
+
+
+def _full_projection_fixture():
+    """A complete fake repo root with agents/skills/, .claude/skills/, and
+    .codex/skills/ all under one directory — needed by tests that exercise
+    main() itself (drift/write/orphan/chmod logic), since main() reads its
+    location constants directly rather than taking parameters. Caller
+    patches REPO_ROOT/SKILLS_DIR/CLAUDE_SKILLS_DIR/CODEX_SKILLS_DIR to the
+    returned paths."""
+    import tempfile
+
+    root = Path(tempfile.mkdtemp())
+    skills_dir = root / "agents" / "skills"
+    claude_dir = root / ".claude" / "skills"
+    codex_dir = root / ".codex" / "skills"
+    skills_dir.mkdir(parents=True)
+    claude_dir.mkdir(parents=True)
+    codex_dir.mkdir(parents=True)
+    skill = skills_dir / "sample-skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# sample-skill\n", encoding="utf-8")
+
+    return root, skills_dir, claude_dir, codex_dir
+
+
+class MainAssetWriteTest(unittest.TestCase):
+    def test_executable_bit_preserved_on_projected_script(self) -> None:
+        root, skills_dir, claude_dir, codex_dir = _full_projection_fixture()
+        script = skills_dir / "sample-skill" / "scripts" / "run.sh"
+        script.parent.mkdir(parents=True)
+        script.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+        script.chmod(0o755)
+        with (
+            mock.patch.object(ps, "REPO_ROOT", root),
+            mock.patch.object(ps, "SKILLS_DIR", skills_dir),
+            mock.patch.object(ps, "CLAUDE_SKILLS_DIR", claude_dir),
+            mock.patch.object(ps, "CODEX_SKILLS_DIR", codex_dir),
+        ):
+            exit_code = ps.main([])
+        self.assertEqual(exit_code, 0)
+        projected = claude_dir / "sample-skill" / "scripts" / "run.sh"
+        self.assertEqual(projected.stat().st_mode & 0o777, 0o755)
+
+    def test_orphaned_asset_is_removed_on_write(self) -> None:
+        root, skills_dir, claude_dir, codex_dir = _full_projection_fixture()
+        with (
+            mock.patch.object(ps, "REPO_ROOT", root),
+            mock.patch.object(ps, "SKILLS_DIR", skills_dir),
+            mock.patch.object(ps, "CLAUDE_SKILLS_DIR", claude_dir),
+            mock.patch.object(ps, "CODEX_SKILLS_DIR", codex_dir),
+        ):
+            self.assertEqual(ps.main([]), 0)
+            # Simulate a canonical asset that existed, was projected, and
+            # has since been renamed/removed from the source.
+            orphan = claude_dir / "sample-skill" / "references" / "stale.md"
+            orphan.parent.mkdir(parents=True)
+            orphan.write_text("stale generated content", encoding="utf-8")
+            self.assertEqual(ps.main(["--check"]), 1)  # orphan counts as drift
+            self.assertEqual(ps.main([]), 0)
+            self.assertFalse(orphan.exists())
+            # The now-empty references/ dir should also be cleaned up.
+            self.assertFalse(orphan.parent.exists())
+
+    def test_check_mode_reports_orphan_without_deleting(self) -> None:
+        root, skills_dir, claude_dir, codex_dir = _full_projection_fixture()
+        with (
+            mock.patch.object(ps, "REPO_ROOT", root),
+            mock.patch.object(ps, "SKILLS_DIR", skills_dir),
+            mock.patch.object(ps, "CLAUDE_SKILLS_DIR", claude_dir),
+            mock.patch.object(ps, "CODEX_SKILLS_DIR", codex_dir),
+        ):
+            ps.main([])
+            orphan = claude_dir / "sample-skill" / "references" / "stale.md"
+            orphan.parent.mkdir(parents=True)
+            orphan.write_text("stale generated content", encoding="utf-8")
+            exit_code = ps.main(["--check"])
+        self.assertEqual(exit_code, 1)
+        self.assertTrue(orphan.exists())  # --check must not delete anything
+
+
 if __name__ == "__main__":
     unittest.main()
