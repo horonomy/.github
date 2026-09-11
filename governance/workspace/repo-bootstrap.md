@@ -41,9 +41,26 @@ python3 scripts/repo_bootstrap.py check /path/to/repo
 - **`.claude/skills/` and `.codex/skills/`**: this repo's canonical
   `agents/skills/` content, projected into the target via
   `agents/common/project_skills.py`'s `build_projections(dest_root=...)`
-  (HORO-507) — the same generated-file-conflict guard as the self-projection
-  case (HORO-509): a hand-edited projected skill is reported as a conflict,
-  never silently overwritten.
+  and `build_asset_projections(dest_root=...)` (HORO-507). The two kinds of
+  projected content are governed differently:
+  - **`SKILL.md`** (from `build_projections`) carries `GENERATED_MARKER`
+    and gets the same generated-file-conflict guard as the self-projection
+    case (HORO-509): a hand-edited `SKILL.md` is reported as a conflict,
+    never silently overwritten.
+  - **references/examples/scripts/tests assets** (from
+    `build_asset_projections`) are copied byte-for-byte with **no**
+    marker — a marker would corrupt a script or fixture — so they cannot
+    carry the same per-file guard. HORO-983 (real cross-repo dogfood)
+    found that applying the marker check to these anyway made every
+    content-changed asset file permanently `skipped-conflict`, blocking
+    any upstream fix from ever reaching an already-adopted repo. Assets
+    are instead overwritten unconditionally on drift, matching the
+    already-established invariant that "the generated-ness of the whole
+    `.claude/skills/<name>/` tree" — not a per-file marker — is what
+    makes it safe to regenerate (see `build_asset_projections()`'s own
+    docstring, and `project_skills.py main()`'s self-projection, which
+    always worked this way). A hand-edited asset file is **not**
+    protected from this overwrite the way a hand-edited `SKILL.md` is.
 
 No symlink is ever created inside a target repo (ADR-0005 decision #4):
 every projection is a plain generated file, safe for public cross-platform
