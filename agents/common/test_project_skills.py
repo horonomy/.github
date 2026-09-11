@@ -138,6 +138,43 @@ class SkillAssetDiscoveryTest(unittest.TestCase):
             {"references/a.md", "examples/a.md", "scripts/a.md", "tests/a.md"},
         )
 
+    def test_pycache_directory_is_never_discovered(self) -> None:
+        """HORO-983: a real .pyc file landed in an actual consumer repo's
+        git history via consume() before this fix — discover_skill_assets()
+        walked the real filesystem (not git, which this repo's own
+        .gitignore keeps clean) and picked up a local pytest run's
+        __pycache__ as if it were real canonical content."""
+        fixture = _skills_fixture()
+        skill = fixture / "sample-skill"
+        (skill / "scripts").mkdir()
+        (skill / "scripts" / "real.py").write_text("x", encoding="utf-8")
+        pycache = skill / "scripts" / "__pycache__"
+        pycache.mkdir()
+        (pycache / "real.cpython-312.pyc").write_bytes(b"\x00\x01")
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            found = {str(p) for p in ps.discover_skill_assets("sample-skill")}
+        self.assertEqual(found, {"scripts/real.py"})
+
+    def test_stray_pyc_file_outside_pycache_is_also_skipped(self) -> None:
+        fixture = _skills_fixture()
+        skill = fixture / "sample-skill"
+        (skill / "scripts").mkdir()
+        (skill / "scripts" / "real.py").write_text("x", encoding="utf-8")
+        (skill / "scripts" / "stray.pyc").write_bytes(b"\x00\x01")
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            found = {str(p) for p in ps.discover_skill_assets("sample-skill")}
+        self.assertEqual(found, {"scripts/real.py"})
+
+    def test_ds_store_is_skipped(self) -> None:
+        fixture = _skills_fixture()
+        skill = fixture / "sample-skill"
+        (skill / "references").mkdir()
+        (skill / "references" / "real.md").write_text("x", encoding="utf-8")
+        (skill / "references" / ".DS_Store").write_bytes(b"\x00")
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            found = {str(p) for p in ps.discover_skill_assets("sample-skill")}
+        self.assertEqual(found, {"references/real.md"})
+
     def test_unrecognized_top_level_dir_is_not_descended(self) -> None:
         fixture = _skills_fixture()
         skill = fixture / "sample-skill"
