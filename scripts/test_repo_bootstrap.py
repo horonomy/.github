@@ -482,6 +482,71 @@ class CrossRepoSkillProjectionTest(unittest.TestCase):
         self.assertTrue((repo / ".claude" / "skills" / "rust-development").is_dir())
         self.assertIn("removed", outcomes["skills"])  # reports what WOULD be removed
 
+    def test_orphan_removal_never_deletes_a_skill_dir_with_no_skill_md_but_real_user_content(self) -> None:
+        """Independent review (PR #45), bug 1: a skill directory that has
+        no SKILL.md at all (deleted or never written) but does carry real
+        user-authored content must never be deleted wholesale — there is
+        no generated content there to safely remove in the first place."""
+        repo = _tmp_git_repo()
+        (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+        rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        (repo / "Cargo.toml").unlink()
+        skill_dir = repo / ".claude" / "skills" / "rust-development"
+        (skill_dir / "SKILL.md").unlink()
+        (skill_dir / "my-own-notes.txt").write_text("do not delete me\n", encoding="utf-8")
+
+        rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:01+00:00")
+        self.assertTrue(skill_dir.is_dir())
+        self.assertEqual((skill_dir / "my-own-notes.txt").read_text(), "do not delete me\n")
+
+    def test_orphan_removal_never_deletes_a_hand_edited_asset_file(self) -> None:
+        """Independent review (PR #45), bug 2: an asset file (no marker of
+        its own, unlike SKILL.md) that was hand-edited must survive even
+        though the skill's own SKILL.md is untouched and gets removed."""
+        repo = _tmp_git_repo()
+        (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+        rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        asset_files = list((repo / ".claude" / "skills" / "rust-development" / "references").glob("*.md"))
+        if not asset_files:
+            self.skipTest("rust-development currently has no reference asset files to verify against")
+        hand_edited = asset_files[0]
+        hand_edited.write_text("hand-edited reference content, no marker\n", encoding="utf-8")
+        (repo / "Cargo.toml").unlink()
+
+        outcomes = rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:01+00:00")
+        self.assertTrue(hand_edited.is_file())
+        self.assertEqual(hand_edited.read_text(), "hand-edited reference content, no marker\n")
+        # SKILL.md itself (never hand-edited) is still removed, and the
+        # skill dir survives specifically because the hand-edited asset
+        # is still in it.
+        self.assertFalse((repo / ".claude" / "skills" / "rust-development" / "SKILL.md").exists())
+        self.assertTrue((repo / ".claude" / "skills" / "rust-development").is_dir())
+        self.assertIn("removed", outcomes["skills"])
+
+    def test_orphan_removal_refuses_a_symlinked_skill_file(self) -> None:
+        """Independent review (PR #45): confirms the existing
+        _reject_unsafe_symlink guard actually fires on the new removal
+        path too, for a skill file replaced by a symlink pointing outside
+        the repo — the same HORO-533 bug class the write path already
+        guards against. _reject_unsafe_symlink fires on any known-path
+        entry that exists, before any content comparison, so this needn't
+        even construct matching canonical content to prove the guard
+        runs."""
+        repo = _tmp_git_repo()
+        (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+        rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        (repo / "Cargo.toml").unlink()
+        skill_md = repo / ".claude" / "skills" / "rust-development" / "SKILL.md"
+        outside = Path(tempfile.mkdtemp()) / "canary.txt"
+        outside.write_text("do not delete me\n", encoding="utf-8")
+        skill_md.unlink()
+        skill_md.symlink_to(outside)
+
+        with self.assertRaises(rb.AdoptionError):
+            rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:01+00:00")
+        self.assertTrue(outside.is_file())
+        self.assertEqual(outside.read_text(), "do not delete me\n")
+
 
 class AdoptPreservesRepoSpecificContentTest(unittest.TestCase):
     """AC: 'Repo-level instructions contain only repository-specific facts/
