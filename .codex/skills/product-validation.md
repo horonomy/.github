@@ -20,15 +20,13 @@ passing unit tests proves the code does what its author believed it
 should do, checked from inside the implementation. It does not prove the
 product still works end-to-end for a real user, from outside the
 implementation, on a real supported path. Those are different claims,
-verified by different means, and this skill exists because collapsing
-them into one is exactly how a product ships broken while every dev-loop
-gate stayed green — see `references/defect-lifecycle.md` and the real
-circinus HORO-406 dogfood report cited there, where CI was green on every
-regression this campaign found.
+verified by different means; collapsing them into one is exactly how a
+product ships broken while every dev-loop gate stayed green — see
+`references/defect-lifecycle.md` for a real, dogfooded case.
 
 ## Type
 
-Auto-used, no `manifest.yaml` — see "No `manifest.yaml`" below.
+Auto-used, no `manifest.yaml` (see below).
 
 ## Composes with `engineering-loop`
 
@@ -43,22 +41,19 @@ before the affected scenario is rerun.
 
 ## Ownership boundary — read before assuming scope
 
-- **Owned by the relevant development skill** (`rust-development`,
-  `python-development`, etc., via `engineering-loop`): unit tests,
-  component tests, integration tests that exercise internals directly,
-  mocked/isolated test doubles, anything scoped to a module or function.
-- **Owned by this skill**: smoke/install validation, the golden user
-  journey, adversarial/QA product-behavior probing, and the
-  documentation-driven journey — see `references/validation-tracks.md`
-  for all four in concrete operational terms. All four exercise the
-  product as a real user would encounter it, never through
+- **Owned by the relevant development skill** (via `engineering-loop`):
+  unit/component/integration tests that exercise internals directly,
+  anything scoped to a module or function.
+- **Owned by this skill**: the four tracks in
+  `references/validation-tracks.md` — smoke/install, golden user journey,
+  adversarial/QA product-behavior, documentation-driven journey — all
+  exercising the product as a real user would, never through
   implementation-internal shortcuts.
 - **Composes conditionally with `design-qa`** (`agents/skills/design-qa/SKILL.md`
-  — authored in parallel this same wave, HORO-969 §1) for any product
-  with a material rendered UI/UX surface. `design-qa` resolves
-  `NOT_APPLICABLE` for a non-visual product (CLI, library, backend
-  service with no UI target); this skill still applies to that product
-  regardless — see HORO-969 §3 point 4.
+  — authored in parallel this wave, HORO-969 §1) for a product with a
+  material rendered UI/UX surface; `design-qa` resolves `NOT_APPLICABLE`
+  for a non-visual product, but this skill still applies regardless
+  (HORO-969 §3 point 4).
 
 ## When to use
 
@@ -85,18 +80,15 @@ before the affected scenario is rerun.
 ## No `manifest.yaml`
 
 This skill applies to any repo with a supported end-to-end path — install
-a CLI, run a service, follow a documented journey — which is not
-something a single stack-evidence file (`Cargo.toml`, `pyproject.toml`)
-can gate, the same reasoning `shell-development` and
-`credential-operations` use for "any repo, any stack, may need this at
-any time" and `repo-scaffold` uses for "applies before stack evidence
-exists." Per HORO-969 §3 point 4, `product-validation` applicability is
-explicitly broader than and independent of the framework/UI-target
-evidence that gates `design-qa` — a CLI with no rendered surface still
-gets `product-validation`. There is no manifest shape that correctly
-encodes "any product with a supported end-to-end path"; the absence of a
-manifest is the correct encoding, matching the existing no-manifest
-skills (HORO-969 §9).
+a CLI, run a service, follow a documented journey — which no single
+stack-evidence file (`Cargo.toml`, `pyproject.toml`) can gate, the same
+reasoning `shell-development`/`credential-operations` use for "any repo,
+any stack, may need this at any time." Per HORO-969 §3 point 4, this
+applicability is explicitly broader than and independent of the
+framework/UI-target evidence that gates `design-qa`. There is no manifest
+shape that correctly encodes "any product with a supported end-to-end
+path"; the absence of a manifest is the correct encoding, matching the
+existing no-manifest skills (HORO-969 §9).
 
 ## Routing
 

@@ -51,14 +51,14 @@ A scenario missing a required field is not yet ready to run.
 | `problem` | yes | What real problem this scenario proves the product solves, in one line. |
 | `preconditions` | yes | State that must exist before the scenario starts (a fresh clone, a running relay, a specific config). |
 | `environment` | yes | OS, runtime versions, deployment shape (local dev, packaged artifact, two-environment/two-machine setup). |
-| `starting point` | yes | The literal first state/command — a fresh `git clone`, a fresh install, a deployed release artifact. |
+| `starting_point` | yes | The literal first state/command — a fresh `git clone`, a fresh install, a deployed release artifact. |
 | `surface` | yes | What's being exercised — CLI, API, rendered UI, config file, installed hook. |
 | `actions` | yes | The literal ordered steps taken, verbatim commands/clicks where possible — not paraphrased. |
-| `expected states` | yes | What must be true after each meaningful step, not only at the end. |
-| `expected outcome` | yes | The scenario's overall pass condition. |
+| `expected_states` | yes | What must be true after each meaningful step, not only at the end. |
+| `expected_outcome` | yes | The scenario's overall pass condition. |
 | `evidence` | yes | What was captured to prove the outcome — command output, log excerpt, screenshot/video reference, exit code. Bounded artifact, not this record itself (see `quality-report-template.md`). |
 | `cleanup` | yes | How the scenario's side effects are reverted (uninstall, drop test data, tear down a throwaway clone). |
-| `mapped features/Jira/docs` | yes | The Feature/Story/Epic this scenario proves, and the docs page it exercises if the track is docs-driven. |
+| `mapped_features_jira_docs` | yes | The Feature/Story/Epic this scenario proves, and the docs page it exercises if the track is docs-driven. |
 
 ## Track 1 — Smoke / install
 

@@ -29,24 +29,26 @@ persona: new operator, first time installing atlasd
 problem: "does a first-time install actually work end to end"
 preconditions: none — genuinely fresh machine/container
 environment: Linux, fresh container image, no prior atlasd state
-starting point: package not installed
+starting_point: package not installed
 surface: CLI
 actions:
   - "atlasd install"
+  - "atlasd configure --minimal"
   - "atlasd start"
   - "atlasd status"
   - "atlasd stop"
   - "atlasd uninstall"
-expected states:
+expected_states:
   - after install: `atlasd --version` resolves
+  - after configure: `atlasd config show` reflects the minimal profile
   - after start: `atlasd status` reports `running`
   - after stop: `atlasd status` reports `stopped`, exit code reflects it
   - after uninstall: binary and state directory are gone
-expected outcome: all five commands succeed in sequence with no manual
+expected_outcome: all six commands succeed in sequence with no manual
   intervention, and the machine is left as clean as it started
 evidence: full terminal transcript, exit codes for each command
 cleanup: container discarded after run
-mapped features/Jira/docs: ATLAS-Story install-uninstall-flow, docs/quickstart.md
+mapped_features_jira_docs: ATLAS-Story install-uninstall-flow, docs/quickstart.md
 ```
 
 ## Seeded defect discovered during the run
