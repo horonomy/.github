@@ -7,6 +7,7 @@ Stdlib unittest only. Run with:
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -299,6 +300,99 @@ class ResolveApplicableSkillsTest(unittest.TestCase):
         with mock.patch.object(ps, "SKILLS_DIR", fixture):
             applicable = ps.resolve_applicable_skills(repo)
         self.assertNotIn("rust-only-skill", applicable)  # has rust, missing python
+
+
+class DesignQaEvidenceGatedApplicabilityTest(unittest.TestCase):
+    """HORO-982: design-qa is the one no-manifest skill that must default
+    NOT_APPLICABLE absent rendered-surface evidence (HORO-969 §3 points
+    2/3) — every other no-manifest skill stays always-applicable."""
+
+    def _fixture_with_design_qa(self) -> Path:
+        fixture = _skills_fixture()  # "sample-skill", no manifest -> always applicable
+        design_qa = fixture / "design-qa"
+        design_qa.mkdir()
+        (design_qa / "SKILL.md").write_text("# design-qa\n", encoding="utf-8")
+        return fixture
+
+    def test_not_applicable_with_no_rendered_surface_evidence(self) -> None:
+        fixture = self._fixture_with_design_qa()
+        repo = fixture.parent / "backend-only-repo"
+        repo.mkdir(exist_ok=True)
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            applicable = ps.resolve_applicable_skills(repo)
+        self.assertNotIn("design-qa", applicable)
+        self.assertIn("sample-skill", applicable)  # other no-manifest skills unaffected
+
+    def test_applicable_with_frontend_framework_dependency(self) -> None:
+        fixture = self._fixture_with_design_qa()
+        repo = fixture.parent / "react-app-repo"
+        repo.mkdir(exist_ok=True)
+        (repo / "package.json").write_text('{"dependencies": {"react": "^18.0.0"}}', encoding="utf-8")
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            applicable = ps.resolve_applicable_skills(repo)
+        self.assertIn("design-qa", applicable)
+
+    def test_not_applicable_with_non_frontend_package_json(self) -> None:
+        """A package.json with no frontend-framework dep (e.g. a pure CLI
+        tool's Node dependencies) must not trigger design-qa."""
+        fixture = self._fixture_with_design_qa()
+        repo = fixture.parent / "node-cli-repo"
+        repo.mkdir(exist_ok=True)
+        (repo / "package.json").write_text('{"dependencies": {"commander": "^12.0.0"}}', encoding="utf-8")
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            applicable = ps.resolve_applicable_skills(repo)
+        self.assertNotIn("design-qa", applicable)
+
+    def test_applicable_with_xcodeproj(self) -> None:
+        fixture = self._fixture_with_design_qa()
+        repo = fixture.parent / "ios-app-repo"
+        repo.mkdir(exist_ok=True)
+        (repo / "App.xcodeproj").mkdir(exist_ok=True)
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            applicable = ps.resolve_applicable_skills(repo)
+        self.assertIn("design-qa", applicable)
+
+    def test_explicit_override_still_wins(self) -> None:
+        fixture = self._fixture_with_design_qa()
+        repo = fixture.parent / "backend-only-repo-2"
+        repo.mkdir(exist_ok=True)
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            applicable = ps.resolve_applicable_skills(repo, overrides={"design-qa": True})
+        self.assertIn("design-qa", applicable)
+
+
+class BuildProjectionsApplicableOnlyTest(unittest.TestCase):
+    def test_applicable_only_restricts_projection_set(self) -> None:
+        names = ps.discover_skills()
+        subset = names[:1]
+        projections = ps.build_projections(applicable_only=subset)
+        projected_names = {p.parent.name for p in projections if p.name == "SKILL.md"}
+        self.assertEqual(projected_names, set(subset))
+
+    def test_applicable_only_unknown_skill_raises(self) -> None:
+        with self.assertRaises(ps.SkillProjectionError):
+            ps.build_projections(applicable_only=["not-a-real-skill"])
+
+    def test_asset_projections_applicable_only_restricts_set(self) -> None:
+        canonical_projections = ps.build_asset_projections()
+        # Pick a skill that actually has projected assets, if any exist.
+        skill_names_with_assets = {
+            p.relative_to(ps.CLAUDE_SKILLS_DIR).parts[0] for p in canonical_projections
+        }
+        if not skill_names_with_assets:
+            self.skipTest("no skill currently carries projected assets")
+        chosen = sorted(skill_names_with_assets)[0]
+        filtered = ps.build_asset_projections(applicable_only=[chosen])
+        got_names = {p.relative_to(ps.CLAUDE_SKILLS_DIR).parts[0] for p in filtered}
+        self.assertEqual(got_names, {chosen})
+
+    def test_dest_root_projects_into_a_different_tree(self) -> None:
+        dest = Path(tempfile.mkdtemp())
+        names = ps.discover_skills()
+        subset = names[:1]
+        projections = ps.build_projections(dest_root=dest, applicable_only=subset)
+        for path in projections:
+            self.assertTrue(str(path).startswith(str(dest)))
 
 
 class BuildAssetProjectionsTest(unittest.TestCase):
