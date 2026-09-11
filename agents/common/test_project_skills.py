@@ -26,6 +26,14 @@ class DiscoverSkillsTest(unittest.TestCase):
                 "release-assurance",
                 "public-release-reconcile",
                 "engineering-loop",
+                "rust-development",
+                "python-development",
+                "typescript-development",
+                "go-development",
+                "terraform-development",
+                "container-development",
+                "shell-development",
+                "swift-development",
             },
         )
 
@@ -290,12 +298,13 @@ class ResolveApplicableSkillsTest(unittest.TestCase):
 
 class BuildAssetProjectionsTest(unittest.TestCase):
     def test_real_engineering_loop_assets_project_correctly(self) -> None:
-        # engineering-loop (HORO-971) is the first real skill to use the
-        # optional asset dirs — pins that its 4 real reference/example
-        # files (not the other 5 pre-existing assetless skills) are
-        # exactly what gets projected, deliberately updated from this
-        # test's HORO-970-era "no skill has assets yet" version.
+        # engineering-loop (HORO-971) was the first real skill to use the
+        # optional asset dirs; Wave 2's language skills (HORO-972/973/974/975)
+        # since added their own. Filter to engineering-loop's own projected
+        # files rather than asserting on the full projection set, which now
+        # spans multiple skills — a skill-by-skill pin, not a global count.
         projections = ps.build_asset_projections()
+        engineering_loop_dir = ps.CLAUDE_SKILLS_DIR / "engineering-loop"
         expected_rel_paths = {
             "references/diagnostic-contract.md",
             "references/optional-tool-fallback.md",
@@ -303,9 +312,92 @@ class BuildAssetProjectionsTest(unittest.TestCase):
             "examples/escalation-from-compact-to-raw.md",
         }
         actual_rel_paths = {
-            str(p.relative_to(ps.CLAUDE_SKILLS_DIR / "engineering-loop")) for p in projections
+            str(p.relative_to(engineering_loop_dir))
+            for p in projections
+            if engineering_loop_dir in p.parents
         }
         self.assertEqual(actual_rel_paths, expected_rel_paths)
+
+    def test_real_language_skill_assets_project_correctly(self) -> None:
+        # Pins that each Wave 2 language skill's own reference/example
+        # assets project under its own name — a per-skill spot check, not
+        # an exhaustive enumeration of every asset in the repo.
+        projections = ps.build_asset_projections()
+        actual_rel_paths_by_skill: dict[str, set[str]] = {}
+        for skill_name in (
+            "rust-development",
+            "python-development",
+            "typescript-development",
+            "go-development",
+            "terraform-development",
+            "container-development",
+            "shell-development",
+            "swift-development",
+        ):
+            skill_dir = ps.CLAUDE_SKILLS_DIR / skill_name
+            actual_rel_paths_by_skill[skill_name] = {
+                str(p.relative_to(skill_dir)) for p in projections if skill_dir in p.parents
+            }
+        self.assertEqual(
+            actual_rel_paths_by_skill["rust-development"],
+            {
+                "references/cargo-workflow.md",
+                "references/aa-evidence-classification.md",
+                "examples/targeted-nextest-then-full-gate.md",
+            },
+        )
+        self.assertEqual(
+            actual_rel_paths_by_skill["python-development"],
+            {
+                "references/uv-pytest-workflow.md",
+                "references/dynamic-python-caveats.md",
+                "examples/targeted-pytest-then-full-gate.md",
+            },
+        )
+        self.assertEqual(
+            actual_rel_paths_by_skill["typescript-development"],
+            {
+                "references/pnpm-typecheck-workflow.md",
+                "examples/targeted-vitest-then-full-gate.md",
+            },
+        )
+        self.assertEqual(
+            actual_rel_paths_by_skill["go-development"],
+            {
+                "references/go-list-workflow.md",
+                "examples/targeted-package-test-then-full-gate.md",
+            },
+        )
+        self.assertEqual(
+            actual_rel_paths_by_skill["terraform-development"],
+            {
+                "references/plan-first-workflow.md",
+                "references/sensitive-value-safety.md",
+                "examples/fmt-validate-plan-review.md",
+            },
+        )
+        self.assertEqual(
+            actual_rel_paths_by_skill["container-development"],
+            {
+                "references/build-and-readiness-workflow.md",
+                "examples/affected-service-then-full-integration.md",
+            },
+        )
+        self.assertEqual(
+            actual_rel_paths_by_skill["shell-development"],
+            {
+                "references/safe-shell-patterns.md",
+                "references/process-and-filesystem-safety.md",
+                "examples/safe-wrapper-with-preserved-exit-code.md",
+            },
+        )
+        self.assertEqual(
+            actual_rel_paths_by_skill["swift-development"],
+            {
+                "references/xcode-swiftpm-detection.md",
+                "examples/targeted-swiftpm-test-then-full-build.md",
+            },
+        )
 
     def test_asset_file_projects_verbatim_under_claude_skills(self) -> None:
         fixture = _skills_fixture()
