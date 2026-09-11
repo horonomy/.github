@@ -37,6 +37,7 @@ class DiscoverSkillsTest(unittest.TestCase):
                 "credential-operations",
                 "repo-scaffold",
                 "product-validation",
+                "design-qa",
             },
         )
 
