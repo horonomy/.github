@@ -143,6 +143,57 @@ def check_repo_adoption(repo: Path) -> CheckResult:
     )
 
 
+def check_cross_org_contamination(repo: Path, expected_org: str) -> CheckResult:
+    """HORO-982: catches a repo that ended up in the wrong distribution
+    mode — `adopt`'s Horonom governance block landed in a non-Horonom repo,
+    `consume`'s narrower skill-only projection landed in an actual
+    `horonomy` repo, or (a state neither CLI path should ever produce
+    without `--force`) both markers are present at once. Bounded to the
+    two marker files' own recorded `org` field plus a real `git remote -v`
+    read — no broader repo content is inspected."""
+    has_adoption = (repo / rb.ADOPTION_MARKER_FILENAME).is_file()
+    has_consumption = (repo / rb.CONSUMPTION_MARKER_FILENAME).is_file()
+
+    if has_adoption and has_consumption:
+        return CheckResult(
+            "cross_org_contamination",
+            FAIL,
+            f"both {rb.ADOPTION_MARKER_FILENAME} and {rb.CONSUMPTION_MARKER_FILENAME} are present — "
+            f"this repo is in two distribution modes at once",
+            fix="remove the mode that doesn't apply and rerun the correct one (adopt xor consume)",
+        )
+    if not has_adoption and not has_consumption:
+        return CheckResult(
+            "cross_org_contamination", NOT_APPLICABLE, "repo has not run adopt or consume — nothing to check"
+        )
+
+    actual_org = rb.resolve_org(repo)
+    if actual_org is None:
+        return CheckResult(
+            "cross_org_contamination", WARN, "could not resolve the repo's org from its remote", fix="confirm with `git remote -v`"
+        )
+
+    if has_adoption and actual_org != expected_org:
+        return CheckResult(
+            "cross_org_contamination",
+            FAIL,
+            f"{rb.ADOPTION_MARKER_FILENAME} present (full Horonom governance adopted) but the repo's "
+            f"remote resolves to org '{actual_org}', not '{expected_org}' — this repo should have run "
+            f"`consume`, not `adopt`",
+            fix=f"run `scripts/repo_bootstrap.py consume` here instead, after removing {rb.ADOPTION_MARKER_FILENAME} and the CLAUDE.md/AGENTS.md adoption block",
+        )
+    if has_consumption and actual_org == expected_org:
+        return CheckResult(
+            "cross_org_contamination",
+            FAIL,
+            f"{rb.CONSUMPTION_MARKER_FILENAME} present (skill-only consumption) but the repo's remote "
+            f"resolves to org '{expected_org}' — a real Horonom repo should run `adopt`, not `consume`, "
+            f"to get full governance",
+            fix=f"run `scripts/repo_bootstrap.py adopt` here instead, after removing {rb.CONSUMPTION_MARKER_FILENAME}",
+        )
+    return CheckResult("cross_org_contamination", PASS, f"distribution mode matches the repo's actual org ('{actual_org}')")
+
+
 def check_contributing_present(repo: Path) -> CheckResult:
     if (repo / "CONTRIBUTING.md").is_file():
         return CheckResult("contributing_present", PASS, "CONTRIBUTING.md exists")
