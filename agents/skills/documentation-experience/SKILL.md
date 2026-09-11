@@ -23,21 +23,14 @@ This is a heuristic/Design QA target, not a literal stopwatch metric.
 
 ## Type
 
-Auto-used, no `manifest.yaml` — deliberately, matching the existing
-company-process skills (`governance-doctor`, `jira-delivery`,
-`public-release-reconcile`, `release-assurance`, `repo-bootstrap`,
-`shell-development`, `credential-operations`, `product-validation`,
-`design-qa`). Per
-`governance/engineering/agent-skill-architecture.md` §3.4, this skill's
-applicability is broader and independent of any single stack-evidence
-file: it applies to any repo with user-facing documentation, whether or
-not that documentation involves a rendered UI (a CLI with a real README
-and command flow gets it same as a web product). There is no single
-`*.toml`/`*.json` signal that could gate it the way `Cargo.toml` gates
-`rust-development`, so `agents/common/project_skills.py`'s
-`resolve_applicable_skills()` correctly treats it as always applicable —
-matching the existing no-manifest skills' own justification for the same
-reason.
+Auto-used, no `manifest.yaml` — deliberately, matching `shell-development`
+and the other no-manifest company-process skills. Per
+`governance/engineering/agent-skill-architecture.md` §3.4, applicability
+here is broader than any single stack signal: it applies to any repo with
+user-facing documentation, rendered UI or not (a CLI with a real README
+gets it same as a web product) — so `resolve_applicable_skills()`
+correctly treats it as always applicable, with no `Cargo.toml`-style gate
+to write.
 
 ## When to use
 
@@ -57,21 +50,19 @@ change.
 
 ## Composition
 
-- **`engineering-loop`** (routing only) — use its Explore → Narrow →
-  Validate → Escalate → Full Gate loop when iterating on docs source,
-  scripts, or link/snippet checks; this skill does not redefine that loop.
+- **`engineering-loop`** (routing only) — its Explore → Narrow → Validate
+  → Escalate → Full Gate loop applies when iterating on docs source,
+  scripts, or link/snippet checks; not redefined here.
 - **`design-qa`** (`agents/skills/design-qa/SKILL.md`) — marketing/docs
-  entry surfaces are checked via `design-qa`'s five-second-comprehension
-  dimension. A product marketing homepage must pass that check before its
-  docs change is considered complete; a technical docs homepage is instead
-  checked for task/audience navigation, not marketing-page density. This
-  skill does not duplicate `design-qa`'s rendered-verification mechanics.
-- **`product-validation`** (`agents/skills/product-validation/SKILL.md`) —
-  docs-driven user journeys (`documentation scenario -> product-validation
-  scenario -> actual supported product path`) are a validation track owned
-  there. If docs claim a flow works but the docs-driven E2E cannot
-  complete, that is a product/documentation quality failure to track, not
-  something to dismiss as "just docs."
+  entry surfaces are checked via its five-second-comprehension dimension;
+  a marketing homepage must pass before its docs change is complete, a
+  technical docs homepage is instead checked for task/audience
+  navigation. Not duplicated here.
+- **`product-validation`** (`agents/skills/product-validation/SKILL.md`)
+  — docs-driven user journeys (`documentation scenario ->
+  product-validation scenario -> actual supported product path`) are a
+  validation track owned there; a docs claim an E2E can't complete is a
+  quality failure to track, not "just docs."
 
 ## Routing decision
 
@@ -98,25 +89,21 @@ change.
 
 ## Generalizes, does not fork
 
-This skill generalizes `governance/engineering/docs-scenario-quality.md`
-(the HORO-638 cross-product distillation: scenario-first expectation,
-maturity vocabulary, ground-truth reconciliation, pre-ship checklist,
-independent review) and HORO-820's Docs Impact gate
-(`references/docs-impact-gate.md`) into one company-wide capability. It
-does not restate HORO-638's canonical detailed template or invent a
-second, drifting docs-quality model — read the governance doc for the
-process invariants; this skill supplies the operational how.
+Generalizes `governance/engineering/docs-scenario-quality.md` (the
+HORO-638 distillation: scenario-first expectation, maturity vocabulary,
+ground-truth reconciliation, pre-ship checklist, independent review) and
+HORO-820's Docs Impact gate into one company-wide capability — it does
+not restate HORO-638's canonical template or fork a second, drifting
+model. Read the governance doc for the process invariants; this skill
+supplies the operational how.
 
-## References
+## References and example
 
-- `references/progressive-information-architecture.md` — the Layer 0–3
-  model with a worked example.
+- `references/progressive-information-architecture.md` — Layer 0–3 model
+  with a worked example.
 - `references/surface-communication-jobs.md` — the five surface profiles
   and persona/role-driven guidance.
 - `references/admonition-system.md` — the eight semantic admonition types.
 - `references/docs-impact-gate.md` — the generalized Docs Impact gate.
-
-## Example
-
-- `examples/homepage-five-second-rewrite.md` — a homepage that fails the
-  five-second-comprehension heuristic, diagnosed and rewritten to pass.
+- `examples/homepage-five-second-rewrite.md` — a homepage failing
+  five-second comprehension, diagnosed and rewritten to pass.
