@@ -128,7 +128,7 @@ not just that `tsc` exits 0:
 
 ## 6. Optional-tool fallback
 
-Same contract as `engineering-loop`'s `references/optional-tool-fallback.md`:
+Same contract as `agents/skills/engineering-loop/references/optional-tool-fallback.md`:
 CodeGraph/RTK accelerate finding call sites and proxying these commands
 but are never required — fall back to `rg`/`grep` + `Read`, or the
 editor's TypeScript language service, and to the native `pnpm`/`tsc`/

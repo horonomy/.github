@@ -46,8 +46,8 @@ etc.) or an app build.
 ## 3. Validate / Escalate
 
 If the targeted test fails unexpectedly, escalate through the L0–L3
-diagnostic ladder (`engineering-loop`'s
-`references/diagnostic-contract.md`) — e.g. re-run with `--verbose` for
+diagnostic ladder
+(`agents/skills/engineering-loop/references/diagnostic-contract.md`) — e.g. re-run with `--verbose` for
 file/line, then inspect the actual assertion failure, before assuming the
 production code (rather than the test) is wrong.
 

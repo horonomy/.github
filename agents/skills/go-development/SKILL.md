@@ -56,7 +56,7 @@ queries: `references/go-list-workflow.md`.
 never proof of runtime impact.** It tells you where to look and what to
 run next; it never tells you whether a change is safe. The actual gate is
 `go build`/`go vet`/`go test` succeeding, per `engineering-loop`'s
-optional-tool-fallback contract (`references/optional-tool-fallback.md`)
+optional-tool-fallback contract (`agents/skills/engineering-loop/references/optional-tool-fallback.md`)
 applied to Go's own native tooling, not just to RTK/CodeGraph.
 
 ## Narrow, then Full Gate

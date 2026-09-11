@@ -53,13 +53,28 @@ multi-service integration check before merge/release — see
 `references/build-and-readiness-workflow.md` for the concrete sequence and
 `examples/affected-service-then-full-integration.md` for a worked case.
 
-## Credential handling composes with credential-operations
+## When NOT to use
+
+- As a substitute for `engineering-loop`'s execution model or diagnostic
+  contract — this skill supplies container-specific build/readiness
+  technique, not a competing loop.
+- On a repo with no container evidence (no `Dockerfile`/`docker-compose.yml`
+  or equivalent) — `manifest.yaml` should already exclude this case, but
+  don't force container technique onto a repo that has none of its own.
+- As proof of runtime correctness beyond the readiness gate — a healthy
+  container is not the same claim as "the feature it hosts works"; that is
+  `product-validation`'s job, not this skill's.
+
+## Credential handling
 
 Container builds are a common place secrets leak by accident. This skill
 composes with the credential-plaintext prohibition
 (`governance/engineering/security.md` — never inspect, print, log, or
-otherwise expose a secret's plaintext value) and with `credential-operations`
-for the procedure to safely supply a build-time credential. Concretely:
+otherwise expose a secret's plaintext value). A dedicated `credential-operations`
+skill is planned (per `governance/engineering/agent-skill-architecture.md`
+§1) to own the general procedure for safely supplying any build-time or
+runtime credential; until it ships, apply the rules below directly.
+Concretely:
 
 - **Never bake a secret into an image layer.** A value set via `ENV`,
   `COPY`ed into the build context, or passed as a plain `ARG` persists in

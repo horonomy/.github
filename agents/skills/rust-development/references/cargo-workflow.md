@@ -4,7 +4,7 @@ Concrete commands `rust-development`'s SKILL.md routes to for each
 `engineering-loop` stage. This reference owns the commands; it does not
 redefine the execution model or diagnostic contract those belong to
 `engineering-loop` (`agents/skills/engineering-loop/SKILL.md` and its
-`references/diagnostic-contract.md`).
+`agents/skills/engineering-loop/references/diagnostic-contract.md`).
 
 ## Repository/workspace discovery
 

@@ -98,8 +98,8 @@ POSIX `sh` diverge in ways that fail silently rather than loudly:
 
 Piping a script's or CI step's output through `tail -N` to keep logs
 compact is exactly the failure mode `engineering-loop`'s diagnostic
-contract forbids (`references/diagnostic-contract.md` rule 4 in
-`engineering-loop`): the real error is frequently mid-log, under a long
+contract forbids
+(`agents/skills/engineering-loop/references/diagnostic-contract.md` rule 4): the real error is frequently mid-log, under a long
 successful setup phase, or above a misleading final "cleanup" line, and a
 fixed-line-count tail can drop it entirely. Prefer:
 

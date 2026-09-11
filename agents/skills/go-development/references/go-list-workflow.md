@@ -14,7 +14,7 @@ $ go list -json ./pkg/foo           # structured detail: GoFiles, Imports, TestG
 For "what imports this package" (the direction `go list` doesn't answer
 directly), use `go list -f` over the whole module and filter, or reach for
 CodeGraph/an IDE's reference-finder as the accelerator
-(`engineering-loop`'s `references/optional-tool-fallback.md` — same
+(`agents/skills/engineering-loop/references/optional-tool-fallback.md` — same
 preferred→fallback contract applies to Go's own tooling as to RTK/
 CodeGraph):
 

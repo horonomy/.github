@@ -63,7 +63,7 @@ a `package.json` with TypeScript dependencies or a `tsconfig.json`.
 ## Optional-tool fallback
 
 RTK/CodeGraph accelerate Explore/Narrow the same as any other stack — see
-`engineering-loop`'s `references/optional-tool-fallback.md`. If absent,
+`agents/skills/engineering-loop/references/optional-tool-fallback.md`. If absent,
 fall back to `rg`/`grep` + `Read`, or the editor-integrated TS language
 service (`tsserver`) for cross-references. Neither replaces the actual
 `tsc`/Vitest/build gates.

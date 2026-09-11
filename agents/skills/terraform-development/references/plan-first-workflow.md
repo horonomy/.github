@@ -53,8 +53,8 @@ the whole repo. Before running `fmt`/`validate`/`plan`:
    green `validate` as "config is well-formed," nothing stronger.
 3. **Lint / static analysis** — run whatever the repo has configured
    (e.g. `tflint`, a policy-as-code check). Per the optional-tool
-   fallback semantics in `engineering-loop`'s
-   `references/optional-tool-fallback.md`, a missing linter means "note
+   fallback semantics in
+   `agents/skills/engineering-loop/references/optional-tool-fallback.md`, a missing linter means "note
    its absence and proceed with the remaining stages," never "skip
    static analysis silently and call the stage passed."
 4. **`terraform plan`** — the only stage that actually diffs the proposed
