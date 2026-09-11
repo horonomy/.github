@@ -498,15 +498,26 @@ def consume(
             f"--force only if this repo is deliberately switching modes."
         )
 
-    resolved_org = org or resolve_org(repo, run_git=run_git)
-    if resolved_org == HORONOMY_ORG and not force:
+    # Independent review (HORO-982): the horonomy-org refusal must key off
+    # the repo's ACTUAL remote, not `org` — the original version checked
+    # `(org or resolve_org(...))`, so passing `--org ai-agent-assembly`
+    # against a real horonomy remote silently satisfied the `!= HORONOMY_ORG`
+    # comparison and skipped the guard entirely, no --force required.
+    # Reproduced live: `consume . --org ai-agent-assembly` against this very
+    # repo (a real horonomy/.github checkout) ran with no error. `--org` may
+    # still override what gets *recorded* in the marker below, but it must
+    # never be able to talk the safety check out of looking at the real
+    # remote.
+    actual_org = resolve_org(repo, run_git=run_git)
+    if actual_org == HORONOMY_ORG and not force:
         raise AdoptionError(
             f"{repo}'s remote resolves to the '{HORONOMY_ORG}' org — this is a Horonom repo "
             f"and should run `repo_bootstrap.py adopt`, not `consume`. `consume` is for "
             f"repos outside the horonomy org (e.g. ai-agent-assembly/*) that want the "
             f"shared engineering-skill capability without Horonom's own product governance. "
-            f"Pass --force only if this is deliberate."
+            f"Pass --force only if this is deliberate (--org does not bypass this check)."
         )
+    resolved_org = org or actual_org
     if resolved_org is None:
         resolved_org = "unknown"
 
@@ -541,9 +552,14 @@ def consume(
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(content)
         skill_outcomes["written"] += 1
+    # Independent review (HORO-982): a dry run must never claim "written" —
+    # it's the exact word this PR's own quoted verification output used
+    # for a run that wrote zero bytes. `would-write`/`would-write-marker`
+    # only on dry_run; real writes keep the unambiguous past tense.
+    written_label = "would-write" if dry_run else "written"
     outcomes["skills"] = (
         f"{len(applicable)} applicable ({', '.join(sorted(applicable)) or 'none'}); "
-        f"{skill_outcomes['written']} written, {skill_outcomes['unchanged']} unchanged"
+        f"{skill_outcomes['written']} {written_label}, {skill_outcomes['unchanged']} unchanged"
         + (f", {skill_outcomes['skipped-conflict']} skipped-conflict" if skill_outcomes["skipped-conflict"] else "")
     )
 
@@ -554,7 +570,7 @@ def consume(
     )
     if not dry_run:
         marker_path.write_text(marker_content, encoding="utf-8")
-    outcomes["consumption_marker"] = "written"
+    outcomes["consumption_marker"] = "would-write" if dry_run else "written"
 
     return outcomes
 
@@ -652,8 +668,32 @@ def _cmd_consume(args: argparse.Namespace) -> int:
 
 def _cmd_check(args: argparse.Namespace) -> int:
     repo = Path(args.repo).expanduser().resolve()
-    is_consumer = (repo / CONSUMPTION_MARKER_FILENAME).is_file()
-    results = check_consumption(repo) if is_consumer else check(repo)
+    has_adoption = (repo / ADOPTION_MARKER_FILENAME).is_file()
+    has_consumption = (repo / CONSUMPTION_MARKER_FILENAME).is_file()
+    # Independent review (HORO-982): the original version picked exactly one
+    # of check()/check_consumption() by `is_consumer`, so a repo carrying
+    # BOTH markers at once (the same state doctor's cross_org_contamination
+    # check flags as FAIL) silently only reported consumption drift here —
+    # the adoption marker's own state went unmentioned. Report both blocks
+    # whenever both markers are present, with an explicit contamination
+    # line, rather than picking a side.
+    results: list[tuple[str, str, str]] = []
+    if has_adoption and has_consumption:
+        results.append(
+            (
+                "distribution_mode",
+                "FAIL",
+                f"both {ADOPTION_MARKER_FILENAME} and {CONSUMPTION_MARKER_FILENAME} are present — "
+                f"this repo is in two distribution modes at once; see scripts/doctor.py's "
+                f"cross_org_contamination check for the full picture",
+            )
+        )
+        results.extend(check(repo))
+        results.extend(check_consumption(repo))
+    elif has_consumption:
+        results.extend(check_consumption(repo))
+    else:
+        results.extend(check(repo))
     worst = "PASS"
     for name, status, detail in results:
         print(f"{name}: {status} — {detail}")
