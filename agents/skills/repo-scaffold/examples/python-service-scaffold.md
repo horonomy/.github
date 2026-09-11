@@ -13,8 +13,20 @@
 ## Invocation
 
 ```bash
+# 1. Preview the resolved file list, no disk writes.
 python3 agents/skills/repo-scaffold/scripts/repo_scaffold.py plan profile.json
+
+# 2. Dry-run against the real target directory (a fresh clone, say) —
+#    exits 1 if anything would be created/updated, or on a collision.
+python3 agents/skills/repo-scaffold/scripts/repo_scaffold.py check profile.json ./my-new-service
+
+# 3. Write it for real.
+python3 agents/skills/repo-scaffold/scripts/repo_scaffold.py write profile.json ./my-new-service
 ```
+
+Re-running step 3 with the same profile against the same target a second
+time is a no-op (`write` prints "Scaffold already up to date; nothing
+written." and `check` then exits 0).
 
 ## Real resolved file list (`plan` output, verified against the actual generator)
 

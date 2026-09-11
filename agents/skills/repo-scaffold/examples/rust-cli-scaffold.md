@@ -12,7 +12,15 @@
 ## Invocation
 
 ```bash
+# 1. Preview the resolved file list, no disk writes.
 python3 agents/skills/repo-scaffold/scripts/repo_scaffold.py plan profile.json
+
+# 2. Dry-run against the real target directory — exits 1 if anything
+#    would be created/updated, or on a collision with an unmarked file.
+python3 agents/skills/repo-scaffold/scripts/repo_scaffold.py check profile.json ./my-new-cli
+
+# 3. Write it for real.
+python3 agents/skills/repo-scaffold/scripts/repo_scaffold.py write profile.json ./my-new-cli
 ```
 
 ## Real resolved file list (`plan` output, verified against the actual generator)
