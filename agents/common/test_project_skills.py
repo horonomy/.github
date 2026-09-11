@@ -30,6 +30,10 @@ class DiscoverSkillsTest(unittest.TestCase):
                 "python-development",
                 "typescript-development",
                 "go-development",
+                "terraform-development",
+                "container-development",
+                "shell-development",
+                "swift-development",
             },
         )
 
@@ -320,7 +324,16 @@ class BuildAssetProjectionsTest(unittest.TestCase):
         # an exhaustive enumeration of every asset in the repo.
         projections = ps.build_asset_projections()
         actual_rel_paths_by_skill: dict[str, set[str]] = {}
-        for skill_name in ("rust-development", "python-development", "typescript-development", "go-development"):
+        for skill_name in (
+            "rust-development",
+            "python-development",
+            "typescript-development",
+            "go-development",
+            "terraform-development",
+            "container-development",
+            "shell-development",
+            "swift-development",
+        ):
             skill_dir = ps.CLAUDE_SKILLS_DIR / skill_name
             actual_rel_paths_by_skill[skill_name] = {
                 str(p.relative_to(skill_dir)) for p in projections if skill_dir in p.parents
@@ -353,6 +366,36 @@ class BuildAssetProjectionsTest(unittest.TestCase):
             {
                 "references/go-list-workflow.md",
                 "examples/targeted-package-test-then-full-gate.md",
+            },
+        )
+        self.assertEqual(
+            actual_rel_paths_by_skill["terraform-development"],
+            {
+                "references/plan-first-workflow.md",
+                "references/sensitive-value-safety.md",
+                "examples/fmt-validate-plan-review.md",
+            },
+        )
+        self.assertEqual(
+            actual_rel_paths_by_skill["container-development"],
+            {
+                "references/build-and-readiness-workflow.md",
+                "examples/affected-service-then-full-integration.md",
+            },
+        )
+        self.assertEqual(
+            actual_rel_paths_by_skill["shell-development"],
+            {
+                "references/safe-shell-patterns.md",
+                "references/process-and-filesystem-safety.md",
+                "examples/safe-wrapper-with-preserved-exit-code.md",
+            },
+        )
+        self.assertEqual(
+            actual_rel_paths_by_skill["swift-development"],
+            {
+                "references/xcode-swiftpm-detection.md",
+                "examples/targeted-swiftpm-test-then-full-build.md",
             },
         )
 
