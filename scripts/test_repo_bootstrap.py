@@ -187,6 +187,17 @@ class AdoptFreshRepoFixtureTest(unittest.TestCase):
         self.assertFalse((self.repo / "AGENTS.md").exists())
         self.assertFalse((self.repo / rb.ADOPTION_MARKER_FILENAME).exists())
 
+    def test_dry_run_reports_would_write_not_written(self) -> None:
+        """Independent review (PR #44): a dry run must never claim
+        'written'/'created' — consume() was fixed for this earlier in the
+        same ticket; adopt() needed the matching fix."""
+        outcomes = rb.adopt(self.repo, org="horonomy", dry_run=True, now="2026-01-01T00:00:00+00:00")
+        self.assertEqual(outcomes["claude_md"], "would-create")
+        self.assertEqual(outcomes["agents_md"], "would-create")
+        self.assertEqual(outcomes["adoption_marker"], "would-write")
+        self.assertIn("would-write", outcomes["skills"])
+        self.assertNotIn(" written", outcomes["skills"])
+
     def test_check_passes_after_fresh_adoption(self) -> None:
         """AC: drift check works on a healthy fixture too — PASS, not just FAIL detection."""
         rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")

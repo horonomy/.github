@@ -59,6 +59,27 @@ class DiscoverReposTest(unittest.TestCase):
         found = wr.discover_repos(root)
         self.assertEqual(found, [repo_a])  # nested-dir/repo-b is NOT found — one level only
 
+    def test_symlinked_child_directory_is_never_discovered(self) -> None:
+        """Independent review (PR #44): a symlinked child pointing at a
+        real repo outside the configured root must not be discoverable —
+        reproduced live before this fix as writes landing outside root."""
+        root = Path(tempfile.mkdtemp())
+        outside_repo = Path(tempfile.mkdtemp()) / "elsewhere-repo"
+        outside_repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=outside_repo, check=True)
+        (root / "symlinked-repo").symlink_to(outside_repo)
+
+        self.assertEqual(wr.discover_repos(root), [])
+
+    def test_symlinked_git_entry_inside_a_real_child_is_never_discovered(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        child = root / "fake-repo"
+        child.mkdir()
+        outside_git_target = Path(tempfile.mkdtemp())
+        (child / ".git").symlink_to(outside_git_target)
+
+        self.assertEqual(wr.discover_repos(root), [])
+
 
 class IsWorktreeTest(unittest.TestCase):
     def test_main_checkout_is_not_a_worktree(self) -> None:
@@ -217,6 +238,19 @@ class ReconcileEndToEndTest(unittest.TestCase):
         self.assertEqual(len(outcomes), 2)
         modes = {Path(o.path).name: o.mode for o in outcomes}
         self.assertEqual(modes, {"repo-in-root-1": "adopt", "repo-in-root-2": "consume"})
+
+    def test_apply_never_writes_through_a_symlinked_child(self) -> None:
+        """End-to-end regression for the PR #44 review finding: a symlink
+        inside a configured root must never cause a real write outside it."""
+        outside_repo = Path(tempfile.mkdtemp()) / "elsewhere-repo"
+        outside_repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=outside_repo, check=True)
+        subprocess.run(["git", "remote", "add", "origin", "https://github.com/horonomy/widget.git"], cwd=outside_repo, check=True)
+        (self.root / "symlinked-repo").symlink_to(outside_repo)
+
+        outcomes = wr.reconcile([self.root], expected_org="horonomy", apply=True)
+        self.assertEqual(outcomes, [])  # never even discovered, so never reconciled
+        self.assertFalse((outside_repo / rb.ADOPTION_MARKER_FILENAME).exists())
 
     def test_error_status_never_raises_stops_other_repos(self) -> None:
         """One repo raising AdoptionError must not abort reconcile of the
