@@ -92,5 +92,228 @@ def _fixture_with_unsafe_name() -> Path:
     return d
 
 
+def _skills_fixture() -> Path:
+    """A fresh SKILLS_DIR-shaped fixture with one plain skill, for tests
+    that need to construct their own skill without touching the real
+    agents/skills/ tree."""
+    import tempfile
+
+    d = Path(tempfile.mkdtemp())
+    skill = d / "sample-skill"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("# sample-skill\n", encoding="utf-8")
+    return d
+
+
+class SkillAssetDiscoveryTest(unittest.TestCase):
+    def test_no_asset_dirs_returns_empty_list(self) -> None:
+        with mock.patch.object(ps, "SKILLS_DIR", _skills_fixture()):
+            self.assertEqual(ps.discover_skill_assets("sample-skill"), [])
+
+    def test_files_under_all_four_asset_dirs_are_discovered(self) -> None:
+        fixture = _skills_fixture()
+        skill = fixture / "sample-skill"
+        for d in ("references", "examples", "scripts", "tests"):
+            (skill / d).mkdir()
+            (skill / d / "a.md").write_text("x", encoding="utf-8")
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            found = {str(p) for p in ps.discover_skill_assets("sample-skill")}
+        self.assertEqual(
+            found,
+            {"references/a.md", "examples/a.md", "scripts/a.md", "tests/a.md"},
+        )
+
+    def test_unrecognized_top_level_dir_is_not_descended(self) -> None:
+        fixture = _skills_fixture()
+        skill = fixture / "sample-skill"
+        (skill / "not-a-recognized-asset-dir").mkdir()
+        (skill / "not-a-recognized-asset-dir" / "a.md").write_text("x", encoding="utf-8")
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            self.assertEqual(ps.discover_skill_assets("sample-skill"), [])
+
+    def test_symlinked_asset_dir_raises(self) -> None:
+        fixture = _skills_fixture()
+        skill = fixture / "sample-skill"
+        outside = fixture.parent / "outside-target"
+        outside.mkdir(exist_ok=True)
+        (skill / "references").symlink_to(outside, target_is_directory=True)
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            with self.assertRaises(ps.SkillProjectionError):
+                ps.discover_skill_assets("sample-skill")
+
+    def test_symlinked_file_inside_asset_dir_raises(self) -> None:
+        fixture = _skills_fixture()
+        skill = fixture / "sample-skill"
+        (skill / "references").mkdir()
+        outside_file = fixture.parent / "outside-secret.md"
+        outside_file.write_text("not part of this skill", encoding="utf-8")
+        (skill / "references" / "linked.md").symlink_to(outside_file)
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            with self.assertRaises(ps.SkillProjectionError):
+                ps.discover_skill_assets("sample-skill")
+
+
+class LoadManifestTest(unittest.TestCase):
+    def test_no_manifest_returns_none(self) -> None:
+        with mock.patch.object(ps, "SKILLS_DIR", _skills_fixture()):
+            self.assertIsNone(ps.load_manifest("sample-skill"))
+
+    def test_valid_manifest_parses(self) -> None:
+        fixture = _skills_fixture()
+        (fixture / "sample-skill" / "manifest.yaml").write_text(
+            "applicability:\n  stacks: [rust, python]\n  requires_all: true\n",
+            encoding="utf-8",
+        )
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            manifest = ps.load_manifest("sample-skill")
+        self.assertEqual(manifest, {"stacks": ["rust", "python"], "requires_all": True})
+
+    def test_manifest_defaults_requires_all_false(self) -> None:
+        fixture = _skills_fixture()
+        (fixture / "sample-skill" / "manifest.yaml").write_text(
+            "applicability:\n  stacks: [go]\n",
+            encoding="utf-8",
+        )
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            manifest = ps.load_manifest("sample-skill")
+        self.assertEqual(manifest, {"stacks": ["go"], "requires_all": False})
+
+    def test_unknown_stack_raises(self) -> None:
+        fixture = _skills_fixture()
+        (fixture / "sample-skill" / "manifest.yaml").write_text(
+            "applicability:\n  stacks: [cobol]\n",
+            encoding="utf-8",
+        )
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            with self.assertRaises(ps.SkillProjectionError):
+                ps.load_manifest("sample-skill")
+
+    def test_missing_applicability_key_raises(self) -> None:
+        fixture = _skills_fixture()
+        (fixture / "sample-skill" / "manifest.yaml").write_text(
+            "stacks: [rust]\n",
+            encoding="utf-8",
+        )
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            with self.assertRaises(ps.SkillProjectionError):
+                ps.load_manifest("sample-skill")
+
+    def test_empty_stacks_list_raises(self) -> None:
+        fixture = _skills_fixture()
+        (fixture / "sample-skill" / "manifest.yaml").write_text(
+            "applicability:\n  stacks: []\n",
+            encoding="utf-8",
+        )
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            with self.assertRaises(ps.SkillProjectionError):
+                ps.load_manifest("sample-skill")
+
+    def test_unrecognized_key_raises(self) -> None:
+        fixture = _skills_fixture()
+        (fixture / "sample-skill" / "manifest.yaml").write_text(
+            "applicability:\n  stacks: [rust]\n  bogus_key: true\n",
+            encoding="utf-8",
+        )
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            with self.assertRaises(ps.SkillProjectionError):
+                ps.load_manifest("sample-skill")
+
+    def test_symlinked_manifest_raises(self) -> None:
+        fixture = _skills_fixture()
+        skill = fixture / "sample-skill"
+        real = fixture.parent / "real-manifest.yaml"
+        real.write_text("applicability:\n  stacks: [rust]\n", encoding="utf-8")
+        (skill / "manifest.yaml").symlink_to(real)
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            with self.assertRaises(ps.SkillProjectionError):
+                ps.load_manifest("sample-skill")
+
+
+class ResolveApplicableSkillsTest(unittest.TestCase):
+    def _fixture_with_two_skills(self) -> Path:
+        fixture = _skills_fixture()  # gives "sample-skill", no manifest -> always applicable
+        rust_only = fixture / "rust-only-skill"
+        rust_only.mkdir()
+        (rust_only / "SKILL.md").write_text("# rust-only-skill\n", encoding="utf-8")
+        (rust_only / "manifest.yaml").write_text("applicability:\n  stacks: [rust]\n", encoding="utf-8")
+        return fixture
+
+    def test_no_manifest_skill_always_applicable(self) -> None:
+        fixture = self._fixture_with_two_skills()
+        repo = fixture.parent / "empty-repo"
+        repo.mkdir(exist_ok=True)
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            applicable = ps.resolve_applicable_skills(repo)
+        self.assertIn("sample-skill", applicable)
+        self.assertNotIn("rust-only-skill", applicable)
+
+    def test_stack_evidence_activates_manifest_skill(self) -> None:
+        fixture = self._fixture_with_two_skills()
+        repo = fixture.parent / "rust-repo"
+        repo.mkdir(exist_ok=True)
+        (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            applicable = ps.resolve_applicable_skills(repo)
+        self.assertIn("rust-only-skill", applicable)
+
+    def test_explicit_override_forces_skill_in(self) -> None:
+        fixture = self._fixture_with_two_skills()
+        repo = fixture.parent / "empty-repo-2"
+        repo.mkdir(exist_ok=True)
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            applicable = ps.resolve_applicable_skills(repo, overrides={"rust-only-skill": True})
+        self.assertIn("rust-only-skill", applicable)
+
+    def test_explicit_override_forces_skill_out(self) -> None:
+        fixture = self._fixture_with_two_skills()
+        repo = fixture.parent / "rust-repo-2"
+        repo.mkdir(exist_ok=True)
+        (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            applicable = ps.resolve_applicable_skills(repo, overrides={"rust-only-skill": False})
+        self.assertNotIn("rust-only-skill", applicable)
+
+    def test_requires_all_needs_every_stack(self) -> None:
+        fixture = self._fixture_with_two_skills()
+        (fixture / "rust-only-skill" / "manifest.yaml").write_text(
+            "applicability:\n  stacks: [rust, python]\n  requires_all: true\n",
+            encoding="utf-8",
+        )
+        repo = fixture.parent / "rust-only-repo"
+        repo.mkdir(exist_ok=True)
+        (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            applicable = ps.resolve_applicable_skills(repo)
+        self.assertNotIn("rust-only-skill", applicable)  # has rust, missing python
+
+
+class BuildAssetProjectionsTest(unittest.TestCase):
+    def test_real_skills_have_no_assets_yet(self) -> None:
+        # As of HORO-970 landing, none of the five pre-existing skills use
+        # the optional asset dirs — this pins that current-state fact so a
+        # future skill adding assets updates this test deliberately.
+        self.assertEqual(ps.build_asset_projections(), {})
+
+    def test_asset_file_projects_verbatim_under_claude_skills(self) -> None:
+        fixture = _skills_fixture()
+        (fixture / "sample-skill" / "references").mkdir()
+        (fixture / "sample-skill" / "references" / "deep.md").write_text("deep content", encoding="utf-8")
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            projections = ps.build_asset_projections()
+        expected_path = ps.CLAUDE_SKILLS_DIR / "sample-skill" / "references" / "deep.md"
+        self.assertEqual(projections.get(expected_path), b"deep content")
+
+    def test_asset_projection_has_no_injected_header(self) -> None:
+        # Unlike SKILL.md's projection, assets copy byte-for-byte — a
+        # prepended HTML comment would corrupt a script or fixture.
+        fixture = _skills_fixture()
+        (fixture / "sample-skill" / "scripts").mkdir()
+        (fixture / "sample-skill" / "scripts" / "run.sh").write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+        with mock.patch.object(ps, "SKILLS_DIR", fixture):
+            projections = ps.build_asset_projections()
+        content = projections[ps.CLAUDE_SKILLS_DIR / "sample-skill" / "scripts" / "run.sh"]
+        self.assertEqual(content, b"#!/bin/sh\necho hi\n")
+
+
 if __name__ == "__main__":
     unittest.main()
