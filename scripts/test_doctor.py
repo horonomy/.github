@@ -182,6 +182,111 @@ class CrossOrgContaminationCheckTest(unittest.TestCase):
         self.assertEqual(result.status, checks.WARN)
 
 
+class ConsumptionStatusCheckTest(unittest.TestCase):
+    """HORO-982, final AC6 gap: horonom doctor itself must surface
+    consume-mode drift (rb.check_consumption()), not only reachable via
+    the separate repo_bootstrap.py check CLI."""
+
+    def test_not_applicable_when_never_consumed(self) -> None:
+        result = checks.check_consumption_status(_tmp_repo())
+        self.assertEqual(result.status, checks.NOT_APPLICABLE)
+
+    def test_pass_after_real_consumption(self) -> None:
+        import subprocess
+
+        repo = _tmp_repo()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        with mock.patch.object(checks.rb.hw, "load_governance_version", return_value=1):
+            checks.rb.consume(repo, org="ai-agent-assembly", now="2026-01-01T00:00:00+00:00")
+            result = checks.check_consumption_status(repo)
+        self.assertEqual(result.status, checks.PASS)
+
+    def test_warn_when_consumed_governance_version_is_stale(self) -> None:
+        import subprocess
+
+        repo = _tmp_repo()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        with mock.patch.object(checks.rb.hw, "load_governance_version", return_value=1):
+            checks.rb.consume(repo, org="ai-agent-assembly", now="2026-01-01T00:00:00+00:00")
+        with mock.patch.object(checks.rb.hw, "load_governance_version", return_value=2):
+            result = checks.check_consumption_status(repo)
+        self.assertEqual(result.status, checks.WARN)
+
+
+class ApplicabilityDriftCheckTest(unittest.TestCase):
+    """HORO-982 AC item 6: doctor must detect when a repo's projected
+    skill set has drifted from what resolve_applicable_skills() would
+    compute today, independent of the provenance-marker check."""
+
+    def test_not_applicable_when_never_adopted_or_consumed(self) -> None:
+        result = checks.check_applicability_drift(_tmp_repo())
+        self.assertEqual(result.status, checks.NOT_APPLICABLE)
+
+    def test_pass_immediately_after_real_adoption(self) -> None:
+        import subprocess
+
+        repo = _tmp_repo()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        with mock.patch.object(checks.rb.hw, "load_governance_version", return_value=1):
+            checks.rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+            result = checks.check_applicability_drift(repo)
+        self.assertEqual(result.status, checks.PASS)
+
+    def test_warn_when_a_newly_applicable_skill_is_missing(self) -> None:
+        import subprocess
+
+        repo = _tmp_repo()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        with mock.patch.object(checks.rb.hw, "load_governance_version", return_value=1):
+            checks.rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+            (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")  # real drift, no re-adopt yet
+            result = checks.check_applicability_drift(repo)
+        self.assertEqual(result.status, checks.WARN)
+        self.assertIn("rust-development", result.detail)
+        self.assertIn("missing", result.detail)
+
+    def test_warn_when_a_projected_skill_is_now_stale(self) -> None:
+        import subprocess
+
+        repo = _tmp_repo()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        with mock.patch.object(checks.rb.hw, "load_governance_version", return_value=1):
+            (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+            checks.rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+            (repo / "Cargo.toml").unlink()  # real drift the other direction, no re-adopt yet
+            result = checks.check_applicability_drift(repo)
+        self.assertEqual(result.status, checks.WARN)
+        self.assertIn("rust-development", result.detail)
+        self.assertIn("stale", result.detail)
+
+    def test_hand_edited_skill_is_not_double_counted_as_drift(self) -> None:
+        """An unmarked (hand-edited) skill file is check_skill_adapter_markers's
+        concern, not this check's — a hand-edited SKILL.md must not also
+        show up here as 'missing' just because it no longer carries the
+        marker this check filters projected files on."""
+        import subprocess
+
+        repo = _tmp_repo()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        with mock.patch.object(checks.rb.hw, "load_governance_version", return_value=1):
+            checks.rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        applicable = checks.project_skills.resolve_applicable_skills(repo)
+        name = applicable[0]
+        (repo / ".claude" / "skills" / name / "SKILL.md").write_text("hand-edited\n", encoding="utf-8")
+        result = checks.check_applicability_drift(repo)
+        self.assertEqual(result.status, checks.WARN)
+        # Independent review (HORO-982, PR #46) found the universal
+        # "rerun adopt/consume" fix text is actively wrong here — adopt()
+        # refuses to overwrite hand-edited content, so that advice would
+        # never actually clear the WARN. Reported in its own "hand-edited"
+        # bucket, distinct from "missing" (never-projected-at-all), with
+        # fix text that points at restoring canonical content instead.
+        self.assertIn("hand-edited", result.detail)
+        self.assertNotIn("missing (applicable but never projected)", result.detail)
+        self.assertIn("restore", result.fix)
+        self.assertNotIn("rerun scripts/repo_bootstrap.py adopt/consume to project", result.fix)
+
+
 class PublicReleaseAdoptionMappingTest(unittest.TestCase):
     """AC: 'False claims such as public surface complete when a surface is
     N/A/not-yet-public are prevented.' Directly tests every state mapping,

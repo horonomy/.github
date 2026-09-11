@@ -8,6 +8,7 @@ Stdlib unittest only. Run with:
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import tempfile
 import unittest
@@ -667,6 +668,86 @@ class MainCLIIntegrationTest(unittest.TestCase):
             self.assertTrue((repo / rb.ADOPTION_MARKER_FILENAME).is_file())
             exit_code = rb._cmd_check(argparse.Namespace(repo=str(repo)))
         self.assertEqual(exit_code, 1)  # both-present is a FAIL, not silently PASS
+
+
+class OnboardingContractTest(unittest.TestCase):
+    """HORO-982 AC item 5, the "onboarding contract": a fresh coding-agent
+    session opened in a representative repository must receive applicable
+    stack Skills only, no unrelated language skill flood, and no
+    dependency on another checkout being the current working directory.
+    Written from the onboarding-session angle itself (what would a fresh
+    session actually SEE after `adopt`/`consume`), not re-testing
+    resolve_applicable_skills()'s own evidence table (covered elsewhere)."""
+
+    def setUp(self) -> None:
+        self._patch = mock.patch.object(rb.hw, "load_governance_version", return_value=1)
+        self._patch.start()
+
+    def tearDown(self) -> None:
+        self._patch.stop()
+
+    def _skill_names_visible_to_a_fresh_session(self, repo: Path) -> set[str]:
+        """What a fresh Claude/Codex session opened in `repo` would
+        actually discover under .claude/skills/ — the real onboarding
+        surface, not an internal API result."""
+        return {p.parent.name for p in (repo / ".claude" / "skills").glob("*/SKILL.md")}
+
+    def test_pure_python_repo_sees_no_unrelated_language_skills(self) -> None:
+        """A representative single-stack repo (real HORO-969 §3 example
+        shape: a Python service) must never see rust-development,
+        go-development, swift-development, typescript-development,
+        container-development, or terraform-development — no flood."""
+        repo = _tmp_git_repo()
+        (repo / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+        rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        visible = self._skill_names_visible_to_a_fresh_session(repo)
+        for unrelated in ("rust-development", "go-development", "swift-development", "typescript-development", "container-development", "terraform-development"):
+            self.assertNotIn(unrelated, visible)
+        self.assertIn("python-development", visible)
+
+    def test_multi_stack_repo_composes_correctly(self) -> None:
+        """HORO-969 §3's own worked example: a PyO3-style SDK gets BOTH
+        python-development and rust-development, not just one — evidence-
+        based composition, not "one repo = one language" (a forbidden
+        shortcut per that same section)."""
+        repo = _tmp_git_repo()
+        (repo / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+        (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+        rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        visible = self._skill_names_visible_to_a_fresh_session(repo)
+        self.assertIn("python-development", visible)
+        self.assertIn("rust-development", visible)
+        self.assertNotIn("go-development", visible)
+        self.assertNotIn("swift-development", visible)
+
+    def test_bare_repo_with_no_stack_evidence_still_gets_company_process_skills(self) -> None:
+        """A repo with no filesystem stack evidence at all still onboards
+        the company-wide, non-stack-dependent skills (jira-delivery,
+        engineering-loop, etc.) — "no flood" doesn't mean "nothing"."""
+        repo = _tmp_git_repo()
+        rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        visible = self._skill_names_visible_to_a_fresh_session(repo)
+        self.assertIn("engineering-loop", visible)
+        self.assertIn("jira-delivery", visible)
+        for stack_specific in ("rust-development", "python-development", "go-development", "design-qa"):
+            self.assertNotIn(stack_specific, visible)
+
+    def test_onboarding_does_not_depend_on_another_checkout_as_cwd(self) -> None:
+        """Standalone-clone boundary: adopting a repo from a path far away
+        from horonomy/.github's own checkout must work identically —
+        adopt() resolves its canonical source via SCRIPTS_DIR/module
+        location, never the process's current working directory."""
+        repo = _tmp_git_repo()
+        (repo / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+        original_cwd = os.getcwd()
+        scratch_cwd = Path(tempfile.mkdtemp())
+        try:
+            os.chdir(scratch_cwd)
+            rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        finally:
+            os.chdir(original_cwd)
+        visible = self._skill_names_visible_to_a_fresh_session(repo)
+        self.assertIn("python-development", visible)
 
 
 if __name__ == "__main__":

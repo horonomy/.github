@@ -111,6 +111,95 @@ def check_skill_adapter_markers(repo: Path) -> CheckResult:
     return CheckResult("skill_adapter_markers", PASS, f"{len(files)} projected skill file(s), all carry the generated marker")
 
 
+def check_applicability_drift(repo: Path) -> CheckResult:
+    """HORO-982 AC item 6's "wrong applicability projections" sub-bullet —
+    distinct from `check_skill_adapter_markers` (which only asks "is every
+    projected file's provenance marker intact") and `check_repo_adoption`/
+    `rb.check_consumption` (which check the CLAUDE.md/marker-file governance
+    layer, not which *skills* were chosen). This asks a third, independent
+    question: does the set of skills actually projected on disk right now
+    still match what `resolve_applicable_skills(repo)` would compute today?
+    A repo that added a `Cargo.toml` (or removed one) since its last
+    `adopt`/`consume` run has drifted — `rust-development` is missing (or
+    stale) until the tool is rerun — and neither of the other two checks
+    would ever catch that, since the provenance marker and governance
+    files can both still be perfectly valid.
+
+    Works for both distribution modes: NOT_APPLICABLE if neither an
+    adoption nor a consumption marker is present (nothing to compare
+    against — matches `check_repo_adoption`'s own "not every repo has
+    adopted governance yet" semantics). Only compares *marker-carrying*
+    projected skill directories against the currently-applicable set —
+    a hand-edited (unmarked) skill, already reported separately by
+    `check_skill_adapter_markers`, is not double-counted as "drift" here."""
+    has_adoption = (repo / rb.ADOPTION_MARKER_FILENAME).is_file()
+    has_consumption = (repo / rb.CONSUMPTION_MARKER_FILENAME).is_file()
+    if not has_adoption and not has_consumption:
+        return CheckResult(
+            "applicability_drift",
+            NOT_APPLICABLE,
+            "repo has not run adopt or consume — nothing to compare against",
+            fix="run scripts/repo_bootstrap.py adopt/consume if this repo should track shared skills",
+        )
+
+    try:
+        current_applicable = set(project_skills.resolve_applicable_skills(repo))
+    except project_skills.SkillProjectionError as exc:
+        return CheckResult(
+            "applicability_drift",
+            WARN,
+            f"could not resolve current applicable skills: {exc}",
+            fix="run this from a healthy horonomy/.github checkout with agents/skills/ intact",
+        )
+
+    claude_skills_dir = repo / ".claude" / "skills"
+    projected: set[str] = set()
+    hand_edited: set[str] = set()  # SKILL.md present but doesn't carry the marker
+    if claude_skills_dir.is_dir():
+        for skill_md in claude_skills_dir.glob("*/SKILL.md"):
+            text = skill_md.read_text(encoding="utf-8", errors="replace")
+            if text.startswith(project_skills.GENERATED_MARKER):
+                projected.add(skill_md.parent.name)
+            else:
+                hand_edited.add(skill_md.parent.name)
+
+    # `current_applicable` is already a subset of discover_skills() by
+    # construction (resolve_applicable_skills() only ever returns names it
+    # itself discovered) — independent review (HORO-982, PR #46) found the
+    # original version re-called discover_skills() here anyway, purely
+    # redundantly, and left it OUTSIDE the try/except above: a canonical
+    # skill set that became unreadable between the two calls crashed this
+    # check uncaught instead of degrading to the same WARN the first call
+    # already handles. Using current_applicable directly removes both the
+    # redundancy and the unguarded second I/O call.
+    still_missing = sorted(current_applicable - projected - hand_edited)
+    hand_edited_and_applicable = sorted(current_applicable & hand_edited)
+    stale = sorted(projected - current_applicable)
+    if not still_missing and not hand_edited_and_applicable and not stale:
+        return CheckResult(
+            "applicability_drift", PASS, f"{len(projected)} projected skill(s) match the currently-applicable set"
+        )
+    details = []
+    fixes = []
+    if still_missing:
+        details.append(f"missing (applicable but never projected): {', '.join(still_missing)}")
+        fixes.append("rerun scripts/repo_bootstrap.py adopt/consume to project the missing skill(s)")
+    if hand_edited_and_applicable:
+        # Independent review (HORO-982, PR #46) found the universal
+        # "rerun adopt/consume" fix text is actively wrong for this case:
+        # adopt()/consume() both deliberately refuse to overwrite a
+        # hand-edited (unmarked) file — rerunning reports skipped-conflict
+        # and leaves it exactly as-is, so the WARN would persist forever
+        # under the old advice. The real fix is check_skill_adapter_markers'
+        # own: restore the canonical content, not rerun adopt/consume.
+        details.append(f"hand-edited (marker missing, so treated as not-projected): {', '.join(hand_edited_and_applicable)}")
+        fixes.append("these carry hand-edited content — restore from horonomy/.github's canonical agents/skills/ (see skill_adapter_markers), rerunning adopt/consume will not touch them")
+    if stale:
+        details.append(f"stale (projected but no longer applicable): {', '.join(stale)}")
+        fixes.append("rerun scripts/repo_bootstrap.py adopt/consume to remove the now-inapplicable skill(s)")
+    return CheckResult("applicability_drift", WARN, "; ".join(details), fix="; ".join(fixes))
+
+
 def check_repo_adoption(repo: Path) -> CheckResult:
     """Delegates to scripts/repo_bootstrap.py check — a repo that has never
     been adopted (no .horonom-adoption.yaml) is NOT_APPLICABLE, not FAIL:
@@ -192,6 +281,45 @@ def check_cross_org_contamination(repo: Path, expected_org: str) -> CheckResult:
             fix=f"run `scripts/repo_bootstrap.py adopt` here instead, after removing {rb.CONSUMPTION_MARKER_FILENAME}",
         )
     return CheckResult("cross_org_contamination", PASS, f"distribution mode matches the repo's actual org ('{actual_org}')")
+
+
+def check_consumption_status(repo: Path) -> CheckResult:
+    """Delegates to scripts/repo_bootstrap.py's check_consumption() — the
+    `consume`-mode counterpart to check_repo_adoption() above, for a
+    non-Horonom repo. Independent review (HORO-982, PR #46's final
+    AC-completeness pass) found `horonom doctor` itself never called
+    `rb.check_consumption()` at all — only `check_repo_adoption()` (which
+    only ever inspects the *adoption* marker) was wired into `run_checks()`,
+    so a consume-mode repo's outdated-consumer-version drift was invisible
+    to `doctor` itself, only reachable via the separate `repo_bootstrap.py
+    check` CLI. A repo that has never run `consume` (no
+    `.horonom-consumption.yaml`) is NOT_APPLICABLE, matching
+    check_repo_adoption's own "not every repo has done this" semantics."""
+    if not (repo / rb.CONSUMPTION_MARKER_FILENAME).is_file():
+        return CheckResult(
+            "consumption_status",
+            NOT_APPLICABLE,
+            "not consumed (no .horonom-consumption.yaml) — this is fine, not every repo consumes shared capabilities",
+            fix="run scripts/repo_bootstrap.py consume <this repo> if it should track shared skills",
+        )
+    try:
+        results = rb.check_consumption(repo)
+    except Exception as exc:  # noqa: BLE001 — surface as a doctor FAIL, never crash the whole run
+        return CheckResult("consumption_status", FAIL, f"repo_bootstrap check_consumption() raised: {exc}")
+    worst = PASS
+    details = []
+    for name, status, detail in results:
+        details.append(f"{name}={status}")
+        if status == "FAIL":
+            worst = FAIL
+        elif status == "WARN" and worst != FAIL:
+            worst = WARN
+    return CheckResult(
+        "consumption_status",
+        worst,
+        "; ".join(details),
+        fix=None if worst == PASS else "run scripts/repo_bootstrap.py check <repo> for per-item detail",
+    )
 
 
 def check_contributing_present(repo: Path) -> CheckResult:
