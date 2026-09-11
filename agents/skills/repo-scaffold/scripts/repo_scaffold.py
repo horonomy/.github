@@ -600,8 +600,21 @@ def write_plan(plan: ScaffoldPlan, target: Path) -> PlanDiff:
 
 
 def _load_profile(path: Path) -> Profile:
+    # Refuse a symlink outright and require a regular, resolvable file —
+    # a caller-supplied profile path (including one an agent was tricked
+    # into passing via a faulty CLI argument) should never be able to
+    # redirect a "read this profile" request onto an arbitrary resolved
+    # target via a symlink hop or a special file.
+    if path.is_symlink():
+        raise ProfileError(f"{path}: refusing to follow a symlinked profile path")
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise ProfileError(f"{path}: could not resolve profile path: {exc}") from exc
+    if not resolved.is_file():
+        raise ProfileError(f"{path}: not a regular file")
+    try:
+        raw = json.loads(resolved.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ProfileError(f"{path}: not valid JSON: {exc}") from exc
     return Profile.from_dict(raw)

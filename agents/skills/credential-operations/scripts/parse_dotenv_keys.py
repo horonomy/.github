@@ -151,8 +151,27 @@ def main(argv: list[str]) -> int:
     parser.add_argument("path", help="Path to the .env-style file to inspect.")
     args = parser.parse_args(argv)
 
+    target = Path(args.path)
+    if target.is_symlink():
+        # Refuse a symlink outright rather than silently following it — a
+        # caller-supplied path (including one an agent was tricked into
+        # passing) should never be able to redirect a "read this .env file"
+        # request onto an arbitrary resolved target via a symlink hop.
+        print(f"error: refusing to follow symlink {args.path!r}", file=sys.stderr)
+        return 1
+
     try:
-        text = Path(args.path).read_text(encoding="utf-8", errors="replace")
+        resolved = target.resolve(strict=True)
+    except OSError as exc:
+        print(f"error: could not read {args.path!r}: {exc.__class__.__name__}", file=sys.stderr)
+        return 1
+
+    if not resolved.is_file():
+        print(f"error: {args.path!r} is not a regular file", file=sys.stderr)
+        return 1
+
+    try:
+        text = resolved.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         print(f"error: could not read {args.path!r}: {exc.__class__.__name__}", file=sys.stderr)
         return 1
