@@ -245,6 +245,90 @@ class AdoptSymlinkGuardTest(unittest.TestCase):
         self.assertTrue((self.repo / "AGENTS.md").is_symlink())
 
 
+class ResolveOrgTest(unittest.TestCase):
+    def test_resolves_org_from_remote(self) -> None:
+        fake = mock.Mock(returncode=0, stdout="origin\thttps://github.com/ai-agent-assembly/agent-assembly.git (fetch)\n")
+        self.assertEqual(rb.resolve_org(Path("/x"), run_git=lambda args: fake), "ai-agent-assembly")
+
+    def test_none_when_no_remote(self) -> None:
+        fake = mock.Mock(returncode=0, stdout="")
+        self.assertIsNone(rb.resolve_org(Path("/x"), run_git=lambda args: fake))
+
+    def test_none_when_git_fails(self) -> None:
+        fake = mock.Mock(returncode=128, stdout="")
+        self.assertIsNone(rb.resolve_org(Path("/x"), run_git=lambda args: fake))
+
+
+class ConsumeTest(unittest.TestCase):
+    """HORO-982: `consume` is the narrower, non-Horonom-repo counterpart of
+    `adopt` — applicable-filtered skill projection only, no CLAUDE.md/
+    AGENTS.md governance block, no cross-contamination with `adopt`'s own
+    marker."""
+
+    def setUp(self) -> None:
+        self.repo = _tmp_git_repo()  # real git repo, no remote configured
+        self._patch = mock.patch.object(rb.hw, "load_governance_version", return_value=1)
+        self._patch.start()
+
+    def tearDown(self) -> None:
+        self._patch.stop()
+
+    def test_consume_writes_only_marker_and_skills_no_governance_files(self) -> None:
+        outcomes = rb.consume(self.repo, now="2026-01-01T00:00:00+00:00")
+        self.assertTrue((self.repo / rb.CONSUMPTION_MARKER_FILENAME).is_file())
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+        self.assertFalse((self.repo / ".claude" / "CLAUDE.md").exists())
+        self.assertFalse((self.repo / rb.ADOPTION_MARKER_FILENAME).exists())
+        self.assertIn("written", outcomes["consumption_marker"])
+
+    def test_consume_projects_only_applicable_skills(self) -> None:
+        rb.consume(self.repo, now="2026-01-01T00:00:00+00:00")
+        applicable = set(rb.project_skills.resolve_applicable_skills(self.repo))
+        projected = {p.parent.name for p in (self.repo / ".claude" / "skills").glob("*/SKILL.md")}
+        self.assertEqual(projected, applicable)
+
+    def test_consume_refuses_a_real_horonomy_repo_without_force(self) -> None:
+        with self.assertRaises(rb.AdoptionError):
+            rb.consume(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        self.assertFalse((self.repo / rb.CONSUMPTION_MARKER_FILENAME).exists())
+
+    def test_consume_allows_horonomy_repo_with_force(self) -> None:
+        outcomes = rb.consume(self.repo, org="horonomy", force=True, now="2026-01-01T00:00:00+00:00")
+        self.assertIn("written", outcomes["consumption_marker"])
+
+    def test_consume_refuses_when_already_adopted(self) -> None:
+        rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        with self.assertRaises(rb.AdoptionError):
+            rb.consume(self.repo, org="ai-agent-assembly", now="2026-01-01T00:00:01+00:00")
+
+    def test_adopt_refuses_when_already_consumed(self) -> None:
+        rb.consume(self.repo, org="ai-agent-assembly", now="2026-01-01T00:00:00+00:00")
+        with self.assertRaises(rb.AdoptionError):
+            rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:01+00:00")
+
+    def test_dry_run_writes_nothing(self) -> None:
+        rb.consume(self.repo, org="ai-agent-assembly", dry_run=True, now="2026-01-01T00:00:00+00:00")
+        self.assertFalse((self.repo / rb.CONSUMPTION_MARKER_FILENAME).exists())
+        self.assertEqual(list((self.repo).glob(".claude/skills/*")), [])
+
+    def test_consume_is_idempotent(self) -> None:
+        rb.consume(self.repo, org="ai-agent-assembly", now="2026-01-01T00:00:00+00:00")
+        outcomes = rb.consume(self.repo, org="ai-agent-assembly", now="2026-01-01T00:00:01+00:00")
+        self.assertIn("unchanged", outcomes["skills"])
+
+    def test_check_consumption_passes_after_fresh_consume(self) -> None:
+        rb.consume(self.repo, org="ai-agent-assembly", now="2026-01-01T00:00:00+00:00")
+        results = rb.check_consumption(self.repo, expected_governance_version=1)
+        statuses = {name: status for name, status, _ in results}
+        self.assertEqual(statuses["consumption_marker"], "PASS")
+        self.assertEqual(statuses["consumption_skills"], "PASS")
+
+    def test_check_consumption_not_applicable_when_never_consumed(self) -> None:
+        results = rb.check_consumption(self.repo)
+        statuses = {name: status for name, status, _ in results}
+        self.assertEqual(statuses["consumption_marker"], "NOT_APPLICABLE")
+
+
 class CrossRepoSkillProjectionTest(unittest.TestCase):
     """HORO-507: an adopted repo gets the same canonical skill content
     Claude/Codex read from horonomy/.github itself — never a second
