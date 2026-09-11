@@ -38,6 +38,7 @@ class DiscoverSkillsTest(unittest.TestCase):
                 "repo-scaffold",
                 "product-validation",
                 "design-qa",
+                "documentation-experience",
             },
         )
 
