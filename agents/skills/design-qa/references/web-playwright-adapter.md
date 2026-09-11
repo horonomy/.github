@@ -2,23 +2,32 @@
 
 ## Evidence status — read this first
 
-**Not yet dogfooded in this workspace.** A search of this repo and the
-sibling `horonomy/*` product checkouts (`horonom-site`, `fornax-website`,
-`eltanin`, `circinus`, `octans`, and others) at HORO-986 authoring time
-found no `package.json` with a Playwright dependency, no `playwright.config.*`,
-and no repo-owned Playwright test suite anywhere in this workspace. The only
-Playwright-shaped artifact present is `.playwright-mcp/` at the workspace
-root — console/session logs from the **interactive Playwright MCP browser
-tool** (ad hoc agent-driven browsing via `claude-in-chrome`/Playwright MCP),
-which is a different thing from an automated, repo-owned adapter script:
-it proves the tool is available and has been used interactively in this
-workspace, not that any product has a committed Design QA harness built on
-it. What follows is written accurately against Playwright's real, documented
-capabilities — it is the correct target shape, not a report of a proven
-in-repo pattern. Treat every command below as "this is how you would do it,"
-not "this has been run against a real Horonom product this pass." Actually
-dogfooding this adapter against a real web product is explicitly deferred —
-see `SKILL.md`'s composition note and the HORO-983 rollout scope.
+**Real, repo-owned Playwright suites already exist in this workspace** —
+this adapter is not a from-scratch invention, it generalizes patterns
+already in production use:
+
+- `horologium/web/playwright.config.ts` — runs against the real
+  `horologium-server` + real Postgres + golden fixture (HORO-467/HORO-469b),
+  deliberately no mocked API (that's what the Vitest component tests are
+  for); `trace: "retain-on-failure"` chosen specifically because
+  `retries: 0` makes `on-first-retry` never fire.
+- `fornax-cloud/frontend/playwright.config.ts` — a second independent
+  product's own E2E suite.
+- `eridanus/tests/e2e/playwright.config.ts` (+ `playwright.compose.config.ts`)
+  — a Compose-backed E2E suite (`golden-path.compose.spec.ts`,
+  `investigator-ui.spec.ts`) exercising a real containerized deployment
+  shape.
+- `horonom-site/scripts/visual-qa/playwright.config.mjs` — a Design-QA-
+  shaped (not functional-E2E) visual capture script, the closest existing
+  precedent to this skill's own visual/first-impression dimension.
+
+None of these were authored as this Skill's own dogfood run, and none is
+yet invoked *through* `design-qa`'s structured verdict format — that
+integration (running one of these, or a new capture, through this skill's
+own PASS/FAIL/BLOCKED reporting contract) is still deferred to HORO-983's
+rollout scope. But the claim that Playwright is unused in this workspace
+was wrong; treat the commands below as generalizing real, currently-running
+patterns, not a hypothetical target shape.
 
 ## What Playwright is for here
 

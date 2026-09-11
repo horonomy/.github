@@ -37,6 +37,14 @@ backend service, library, SDK, or CLI with no rendered surface does not run
 Design QA — the absence of an invocation is itself the correct, truthful
 outcome, not a gap to fill.
 
+This "invoked-by-judgment" gating is a prose convention this skill and its
+callers follow, not something `agents/common/project_skills.py`'s
+`resolve_applicable_skills()` mechanically enforces — that function only
+distinguishes "has a manifest" (evidence-gated) from "has none" (always
+applicable to every projecting repo). A no-manifest skill is mechanically
+always-applicable; the judgment gate lives entirely in how `product-validation`
+and task instructions choose to invoke this skill, not in code.
+
 ## When to use
 
 - Invoked **by `product-validation`**, never run standalone as a
