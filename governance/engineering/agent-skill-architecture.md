@@ -121,7 +121,38 @@ implementation):
 | Swift | `Package.swift`, `.xcodeproj`/`.xcworkspace` |
 | Terraform | `*.tf` |
 | Container | `Dockerfile`, `docker-compose.yml` |
-| Product-experience | rendered product/docs surface, product metadata declaring a public surface |
+
+**Product-experience detection is deliberately explicit, not prose**, since
+two implementers reading only "a rendered surface exists" could reasonably
+build incompatible detectors — and `design-qa` must correctly resolve
+`NOT_APPLICABLE` for a non-visual repo, so a wrong-in-either-direction
+detector is a real correctness bug, not just an inconvenience. HORO-970
+implements applicability against these concrete signals, checked in order:
+
+1. **Explicit override always wins** — a repo/task declaring applicability
+   directly (§ "explicit safe overrides" above) short-circuits detection
+   entirely, in both directions.
+2. **Framework/build evidence for a rendered surface**: a frontend
+   framework dependency (e.g. React/Vue/Svelte/Next.js/Docusaurus in
+   `package.json`), a static-site generator config, or an iOS/native UI
+   target (`.xcodeproj`/`.xcworkspace` with a UI target, not a pure SwiftPM
+   library package) → `design-qa` applicable.
+3. **No such evidence** → `design-qa = NOT_APPLICABLE` by default. A CLI,
+   library, backend service, or SDK with no framework/UI-target evidence
+   does not get `design-qa` merely because it has *some* documentation or
+   a metadata entry.
+4. **`product-validation` and `documentation-experience` applicability is
+   broader and independent of #2/#3** — they apply to any repo with a
+   supported end-to-end user path and any repo with user-facing
+   documentation, respectively, whether or not that path/documentation
+   involves a rendered UI. A CLI with real docs and a real supported
+   command flow gets both, with `design-qa = NOT_APPLICABLE`.
+
+Company product metadata (`metadata/company.yaml`'s catalog, product
+registries) is corroborating evidence for *which* product a repo belongs
+to, never the primary applicability signal — a product being catalogued
+publicly says nothing about whether the specific repo being evaluated has
+a rendered surface.
 
 ### Worked composition examples
 
@@ -239,6 +270,19 @@ implementations of that requirement, swappable if a better tool emerges.
   product's *existing* visual/design constitution — it does not invent or
   impose one aesthetic across all products. Circinus does not need to look
   like Lifekin.
+- **Enforcement severity is pinned here, mechanism is HORO-982's scope.**
+  Per ADR-0005 decision #2 (non-waivable invariants are mechanically
+  enforced, not just declared), an org-boundary violation this contract
+  forbids — Horonom-governance adoption markers/content landing in an
+  `ai-agent-assembly/*` repo, or vice versa — is a **FAIL**, never a WARN,
+  in whichever doctor/CI check HORO-982 implements. This is a security/
+  governance-boundary defect, not a staleness warning, and must be
+  detectable and blocking from the moment HORO-982 ships. Until HORO-982
+  lands, `repo-bootstrap`'s existing remote/org resolution (it already
+  requires knowing the canonical remote — see ADR-0005 §1) is the interim
+  safeguard: it must not be invoked in Horonom-adoption mode against a
+  repo whose canonical remote isn't `horonomy/*`, and no other ticket in
+  this campaign may bypass that check to move faster.
 
 ## 8. Workspace-root portability
 
