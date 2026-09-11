@@ -132,14 +132,30 @@ class CrossOrgContaminationCheckTest(unittest.TestCase):
     """HORO-982: adopt/consume mode must match the repo's actual org."""
 
     def test_not_applicable_when_neither_marker_present(self) -> None:
-        result = checks.check_cross_org_contamination(_tmp_repo(), "horonomy")
+        result = checks.check_cross_org_contamination(_tmp_repo())
         self.assertEqual(result.status, checks.NOT_APPLICABLE)
+
+    def test_pass_for_a_real_consumed_ai_agent_assembly_repo_regardless_of_caller_expected_org(self) -> None:
+        """HORO-983 real dogfood found this exact bug live: checking a real
+        AI Agent Assembly repo with the honest `--expected-org
+        AI-agent-assembly` (as any real AA operator naturally would)
+        previously made `actual_org == expected_org` true and produced a
+        false FAIL, because the check used to compare against the
+        caller's `expected_org` instead of the fixed horonomy/non-horonomy
+        boundary. The function no longer takes `expected_org` at all —
+        this test doesn't pass one, proving the signature itself now
+        makes the bug unrepresentable, not just fixed by coincidence."""
+        repo = _tmp_repo()
+        (repo / checks.rb.CONSUMPTION_MARKER_FILENAME).write_text("org: AI-agent-assembly\n", encoding="utf-8")
+        with mock.patch.object(checks.rb, "resolve_org", return_value="AI-agent-assembly"):
+            result = checks.check_cross_org_contamination(repo)
+        self.assertEqual(result.status, checks.PASS)
 
     def test_fail_when_both_markers_present(self) -> None:
         repo = _tmp_repo()
         (repo / checks.rb.ADOPTION_MARKER_FILENAME).write_text("org: horonomy\n", encoding="utf-8")
         (repo / checks.rb.CONSUMPTION_MARKER_FILENAME).write_text("org: ai-agent-assembly\n", encoding="utf-8")
-        result = checks.check_cross_org_contamination(repo, "horonomy")
+        result = checks.check_cross_org_contamination(repo)
         self.assertEqual(result.status, checks.FAIL)
         self.assertIn("two distribution modes", result.detail)
 
@@ -148,7 +164,7 @@ class CrossOrgContaminationCheckTest(unittest.TestCase):
         (repo / checks.rb.ADOPTION_MARKER_FILENAME).write_text("org: horonomy\n", encoding="utf-8")
         fake = mock.Mock(returncode=0, stdout="origin\thttps://github.com/ai-agent-assembly/agent-assembly.git (fetch)\n")
         with mock.patch.object(checks.rb, "resolve_org", return_value="ai-agent-assembly"):
-            result = checks.check_cross_org_contamination(repo, "horonomy")
+            result = checks.check_cross_org_contamination(repo)
         self.assertEqual(result.status, checks.FAIL)
         self.assertIn("should have run", result.detail)
 
@@ -156,7 +172,7 @@ class CrossOrgContaminationCheckTest(unittest.TestCase):
         repo = _tmp_repo()
         (repo / checks.rb.CONSUMPTION_MARKER_FILENAME).write_text("org: horonomy\n", encoding="utf-8")
         with mock.patch.object(checks.rb, "resolve_org", return_value="horonomy"):
-            result = checks.check_cross_org_contamination(repo, "horonomy")
+            result = checks.check_cross_org_contamination(repo)
         self.assertEqual(result.status, checks.FAIL)
         self.assertIn("real Horonom repo", result.detail)
 
@@ -164,21 +180,21 @@ class CrossOrgContaminationCheckTest(unittest.TestCase):
         repo = _tmp_repo()
         (repo / checks.rb.ADOPTION_MARKER_FILENAME).write_text("org: horonomy\n", encoding="utf-8")
         with mock.patch.object(checks.rb, "resolve_org", return_value="horonomy"):
-            result = checks.check_cross_org_contamination(repo, "horonomy")
+            result = checks.check_cross_org_contamination(repo)
         self.assertEqual(result.status, checks.PASS)
 
     def test_pass_when_consumed_and_remote_is_not_horonomy(self) -> None:
         repo = _tmp_repo()
         (repo / checks.rb.CONSUMPTION_MARKER_FILENAME).write_text("org: ai-agent-assembly\n", encoding="utf-8")
         with mock.patch.object(checks.rb, "resolve_org", return_value="ai-agent-assembly"):
-            result = checks.check_cross_org_contamination(repo, "horonomy")
+            result = checks.check_cross_org_contamination(repo)
         self.assertEqual(result.status, checks.PASS)
 
     def test_warn_when_org_cannot_be_resolved(self) -> None:
         repo = _tmp_repo()
         (repo / checks.rb.ADOPTION_MARKER_FILENAME).write_text("org: horonomy\n", encoding="utf-8")
         with mock.patch.object(checks.rb, "resolve_org", return_value=None):
-            result = checks.check_cross_org_contamination(repo, "horonomy")
+            result = checks.check_cross_org_contamination(repo)
         self.assertEqual(result.status, checks.WARN)
 
 
