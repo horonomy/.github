@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -360,28 +361,103 @@ def adopt(
     # an adopted repo gets the same shared-skill content Claude/Codex read
     # from horonomy/.github itself, never a second hand-copied
     # implementation (HORO-509/ADR-0005 decision #6).
-    skill_projections = project_skills.build_projections(dest_root=repo)
+    #
+    # HORO-982: filtered to `applicable` (resolve_applicable_skills(repo))
+    # rather than the full catalog — "every repo receives every skill" is
+    # a forbidden shortcut (HORO-969 §3), and this was the one remaining
+    # AC gap left open across the ticket's first two PRs specifically
+    # because filtering an already-established unfiltered projection for
+    # every already-adopted horonomy repo is a real behavior change that
+    # needs matching orphan-removal, not just a filter added in isolation
+    # (see the orphan-removal block below). Also now includes asset
+    # projection (build_asset_projections) — adopt() previously projected
+    # SKILL.md only, never references/examples/scripts/tests, unlike
+    # consume() which got both from the start.
+    applicable = project_skills.resolve_applicable_skills(repo)
+    skill_projections: dict[Path, bytes] = {
+        path: content.encode("utf-8")
+        for path, content in project_skills.build_projections(dest_root=repo, applicable_only=applicable).items()
+    }
+    for path, content in project_skills.build_asset_projections(dest_root=repo, applicable_only=applicable).items():
+        if path in skill_projections:
+            raise AdoptionError(f"asset projection collides with a SKILL.md projection path: {path}")
+        skill_projections[path] = content
+
     skill_outcomes = {"written": 0, "unchanged": 0, "skipped-conflict": 0}
     for path, content in skill_projections.items():
         _reject_unsafe_symlink(path, repo=repo)
         if path.exists():
-            current = path.read_text(encoding="utf-8", errors="replace")
+            current = path.read_bytes()
             if current == content:
                 skill_outcomes["unchanged"] += 1
                 continue
-            if not current.startswith(project_skills.GENERATED_MARKER):
+            if not current.startswith(project_skills.GENERATED_MARKER.encode("utf-8")):
                 skill_outcomes["skipped-conflict"] += 1
                 continue
         if not dry_run:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
+            path.write_bytes(content)
         skill_outcomes["written"] += 1
+
+    orphaned = _remove_inapplicable_skill_projections(repo, applicable=applicable, dry_run=dry_run)
     outcomes["skills"] = (
+        f"{len(applicable)} applicable ({', '.join(sorted(applicable)) or 'none'}); "
         f"{skill_outcomes['written']} {write_verb}, {skill_outcomes['unchanged']} unchanged"
         + (f", {skill_outcomes['skipped-conflict']} skipped-conflict" if skill_outcomes["skipped-conflict"] else "")
+        + (f", {orphaned} removed (no longer applicable)" if orphaned else "")
     )
 
     return outcomes
+
+
+def _remove_inapplicable_skill_projections(repo: Path, *, applicable: list[str], dry_run: bool) -> int:
+    """Removes a previously-projected skill's `.claude/skills/<name>/` tree
+    and `.codex/skills/<name>.md` when that skill is no longer in
+    `applicable` — the counterpart to filtering `build_projections()`/
+    `build_asset_projections()` above: without this, an already-adopted
+    repo would accumulate dead skill content forever every time its
+    applicable set shrinks (a stack removed, a dependency dropped),
+    exactly the "stale shared skills" drift HORO-982's doctor AC asks to
+    be detected, self-inflicted by this tool if left unremoved.
+
+    Only ever removes a skill whose `.claude/skills/<name>/SKILL.md` is
+    either absent or still carries the generated-provenance marker — the
+    same "generated-ness of the whole tree" invariant `project_skills.py`
+    already establishes for its own self-projection (a skill's projected
+    subtree is either fully generated or the operator never hand-edits
+    inside it) means checking the one marker-bearing file is sufficient
+    to know the whole tree is safe to remove; a hand-edited SKILL.md
+    (skipped-conflict) makes this function leave that skill's entire
+    projected tree untouched, never partially deleting around it.
+    Returns the count of skills actually removed (or that would be, under
+    `dry_run`)."""
+    try:
+        canonical_names = set(project_skills.discover_skills())
+    except project_skills.SkillProjectionError:
+        return 0  # can't safely determine orphans without a healthy canonical skill set
+    now_inapplicable = canonical_names - set(applicable)
+    removed = 0
+    for name in sorted(now_inapplicable):
+        claude_skill_md = repo / ".claude" / "skills" / name / "SKILL.md"
+        codex_skill_md = repo / ".codex" / "skills" / f"{name}.md"
+        if claude_skill_md.is_file():
+            _reject_unsafe_symlink(claude_skill_md, repo=repo)
+            current = claude_skill_md.read_text(encoding="utf-8", errors="replace")
+            if not current.startswith(project_skills.GENERATED_MARKER):
+                continue  # hand-edited — leave this skill's whole tree alone
+        elif not (repo / ".claude" / "skills" / name).is_dir() and not codex_skill_md.exists():
+            continue  # nothing projected for this skill here at all
+        removed += 1
+        if dry_run:
+            continue
+        claude_skill_dir = repo / ".claude" / "skills" / name
+        if claude_skill_dir.is_dir():
+            _reject_unsafe_symlink(claude_skill_dir, repo=repo)
+            shutil.rmtree(claude_skill_dir)
+        if codex_skill_md.is_file():
+            _reject_unsafe_symlink(codex_skill_md, repo=repo)
+            codex_skill_md.unlink()
+    return removed
 
 
 # ---------------------------------------------------------------------------
