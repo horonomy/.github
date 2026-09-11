@@ -11,18 +11,21 @@ hero content alone, without scrolling or clicking.
 
 ## The plausible product
 
-`Circinus` — a hypothetical Horonom-style product: a policy engine that
-lets teams define and enforce data-residency rules across cloud
-deployments.
+`Meridian Guard` — a purely fictional, illustrative product name, not any
+real Horonom catalog product (see `metadata/company.yaml` for the real
+catalog): a hypothetical policy engine that lets teams define and enforce
+data-residency rules across cloud deployments. Everything below —
+architecture, capability, maturity state — is invented for this example
+and describes no real product's actual state.
 
 ## Before — fails the heuristic
 
 ```markdown
-# Circinus
+# Meridian Guard
 
 ## Architecture
 
-Circinus is built on a declarative constraint-satisfaction engine backed
+Meridian Guard is built on a declarative constraint-satisfaction engine backed
 by a distributed consensus layer (Raft-based) for policy-state
 replication across regions. The core evaluator compiles residency
 constraints into a directed acyclic graph of predicate nodes, which are
@@ -30,7 +33,7 @@ evaluated lazily against a live topology snapshot pulled from each cloud
 provider's control plane via provider-specific adapters (currently AWS,
 GCP; Azure adapter in development).
 
-Circinus exposes a gRPC API for policy submission and a REST gateway for
+Meridian Guard exposes a gRPC API for policy submission and a REST gateway for
 dashboard consumers. Policies are versioned and stored in an append-only
 log, enabling point-in-time audit reconstruction.
 
@@ -55,7 +58,7 @@ Applying the four questions:
   marketing homepage exists to convert.
 - **Next action?** Three links of roughly equal visual weight (API
   Reference, Architecture Diagram, GitHub) with no primary CTA — a reader
-  who doesn't already know Circinus has no obvious first click.
+  who doesn't already know Meridian Guard has no obvious first click.
 
 This is a textbook case of leading with internal architecture and jargon
 instead of problem/outcome — exactly what
@@ -68,7 +71,7 @@ do on a homepage, and precisely the content that belongs at Layer 2
 ```markdown
 # Keep your data where it's supposed to be.
 
-Circinus enforces data-residency rules automatically across every cloud
+Meridian Guard enforces data-residency rules automatically across every cloud
 region your team deploys to — so a policy violation gets blocked before
 it ships, not discovered in an audit six months later.
 
