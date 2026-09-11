@@ -232,14 +232,33 @@ def check_repo_adoption(repo: Path) -> CheckResult:
     )
 
 
-def check_cross_org_contamination(repo: Path, expected_org: str) -> CheckResult:
+def check_cross_org_contamination(repo: Path) -> CheckResult:
     """HORO-982: catches a repo that ended up in the wrong distribution
     mode — `adopt`'s Horonom governance block landed in a non-Horonom repo,
     `consume`'s narrower skill-only projection landed in an actual
     `horonomy` repo, or (a state neither CLI path should ever produce
     without `--force`) both markers are present at once. Bounded to the
     two marker files' own recorded `org` field plus a real `git remote -v`
-    read — no broader repo content is inspected."""
+    read — no broader repo content is inspected.
+
+    Independent review (HORO-983 real dogfood, first-ever real `consume`
+    run against an actual `ai-agent-assembly/*` repo) found a real bug:
+    this check used to take a caller-supplied `expected_org` and compare
+    the repo's actual org against IT for the adopt/consume mismatch logic
+    — but `expected_org` means "the org I expect *this specific repo* to
+    belong to" everywhere else in doctor.py (see `check_remote_sanity`),
+    which is a different question from "is this repo's mode the horonomy
+    one or not." Checking a real AA repo with the correct, honest
+    `--expected-org AI-agent-assembly` (as any real AA operator naturally
+    would) made `actual_org == expected_org` true for a correctly-
+    consumed repo and produced a false FAIL — reproduced live before this
+    fix. Cross-org contamination is always about the horonomy/non-horonomy
+    boundary specifically (the same boundary `adopt()`/`consume()`
+    themselves gate on via `rb.HORONOMY_ORG`), never about whatever org
+    the operator happens to be verifying identity against — so this check
+    no longer takes `expected_org` at all, and compares against
+    `rb.HORONOMY_ORG` directly, matching `adopt()`/`consume()`'s own
+    guards exactly."""
     has_adoption = (repo / rb.ADOPTION_MARKER_FILENAME).is_file()
     has_consumption = (repo / rb.CONSUMPTION_MARKER_FILENAME).is_file()
 
@@ -262,21 +281,21 @@ def check_cross_org_contamination(repo: Path, expected_org: str) -> CheckResult:
             "cross_org_contamination", WARN, "could not resolve the repo's org from its remote", fix="confirm with `git remote -v`"
         )
 
-    if has_adoption and actual_org != expected_org:
+    if has_adoption and actual_org != rb.HORONOMY_ORG:
         return CheckResult(
             "cross_org_contamination",
             FAIL,
             f"{rb.ADOPTION_MARKER_FILENAME} present (full Horonom governance adopted) but the repo's "
-            f"remote resolves to org '{actual_org}', not '{expected_org}' — this repo should have run "
+            f"remote resolves to org '{actual_org}', not '{rb.HORONOMY_ORG}' — this repo should have run "
             f"`consume`, not `adopt`",
             fix=f"run `scripts/repo_bootstrap.py consume` here instead, after removing {rb.ADOPTION_MARKER_FILENAME} and the CLAUDE.md/AGENTS.md adoption block",
         )
-    if has_consumption and actual_org == expected_org:
+    if has_consumption and actual_org == rb.HORONOMY_ORG:
         return CheckResult(
             "cross_org_contamination",
             FAIL,
             f"{rb.CONSUMPTION_MARKER_FILENAME} present (skill-only consumption) but the repo's remote "
-            f"resolves to org '{expected_org}' — a real Horonom repo should run `adopt`, not `consume`, "
+            f"resolves to org '{rb.HORONOMY_ORG}' — a real Horonom repo should run `adopt`, not `consume`, "
             f"to get full governance",
             fix=f"run `scripts/repo_bootstrap.py adopt` here instead, after removing {rb.CONSUMPTION_MARKER_FILENAME}",
         )
