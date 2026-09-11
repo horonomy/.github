@@ -377,11 +377,26 @@ def adopt(
         path: content.encode("utf-8")
         for path, content in project_skills.build_projections(dest_root=repo, applicable_only=applicable).items()
     }
+    asset_paths: set[Path] = set()
     for path, content in project_skills.build_asset_projections(dest_root=repo, applicable_only=applicable).items():
         if path in skill_projections:
             raise AdoptionError(f"asset projection collides with a SKILL.md projection path: {path}")
         skill_projections[path] = content
+        asset_paths.add(path)
 
+    # Independent review (HORO-983 real dogfood against horonomy/GearMeshing-AI):
+    # found a real bug — asset files (build_asset_projections' scripts/
+    # references/examples/tests) never carry GENERATED_MARKER (a script
+    # can't start with an HTML comment without corrupting it — see that
+    # function's own docstring), so the marker-gated collision check below
+    # treated every content-changed asset file as "hand-authored" on every
+    # re-adopt, even when nothing was ever hand-edited. A real upstream fix
+    # to a vendored skill script (e.g. this same ticket's repo-scaffold
+    # lint fix) could never propagate to an already-adopted repo. Asset
+    # files use unconditional overwrite-on-drift instead, matching
+    # build_asset_projections()'s own documented invariant that "the
+    # generated-ness of the whole .claude/skills/<name>/ tree" — not a
+    # per-file marker — is what makes it safe to regenerate.
     skill_outcomes = {"written": 0, "unchanged": 0, "skipped-conflict": 0}
     for path, content in skill_projections.items():
         _reject_unsafe_symlink(path, repo=repo)
@@ -390,7 +405,7 @@ def adopt(
             if current == content:
                 skill_outcomes["unchanged"] += 1
                 continue
-            if not current.startswith(project_skills.GENERATED_MARKER.encode("utf-8")):
+            if path not in asset_paths and not current.startswith(project_skills.GENERATED_MARKER.encode("utf-8")):
                 skill_outcomes["skipped-conflict"] += 1
                 continue
         if not dry_run:
@@ -645,11 +660,17 @@ def consume(
         path: content.encode("utf-8")
         for path, content in project_skills.build_projections(dest_root=repo, applicable_only=applicable).items()
     }
+    asset_paths: set[Path] = set()
     for path, content in project_skills.build_asset_projections(dest_root=repo, applicable_only=applicable).items():
         if path in projections:
             raise AdoptionError(f"asset projection collides with a SKILL.md projection path: {path}")
         projections[path] = content
+        asset_paths.add(path)
 
+    # See the matching fix + comment in adopt() (HORO-983 real dogfood,
+    # horonomy/GearMeshing-AI): asset files never carry GENERATED_MARKER,
+    # so they need unconditional overwrite-on-drift, not the marker-gated
+    # collision check that only makes sense for SKILL.md's own projection.
     skill_outcomes = {"written": 0, "unchanged": 0, "skipped-conflict": 0}
     for path, content in projections.items():
         _reject_unsafe_symlink(path, repo=repo)
@@ -658,7 +679,7 @@ def consume(
             if current == content:
                 skill_outcomes["unchanged"] += 1
                 continue
-            if not current.startswith(project_skills.GENERATED_MARKER.encode("utf-8")):
+            if path not in asset_paths and not current.startswith(project_skills.GENERATED_MARKER.encode("utf-8")):
                 skill_outcomes["skipped-conflict"] += 1
                 continue
         if not dry_run:
