@@ -332,9 +332,12 @@ def _dependabot_config(profile: Profile) -> str:
         "python": "pip",
         "typescript": "npm",
         "go": "gomod",
-        "swift": "swift",  # noqa: no native Dependabot ecosystem today; documented as best-effort
         "terraform": "terraform",
         "container": "docker",
+        # No "swift" entry: GitHub Dependabot has no swift package-ecosystem
+        # value — emitting one would produce a config GitHub rejects. A
+        # Swift-stack repo gets no Dependabot ecosystem entry for it until
+        # GitHub adds real support, same as terraform/shell get none today.
     }
     ecosystems = sorted({eco[s] for s in profile.stacks if s in eco})
     ecosystems.append("github-actions")
