@@ -89,15 +89,41 @@ def discover_repos(root: Path) -> list[Path]:
     """Direct children of `root` that are real git checkouts (a `.git`
     entry present, file or directory — see `is_worktree`). A missing root
     yields an empty list rather than an error: a not-yet-cloned root is a
-    legitimate, common state, not a failure."""
+    legitimate, common state, not a failure.
+
+    Independent review (HORO-982): `child.is_dir()`/`(child/".git").exists()`
+    both follow symlinks, and neither checked the child actually resolves
+    inside `root`. A symlinked child directory (accidental, or a stray
+    link planted inside a configured root) was reachable by `discover_repos`
+    and got passed straight to `rb.adopt()`/`rb.consume()`, which then
+    wrote real governance/skill content through the link — reproduced
+    live before this fix: a `root/symlinked-repo -> /elsewhere` link
+    caused `.horonom-adoption.yaml`/`AGENTS.md`/`CLAUDE.md`/skill files to
+    be written into `/elsewhere`, physically outside the configured root,
+    directly contradicting this module's own "avoid broad filesystem
+    scanning outside configured roots" invariant. A symlinked `.git` entry
+    inside an otherwise-real child directory is rejected the same way —
+    `resolved.relative_to(root)` catches both the child-itself-is-a-link
+    case and the child-is-real-but-.git-is-a-link case, since either one
+    makes the *content* discover_repos would act on live somewhere other
+    than what `root.iterdir()` actually listed."""
     if not root.is_dir():
         return []
+    resolved_root = root.resolve()
     found = []
     for child in sorted(root.iterdir()):
+        if child.is_symlink():
+            continue
         if not child.is_dir():
             continue
-        if (child / ".git").exists():
-            found.append(child)
+        git_entry = child / ".git"
+        if git_entry.is_symlink() or not git_entry.exists():
+            continue
+        try:
+            child.resolve().relative_to(resolved_root)
+        except ValueError:
+            continue  # child resolves outside root — never discoverable
+        found.append(child)
     return found
 
 
@@ -161,7 +187,7 @@ def _map_outcome(result: dict) -> str:
     if any("skipped-conflict" in str(v) for v in result.values()):
         return DEFERRED
     for key in ("claude_md", "agents_md"):
-        if result.get(key) in ("written", "created", "would-write"):
+        if result.get(key) in ("written", "created", "would-write", "would-create"):
             return UPDATED
     skills_value = result.get("skills")
     if isinstance(skills_value, str):

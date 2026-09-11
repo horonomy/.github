@@ -306,6 +306,19 @@ def adopt(
 
     outcomes: dict[str, str] = {}
 
+    # Independent review (HORO-982, PR #44): every branch below used to
+    # emit the same past-tense verb ("written"/"created") regardless of
+    # dry_run — consume() was fixed for this earlier in the same ticket
+    # ("a dry run must never claim 'written'"), but adopt() never got the
+    # matching treatment. Live-checked: `plan` (dry_run=True) against a
+    # fresh repo reported {"adoption_marker": "written", "agents_md":
+    # "created", ...} while confirming on disk nothing was created —
+    # indistinguishable from a real apply to anyone reading the JSON.
+    # `would-write`/`would-create` only under dry_run; real past tense
+    # only for an actual write.
+    write_verb = "would-write" if dry_run else "written"
+    create_verb = "would-create" if dry_run else "created"
+
     claude_path = find_claude_md(repo)
     _reject_unsafe_symlink(claude_path, repo=repo)
     block = render_adoption_block(org=org, repo=repo_name, governance_version=governance_version)
@@ -317,7 +330,7 @@ def adopt(
         if not dry_run:
             claude_path.parent.mkdir(parents=True, exist_ok=True)
             claude_path.write_text(new_content, encoding="utf-8")
-        outcomes["claude_md"] = "written" if existing else "created"
+        outcomes["claude_md"] = write_verb if existing else create_verb
 
     agents_path = repo / "AGENTS.md"
     _reject_unsafe_symlink(agents_path, repo=repo)
@@ -325,7 +338,7 @@ def adopt(
         current = agents_path.read_text(encoding="utf-8")
         if current.startswith(AGENTS_MARKER):
             expected = render_agents_md()
-            outcomes["agents_md"] = "unchanged" if current == expected else "written"
+            outcomes["agents_md"] = "unchanged" if current == expected else write_verb
             if current != expected and not dry_run:
                 agents_path.write_text(expected, encoding="utf-8")
         else:
@@ -333,14 +346,14 @@ def adopt(
     else:
         if not dry_run:
             agents_path.write_text(render_agents_md(), encoding="utf-8")
-        outcomes["agents_md"] = "created"
+        outcomes["agents_md"] = create_verb
 
     marker_path = repo / ADOPTION_MARKER_FILENAME
     _reject_unsafe_symlink(marker_path, repo=repo)
     marker_content = render_adoption_marker(org=org, repo=repo_name, governance_version=governance_version, adopted_at=adopted_at)
     if not dry_run:
         marker_path.write_text(marker_content, encoding="utf-8")
-    outcomes["adoption_marker"] = "written"
+    outcomes["adoption_marker"] = write_verb
 
     # Project this repo's canonical agents/skills/ into the target repo's
     # own .claude/skills/ + .codex/skills/ — the cross-repo half of HORO-507:
@@ -364,7 +377,7 @@ def adopt(
             path.write_text(content, encoding="utf-8")
         skill_outcomes["written"] += 1
     outcomes["skills"] = (
-        f"{skill_outcomes['written']} written, {skill_outcomes['unchanged']} unchanged"
+        f"{skill_outcomes['written']} {write_verb}, {skill_outcomes['unchanged']} unchanged"
         + (f", {skill_outcomes['skipped-conflict']} skipped-conflict" if skill_outcomes["skipped-conflict"] else "")
     )
 
