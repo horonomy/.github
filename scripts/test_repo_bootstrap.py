@@ -397,17 +397,23 @@ class CrossRepoSkillProjectionTest(unittest.TestCase):
     def tearDown(self) -> None:
         self._patch.stop()
 
-    def test_adopt_projects_all_canonical_skills_into_target_repo(self) -> None:
+    def test_adopt_projects_only_applicable_canonical_skills(self) -> None:
+        """HORO-982: adopt() used to project the full unfiltered catalog
+        into every repo regardless of stack — a bare repo with no stack
+        evidence now correctly receives only the always-applicable
+        (no-manifest, non-design-qa) subset, matching
+        resolve_applicable_skills()'s own evidence-based decision."""
         rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
         claude_skills = sorted(p.parent.name for p in (self.repo / ".claude" / "skills").glob("*/SKILL.md"))
         codex_skills = sorted(p.stem for p in (self.repo / ".codex" / "skills").glob("*.md"))
-        canonical = sorted(rb.project_skills.discover_skills())
-        self.assertEqual(claude_skills, canonical)
-        self.assertEqual(codex_skills, canonical)
+        applicable = sorted(rb.project_skills.resolve_applicable_skills(self.repo))
+        self.assertEqual(claude_skills, applicable)
+        self.assertEqual(codex_skills, applicable)
+        self.assertLess(len(applicable), len(rb.project_skills.discover_skills()))  # a real, non-trivial filter
 
     def test_projected_skill_matches_canonical_content(self) -> None:
         rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
-        name = rb.project_skills.discover_skills()[0]
+        name = rb.project_skills.resolve_applicable_skills(self.repo)[0]
         canonical = (rb.project_skills.SKILLS_DIR / name / "SKILL.md").read_text(encoding="utf-8")
         projected = (self.repo / ".claude" / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn(canonical, projected)
@@ -416,15 +422,65 @@ class CrossRepoSkillProjectionTest(unittest.TestCase):
     def test_reports_skills_outcome(self) -> None:
         outcomes = rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
         self.assertIn("written", outcomes["skills"])
+        self.assertIn("applicable", outcomes["skills"])
 
     def test_never_overwrites_a_hand_edited_projected_skill(self) -> None:
         rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
-        name = rb.project_skills.discover_skills()[0]
+        name = rb.project_skills.resolve_applicable_skills(self.repo)[0]
         target = self.repo / ".claude" / "skills" / name / "SKILL.md"
         target.write_text("hand-edited, no marker\n", encoding="utf-8")
         outcomes = rb.adopt(self.repo, org="horonomy", force=True, now="2026-01-01T00:00:01+00:00")
         self.assertIn("skipped-conflict", outcomes["skills"])
         self.assertEqual(target.read_text(), "hand-edited, no marker\n")
+
+    def test_adopt_also_projects_applicable_skill_assets(self) -> None:
+        """HORO-982: adopt() previously projected SKILL.md only, never the
+        references/examples/scripts/tests assets consume() already got."""
+        repo = _tmp_git_repo()
+        (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")  # real stack evidence -> rust-development
+        rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        canonical_assets = rb.project_skills.discover_skill_assets("rust-development")
+        if not canonical_assets:
+            self.skipTest("rust-development currently has no asset files to verify against")
+        for rel_path in canonical_assets:
+            self.assertTrue((repo / ".claude" / "skills" / "rust-development" / rel_path).is_file())
+
+    def test_readopt_removes_now_inapplicable_skill_projection(self) -> None:
+        """The counterpart to filtering: a repo whose applicable set
+        shrinks (e.g. Cargo.toml removed) must lose that skill's projected
+        files on the next adopt, never accumulate stale dead content."""
+        repo = _tmp_git_repo()
+        (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+        rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        self.assertTrue((repo / ".claude" / "skills" / "rust-development").is_dir())
+        (repo / "Cargo.toml").unlink()
+
+        outcomes = rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:01+00:00")
+        self.assertFalse((repo / ".claude" / "skills" / "rust-development").exists())
+        self.assertFalse((repo / ".codex" / "skills" / "rust-development.md").exists())
+        self.assertIn("removed", outcomes["skills"])
+
+    def test_readopt_never_removes_a_hand_edited_now_inapplicable_skill(self) -> None:
+        repo = _tmp_git_repo()
+        (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+        rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        skill_md = repo / ".claude" / "skills" / "rust-development" / "SKILL.md"
+        skill_md.write_text("hand-edited, no marker\n", encoding="utf-8")
+        (repo / "Cargo.toml").unlink()
+
+        rb.adopt(repo, org="horonomy", force=True, now="2026-01-01T00:00:01+00:00")
+        self.assertTrue(skill_md.is_file())
+        self.assertEqual(skill_md.read_text(), "hand-edited, no marker\n")
+
+    def test_dry_run_orphan_removal_removes_nothing(self) -> None:
+        repo = _tmp_git_repo()
+        (repo / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+        rb.adopt(repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        (repo / "Cargo.toml").unlink()
+
+        outcomes = rb.adopt(repo, org="horonomy", dry_run=True, now="2026-01-01T00:00:01+00:00")
+        self.assertTrue((repo / ".claude" / "skills" / "rust-development").is_dir())
+        self.assertIn("removed", outcomes["skills"])  # reports what WOULD be removed
 
 
 class AdoptPreservesRepoSpecificContentTest(unittest.TestCase):
