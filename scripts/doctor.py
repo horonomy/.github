@@ -87,6 +87,7 @@ def run_checks(
         results.append(checks.check_claude_entrypoint_present(repo))
         results.append(checks.check_remote_sanity(repo, expected_org))
         results.append(checks.check_cross_org_contamination(repo, expected_org))
+        results.append(checks.check_applicability_drift(repo))
         generated_targets = [
             repo / ".codex" / "config.toml",
             *((repo / ".claude" / "skills").glob("*/SKILL.md") if (repo / ".claude" / "skills").is_dir() else []),
