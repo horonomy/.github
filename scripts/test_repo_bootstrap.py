@@ -7,6 +7,7 @@ Stdlib unittest only. Run with:
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 import tempfile
 import unittest
@@ -28,6 +29,23 @@ def _clean_git(repo: Path):
 
 def _fake_clean_git(clean: bool):
     return lambda args: mock.Mock(returncode=0, stdout="" if clean else " M file\n")
+
+
+def _fake_remote_git(remote_stdout: str):
+    """A run_git fake that reports a clean `git status` and the given
+    `git remote -v` output — so a test can control what org resolve_org()
+    sees without also (accidentally, since a single-response Mock answers
+    every call identically) making _git_status_clean() see remote-shaped
+    text as an uncommitted change."""
+
+    def run(args):
+        if args and args[0] == "status":
+            return mock.Mock(returncode=0, stdout="")
+        if args and args[0] == "remote":
+            return mock.Mock(returncode=0, stdout=remote_stdout)
+        return mock.Mock(returncode=0, stdout="")
+
+    return run
 
 
 class ResolveRepoNameTest(unittest.TestCase):
@@ -245,6 +263,116 @@ class AdoptSymlinkGuardTest(unittest.TestCase):
         self.assertTrue((self.repo / "AGENTS.md").is_symlink())
 
 
+class ResolveOrgTest(unittest.TestCase):
+    def test_resolves_org_from_remote(self) -> None:
+        fake = mock.Mock(returncode=0, stdout="origin\thttps://github.com/ai-agent-assembly/agent-assembly.git (fetch)\n")
+        self.assertEqual(rb.resolve_org(Path("/x"), run_git=lambda args: fake), "ai-agent-assembly")
+
+    def test_none_when_no_remote(self) -> None:
+        fake = mock.Mock(returncode=0, stdout="")
+        self.assertIsNone(rb.resolve_org(Path("/x"), run_git=lambda args: fake))
+
+    def test_none_when_git_fails(self) -> None:
+        fake = mock.Mock(returncode=128, stdout="")
+        self.assertIsNone(rb.resolve_org(Path("/x"), run_git=lambda args: fake))
+
+
+class ConsumeTest(unittest.TestCase):
+    """HORO-982: `consume` is the narrower, non-Horonom-repo counterpart of
+    `adopt` — applicable-filtered skill projection only, no CLAUDE.md/
+    AGENTS.md governance block, no cross-contamination with `adopt`'s own
+    marker."""
+
+    def setUp(self) -> None:
+        self.repo = _tmp_git_repo()  # real git repo, no remote configured
+        self._patch = mock.patch.object(rb.hw, "load_governance_version", return_value=1)
+        self._patch.start()
+
+    def tearDown(self) -> None:
+        self._patch.stop()
+
+    def test_consume_writes_only_marker_and_skills_no_governance_files(self) -> None:
+        outcomes = rb.consume(self.repo, now="2026-01-01T00:00:00+00:00")
+        self.assertTrue((self.repo / rb.CONSUMPTION_MARKER_FILENAME).is_file())
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+        self.assertFalse((self.repo / ".claude" / "CLAUDE.md").exists())
+        self.assertFalse((self.repo / rb.ADOPTION_MARKER_FILENAME).exists())
+        self.assertIn("written", outcomes["consumption_marker"])
+
+    def test_consume_projects_only_applicable_skills(self) -> None:
+        rb.consume(self.repo, now="2026-01-01T00:00:00+00:00")
+        applicable = set(rb.project_skills.resolve_applicable_skills(self.repo))
+        projected = {p.parent.name for p in (self.repo / ".claude" / "skills").glob("*/SKILL.md")}
+        self.assertEqual(projected, applicable)
+
+    def test_consume_refuses_a_real_horonomy_repo_without_force(self) -> None:
+        # The guard keys off the repo's actual remote (see
+        # test_org_override_does_not_bypass_horonomy_guard), not the --org
+        # value, so a real horonomy remote is required to exercise it here.
+        run_git = _fake_remote_git("origin\thttps://github.com/horonomy/.github.git (fetch)\n")
+        with self.assertRaises(rb.AdoptionError):
+            rb.consume(self.repo, run_git=run_git, now="2026-01-01T00:00:00+00:00")
+        self.assertFalse((self.repo / rb.CONSUMPTION_MARKER_FILENAME).exists())
+
+    def test_consume_allows_horonomy_repo_with_force(self) -> None:
+        run_git = _fake_remote_git("origin\thttps://github.com/horonomy/.github.git (fetch)\n")
+        outcomes = rb.consume(self.repo, force=True, run_git=run_git, now="2026-01-01T00:00:00+00:00")
+        self.assertIn("written", outcomes["consumption_marker"])
+
+    def test_org_override_does_not_bypass_horonomy_guard(self) -> None:
+        """Independent review finding: passing --org must not silently talk
+        the safety check out of looking at the repo's real remote."""
+        run_git = _fake_remote_git("origin\thttps://github.com/horonomy/.github.git (fetch)\n")
+        with self.assertRaises(rb.AdoptionError):
+            rb.consume(self.repo, org="ai-agent-assembly", run_git=run_git, now="2026-01-01T00:00:00+00:00")
+        self.assertFalse((self.repo / rb.CONSUMPTION_MARKER_FILENAME).exists())
+
+    def test_org_override_bypass_still_possible_with_force(self) -> None:
+        run_git = _fake_remote_git("origin\thttps://github.com/horonomy/.github.git (fetch)\n")
+        outcomes = rb.consume(
+            self.repo, org="ai-agent-assembly", force=True, run_git=run_git, now="2026-01-01T00:00:00+00:00"
+        )
+        self.assertIn("written", outcomes["consumption_marker"])
+
+    def test_dry_run_reports_would_write_not_written(self) -> None:
+        outcomes = rb.consume(self.repo, org="ai-agent-assembly", dry_run=True, now="2026-01-01T00:00:00+00:00")
+        self.assertEqual(outcomes["consumption_marker"], "would-write")
+        self.assertIn("would-write", outcomes["skills"])
+        self.assertNotIn(" written", outcomes["skills"])
+
+    def test_consume_refuses_when_already_adopted(self) -> None:
+        rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:00+00:00")
+        with self.assertRaises(rb.AdoptionError):
+            rb.consume(self.repo, org="ai-agent-assembly", now="2026-01-01T00:00:01+00:00")
+
+    def test_adopt_refuses_when_already_consumed(self) -> None:
+        rb.consume(self.repo, org="ai-agent-assembly", now="2026-01-01T00:00:00+00:00")
+        with self.assertRaises(rb.AdoptionError):
+            rb.adopt(self.repo, org="horonomy", now="2026-01-01T00:00:01+00:00")
+
+    def test_dry_run_writes_nothing(self) -> None:
+        rb.consume(self.repo, org="ai-agent-assembly", dry_run=True, now="2026-01-01T00:00:00+00:00")
+        self.assertFalse((self.repo / rb.CONSUMPTION_MARKER_FILENAME).exists())
+        self.assertEqual(list((self.repo).glob(".claude/skills/*")), [])
+
+    def test_consume_is_idempotent(self) -> None:
+        rb.consume(self.repo, org="ai-agent-assembly", now="2026-01-01T00:00:00+00:00")
+        outcomes = rb.consume(self.repo, org="ai-agent-assembly", now="2026-01-01T00:00:01+00:00")
+        self.assertIn("unchanged", outcomes["skills"])
+
+    def test_check_consumption_passes_after_fresh_consume(self) -> None:
+        rb.consume(self.repo, org="ai-agent-assembly", now="2026-01-01T00:00:00+00:00")
+        results = rb.check_consumption(self.repo, expected_governance_version=1)
+        statuses = {name: status for name, status, _ in results}
+        self.assertEqual(statuses["consumption_marker"], "PASS")
+        self.assertEqual(statuses["consumption_skills"], "PASS")
+
+    def test_check_consumption_not_applicable_when_never_consumed(self) -> None:
+        results = rb.check_consumption(self.repo)
+        statuses = {name: status for name, status, _ in results}
+        self.assertEqual(statuses["consumption_marker"], "NOT_APPLICABLE")
+
+
 class CrossRepoSkillProjectionTest(unittest.TestCase):
     """HORO-507: an adopted repo gets the same canonical skill content
     Claude/Codex read from horonomy/.github itself — never a second
@@ -386,6 +514,27 @@ class MainCLIIntegrationTest(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             exit_code = rb.main(["check", str(repo)])
             self.assertEqual(exit_code, 0)
+
+    def test_consume_then_check_end_to_end(self) -> None:
+        repo = _tmp_git_repo()
+        with mock.patch.object(rb.hw, "load_governance_version", return_value=1):
+            exit_code = rb.main(["consume", str(repo), "--org", "ai-agent-assembly"])
+            self.assertEqual(exit_code, 0)
+            exit_code = rb.main(["check", str(repo)])
+            self.assertEqual(exit_code, 0)
+
+    def test_check_reports_both_blocks_when_both_markers_present(self) -> None:
+        """Independent review finding: `check` used to silently report only
+        one mode's drift when both markers were present at once."""
+        repo = _tmp_git_repo()
+        with mock.patch.object(rb.hw, "load_governance_version", return_value=1):
+            rb.main(["adopt", str(repo), "--org", "horonomy"])
+            rb.main(["consume", str(repo), "--org", "ai-agent-assembly", "--force"])
+            results = rb.check_consumption(repo)  # sanity: consumption marker really was written
+            self.assertTrue((repo / rb.CONSUMPTION_MARKER_FILENAME).is_file())
+            self.assertTrue((repo / rb.ADOPTION_MARKER_FILENAME).is_file())
+            exit_code = rb._cmd_check(argparse.Namespace(repo=str(repo)))
+        self.assertEqual(exit_code, 1)  # both-present is a FAIL, not silently PASS
 
 
 if __name__ == "__main__":

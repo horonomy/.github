@@ -128,6 +128,60 @@ class RemoteSanityTest(unittest.TestCase):
         self.assertEqual(result.status, checks.WARN)
 
 
+class CrossOrgContaminationCheckTest(unittest.TestCase):
+    """HORO-982: adopt/consume mode must match the repo's actual org."""
+
+    def test_not_applicable_when_neither_marker_present(self) -> None:
+        result = checks.check_cross_org_contamination(_tmp_repo(), "horonomy")
+        self.assertEqual(result.status, checks.NOT_APPLICABLE)
+
+    def test_fail_when_both_markers_present(self) -> None:
+        repo = _tmp_repo()
+        (repo / checks.rb.ADOPTION_MARKER_FILENAME).write_text("org: horonomy\n", encoding="utf-8")
+        (repo / checks.rb.CONSUMPTION_MARKER_FILENAME).write_text("org: ai-agent-assembly\n", encoding="utf-8")
+        result = checks.check_cross_org_contamination(repo, "horonomy")
+        self.assertEqual(result.status, checks.FAIL)
+        self.assertIn("two distribution modes", result.detail)
+
+    def test_fail_when_adopted_but_remote_is_not_horonomy(self) -> None:
+        repo = _tmp_repo()
+        (repo / checks.rb.ADOPTION_MARKER_FILENAME).write_text("org: horonomy\n", encoding="utf-8")
+        fake = mock.Mock(returncode=0, stdout="origin\thttps://github.com/ai-agent-assembly/agent-assembly.git (fetch)\n")
+        with mock.patch.object(checks.rb, "resolve_org", return_value="ai-agent-assembly"):
+            result = checks.check_cross_org_contamination(repo, "horonomy")
+        self.assertEqual(result.status, checks.FAIL)
+        self.assertIn("should have run", result.detail)
+
+    def test_fail_when_consumed_but_remote_is_horonomy(self) -> None:
+        repo = _tmp_repo()
+        (repo / checks.rb.CONSUMPTION_MARKER_FILENAME).write_text("org: horonomy\n", encoding="utf-8")
+        with mock.patch.object(checks.rb, "resolve_org", return_value="horonomy"):
+            result = checks.check_cross_org_contamination(repo, "horonomy")
+        self.assertEqual(result.status, checks.FAIL)
+        self.assertIn("real Horonom repo", result.detail)
+
+    def test_pass_when_adopted_and_remote_is_horonomy(self) -> None:
+        repo = _tmp_repo()
+        (repo / checks.rb.ADOPTION_MARKER_FILENAME).write_text("org: horonomy\n", encoding="utf-8")
+        with mock.patch.object(checks.rb, "resolve_org", return_value="horonomy"):
+            result = checks.check_cross_org_contamination(repo, "horonomy")
+        self.assertEqual(result.status, checks.PASS)
+
+    def test_pass_when_consumed_and_remote_is_not_horonomy(self) -> None:
+        repo = _tmp_repo()
+        (repo / checks.rb.CONSUMPTION_MARKER_FILENAME).write_text("org: ai-agent-assembly\n", encoding="utf-8")
+        with mock.patch.object(checks.rb, "resolve_org", return_value="ai-agent-assembly"):
+            result = checks.check_cross_org_contamination(repo, "horonomy")
+        self.assertEqual(result.status, checks.PASS)
+
+    def test_warn_when_org_cannot_be_resolved(self) -> None:
+        repo = _tmp_repo()
+        (repo / checks.rb.ADOPTION_MARKER_FILENAME).write_text("org: horonomy\n", encoding="utf-8")
+        with mock.patch.object(checks.rb, "resolve_org", return_value=None):
+            result = checks.check_cross_org_contamination(repo, "horonomy")
+        self.assertEqual(result.status, checks.WARN)
+
+
 class PublicReleaseAdoptionMappingTest(unittest.TestCase):
     """AC: 'False claims such as public surface complete when a surface is
     N/A/not-yet-public are prevented.' Directly tests every state mapping,
