@@ -8,7 +8,7 @@
 Verify a product's *rendered* user experience — not just that it functions.
 This is the company-common capability referenced by
 `governance/engineering/agent-skill-architecture.md` (HORO-969) §1: it owns
-visual/usability/accessibility/responsive/motion/perceived-quality
+visual, usability, accessibility, responsive, motion, and perceived-quality
 validation for products with a material rendered UI/UX surface. It does not
 own functional E2E correctness (that is `agents/skills/product-validation/
 SKILL.md`, authored in parallel this wave) and it does not own unit/

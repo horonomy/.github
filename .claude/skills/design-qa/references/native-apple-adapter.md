@@ -6,11 +6,11 @@ Grounded in a real, current pattern found in `pet-life-simulator`
 (read-only reference workspace at
 `${HOME}/Bryant-Developments/horonomy-work/pet-life-simulator`, per
 `swift-development`'s own HORO-976 findings — this skill does not modify
-that repo). The specific evidence: `apps/ios/PetLifeSimulatorUITests/
-ArtProofCaptureSupport.swift`, committed on branch
+that repo). The specific evidence: in `apps/ios/PetLifeSimulatorUITests/`,
+the file `ArtProofCaptureSupport.swift`, committed on branch
 `visual-mvp-1/HORO-878/art_pipeline` (commit `0142514`, "Record actual
 accessibility preferences beside captures"), consumed by
-`apps/ios/PetLifeSimulatorUITests/ArtPipelineProofUITests.swift`. This is a
+`ArtPipelineProofUITests.swift` in that same directory. This is a
 real, committed pattern in a real Horonom iOS repo, not a fabricated
 example — file/target names below are copied verbatim from it. It has not
 been run as part of this ticket's own validation pass (this skill only
