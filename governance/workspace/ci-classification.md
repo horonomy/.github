@@ -40,11 +40,14 @@ When CI is genuinely `CI_UNAVAILABLE_EXTERNAL`:
 2. Run the repository's own real canonical gates locally — its actual
    test, lint, type-check, security, build, doc, and render commands, not
    a narrower hand-check. **A hand-verified fix is not the same evidence
-   as the tool's own output**: PR #49 (HORO-983) hand-wrapped a lint
-   violation and it passed hand-verification, but `ruff format --check`
-   — a real, separate CI gate — still failed, because the hand-wrap
-   didn't match canonical formatter output. Only the actual gate command
-   catches that; run it.
+   as the tool's own output**: `horonomy/.github#49` (HORO-983) hand-wrapped
+   a `ruff check` line-length violation in `repo-scaffold`'s canonical
+   scripts and it passed hand-verification, but after re-adopting the
+   skill into a real external consumer (`horonomy/GearMeshing-AI`), that
+   repo's own `verify` CI job's `ruff format --check` step still failed,
+   because the hand-wrap didn't match canonical formatter output — fixed
+   properly in `horonomy/.github#51` by running the real formatter. Only
+   the actual gate command catches that; run it.
 3. Record the exact commands and their measured results (exit codes, test
    counts, tool output) as evidence attached to the PR/ticket.
 4. Require the same quality/security thresholds the unavailable CI would
