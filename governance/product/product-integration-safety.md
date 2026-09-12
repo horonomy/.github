@@ -66,10 +66,19 @@ substitutes for the other.
 ## What this does not require
 
 - No mandatory single cross-product config-mutation library exists or is
-  assumed. HORO-998 evaluates that only after real product audits —
-  don't build one preemptively for your product alone either.
+  assumed — see [`host-config-ownership-test-contract.md`](./host-config-ownership-test-contract.md)'s
+  shared-helper decision. Don't build one preemptively for your product
+  alone either.
 - No claim that every host tool shares Claude Code's config shape. Treat
   Claude Code as one worked example, not the template every tool must fit.
+
+## Verifying your own integration
+
+Apply the reusable, tool-agnostic property list in
+[`host-config-ownership-test-contract.md`](./host-config-ownership-test-contract.md)
+(HORO-998) — 14 named properties, rich-fixture requirements, and negative
+controls that prove your test suite would actually catch a regression, not
+just pass once.
 
 ## Certification and coordination
 

@@ -80,7 +80,11 @@ see [`engineering/security.md`](./engineering/security.md).
   invariants, distinct from `engineering/`'s build-process rules — the
   non-destructive host-tool configuration contract
   ([`product/product-integration-safety.md`](./product/product-integration-safety.md);
-  full constitution at ADR-0009, HORO-996/HORO-997).
+  full constitution at ADR-0009, HORO-996/HORO-997) and the reusable
+  ownership-aware test contract product sessions apply to their own
+  integrations
+  ([`product/host-config-ownership-test-contract.md`](./product/host-config-ownership-test-contract.md);
+  HORO-998).
 - [`releases/`](./releases/) — release and public-surface invariants, plus
   the [Public Release Surface Contract](./releases/public-release-contract.md)
   (7-state model, per-surface derivation rules; implementation at
