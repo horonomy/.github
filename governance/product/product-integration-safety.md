@@ -20,7 +20,7 @@ behalf. If your product never touches another tool's configuration, this
 rule is `NOT_APPLICABLE` to you — record that truthfully rather than
 skipping the classification (HORO-999).
 
-This is **product-design/runtime governance, not [[HORO-967]] engineering-
+This is **product-design/runtime governance, not HORO-967 engineering-
 execution governance** — it constrains what a *shipped product* does to a
 host at install/runtime, not how engineers/agents write and ship code. The
 two are related but neither is a child of the other; owing one never
@@ -62,22 +62,22 @@ substitutes for the other.
 ## What this does not require
 
 - No mandatory single cross-product config-mutation library exists or is
-  assumed. [[HORO-998]] evaluates that only after real product audits —
+  assumed. HORO-998 evaluates that only after real product audits —
   don't build one preemptively for your product alone either.
 - No claim that every host tool shares Claude Code's config shape. Treat
   Claude Code as one worked example, not the template every tool must fit.
 
 ## Certification and coordination
 
-Company-common ([[HORO-996]]) owns: the constitution (this file + ADR-0009),
-the reusable ownership-aware test contract ([[HORO-998]]), the cross-product
-inventory and certification matrix ([[HORO-999]]), the UX/disclosure
-contract ([[HORO-1000]]), and final independent certification ([[HORO-1003]]).
+Company-common (HORO-996) owns: the constitution (this file + ADR-0009),
+the reusable ownership-aware test contract (HORO-998), the cross-product
+inventory and certification matrix (HORO-999), the UX/disclosure
+contract (HORO-1000), and final independent certification (HORO-1003).
 **Your product session owns**: auditing your own actual mutation surfaces,
 creating/reusing your own product-local Jira ticket for any gap found,
 implementing the fix, adding permanent regression coverage, and producing
 your product's final PASS/BLOCKED/NOT_APPLICABLE evidence
-([[HORO-1001]]). Do not wait for company-common to fix your product's code,
+(HORO-1001). Do not wait for company-common to fix your product's code,
 and do not route your product's fix through the company-common ticket —
 link it instead.
 
