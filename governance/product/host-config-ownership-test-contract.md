@@ -90,7 +90,8 @@ only when that marker has been stripped by a foreign editor. Its own test
 suite already demonstrates real, passing instances of:
 `PREEXISTING_UNOWNED_CONFIG_IS_PRESERVED` and
 `OTHER_PRODUCT_CONFIG_IS_PRESERVED` (`test_apply_uninstall_removes_only_circinus_hooks`,
-asserting a foreign matcher group survives uninstall byte-for-byte),
+asserting a foreign matcher group survives uninstall structurally —
+parsed and compared as data, not a raw byte diff),
 `CONCURRENT_CHANGE_DOES_NOT_CLOBBER` (`test_apply_install_detects_concurrent_modification`),
 and a form of `FAILED_MUTATION_IS_ATOMIC` via its backup-then-atomic-replace
 sequence. HORO-1020 tracks its remaining gaps against this same contract
@@ -109,12 +110,13 @@ it — `OTHER_PRODUCT_CONFIG_IS_PRESERVED` is trivially satisfied by
 construction, not by merge logic. What this shape still owes the contract,
 and currently doesn't have (HORO-1021), is `REPEATED_INSTALL_IS_IDEMPOTENT`
 (today, a second install silently discards a hand-edited `StartInterval`),
-`FAILED_MUTATION_IS_ATOMIC` (today, a direct `fs::write`, not
-temp-file-then-rename), and `STALE_RECEIPT_CANNOT_OVERWRITE_CURRENT_CONFIG`
-in the sense of "no backup exists to even attempt a stale restore, so
-recoverability rests entirely on the generator being pure" — acceptable
-today only because the generated content has no user-supplied customization
-path yet; the moment one is added, that assumption breaks.
+and `FAILED_MUTATION_IS_ATOMIC` (today, a direct `fs::write`, not
+temp-file-then-rename). It also has no backup at all, which isn't one of
+the 14 named properties (there's no *stale receipt* to wrongly restore
+when none exists) but is a real recoverability gap in its own right —
+acceptable today only because the generated content has no user-supplied
+customization path yet; the moment one is added, an unrecoverable
+overwrite becomes possible.
 
 These two shapes were chosen because they're real, not constructed:  one is
 a shared multi-tenant JSON file requiring key-level ownership tracking, the
@@ -134,10 +136,14 @@ and confirm the corresponding test **fails**:
 | Deliberately broken behavior | Property it must break |
 |---|---|
 | Whole-file replacement of a shared config | `PREEXISTING_UNOWNED_CONFIG_IS_PRESERVED`, `OTHER_PRODUCT_CONFIG_IS_PRESERVED` |
-| Replacing an entire hooks/list collection instead of merging | `OTHER_PRODUCT_CONFIG_IS_PRESERVED`, `POST_INSTALL_USER_CHANGES_SURVIVE_REPAIR` |
+| Replacing an entire hooks/list collection instead of merging | `OTHER_PRODUCT_CONFIG_IS_PRESERVED` |
+| Install writes a second copy of an already-installed entry instead of checking first | `REPEATED_INSTALL_IS_IDEMPOTENT` |
 | Parse failure → fall back to an empty/default config | `MALFORMED_OR_UNSUPPORTED_CONFIG_FAILS_WITH_ZERO_MUTATION` |
 | Stale-backup restore on repair/rollback | `STALE_RECEIPT_CANNOT_OVERWRITE_CURRENT_CONFIG`, `POST_INSTALL_USER_CHANGES_SURVIVE_REPAIR` |
+| Upgrade re-derives config from a template instead of reconciling the live file | `POST_INSTALL_USER_CHANGES_SURVIVE_UPGRADE` |
 | Remove deletes the whole shared file | `SHARED_CONFIG_IS_NEVER_DELETED_BY_DEFAULT` |
+| Remove deletes by array index/position instead of by ownership marker | `REMOVE_TOUCHES_ONLY_PRODUCT_OWNED_STATE` |
+| Write succeeds but leaves the host tool unable to parse/start (e.g. wrong permissions, truncated write not caught) | `HOST_TOOL_REMAINS_USABLE_AFTER_EACH_LIFECYCLE_STEP` |
 | Dropping unknown fields during deserialize/re-serialize | `UNKNOWN_FUTURE_FIELDS_ARE_PRESERVED` |
 | No fingerprint/hash check before write | `CONCURRENT_CHANGE_DOES_NOT_CLOBBER` |
 | Direct write with no temp-file/rename | `FAILED_MUTATION_IS_ATOMIC` |
@@ -165,9 +171,14 @@ forced to be uniform. Expected variation:
   legitimately owned, same reasoning as Shape 2, *provided* the file is
   truly exclusive (verify this, don't assume it from a plausible-looking
   filename).
-- **Host-managed/MDM files** — mutation may be forbidden outright; the
-  correct "test" here is often "assert this surface classifies as
-  `MACHINE_HOST_MANAGED_WRITE` or is never touched," not a merge test.
+- **Host-managed/MDM files** — this is ADR-0009's `Organization/MDM-owned`
+  class; mutation may be forbidden outright. The correct "test" here is
+  often "assert this surface is classified `MACHINE_HOST_MANAGED_WRITE`
+  in your HORO-999 inventory entry, or is never touched," not a merge
+  test — that classification label is HORO-999's mutation-surface
+  taxonomy, a different (complementary) vocabulary from ADR-0009's
+  ownership classes: one names *who owns* a piece of state, the other
+  names *how risky* a surface's write behavior is.
 
 Do not build one lossy AST/dict representation and force every host
 format through it — a plist is not a JSON object with different syntax,
