@@ -84,7 +84,10 @@ see [`engineering/security.md`](./engineering/security.md).
   ownership-aware test contract product sessions apply to their own
   integrations
   ([`product/host-config-ownership-test-contract.md`](./product/host-config-ownership-test-contract.md);
-  HORO-998).
+  HORO-998), and the common UX/disclosure semantics for mutation-capable
+  integrations
+  ([`product/host-config-safety-ux-disclosure.md`](./product/host-config-safety-ux-disclosure.md);
+  HORO-1000).
 - [`releases/`](./releases/) — release and public-surface invariants, plus
   the [Public Release Surface Contract](./releases/public-release-contract.md)
   (7-state model, per-surface derivation rules; implementation at
