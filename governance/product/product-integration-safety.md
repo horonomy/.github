@@ -33,13 +33,13 @@ substitutes for the other.
 
 ## What this means for a product session
 
-- Classify every host-config surface you read or write into one of:
-  `host/user-owned`, `org/MDM-owned`, `tool-generated`,
-  `other-product/plugin-owned`, `product-owned whole artifact`,
-  `product-owned key/list-entry/record`, `unknown/unattributable`, `legacy
-  ownership unknown`, `concurrently modified after planning`. Writing into
-  a shared file establishes ownership of what you wrote, never of the
-  whole file.
+- Classify every host-config surface you read or write into one of the
+  ADR's exact ownership classes: `Host/user-owned`, `Organization/MDM-owned`,
+  `Tool-generated`, `Other-product/plugin-owned`, `Horonom-product-owned
+  whole artifact`, `Horonom-product-owned key/list-entry/record`,
+  `Unknown/unattributable`, `Legacy ownership unknown`, `Concurrently
+  modified after planning`. Writing into a shared file establishes
+  ownership of what you wrote, never of the whole file.
 - Prefer, in order: a native dedicated drop-in surface → a product-owned
   artifact the host merely references → a key/list-entry patch inside a
   shared file with explicit ownership markers → whole-file replacement
@@ -51,7 +51,11 @@ substitutes for the other.
 - Parse failure, unrecognized schema, unknown ownership, or a concurrent
   edit detected between planning and applying a mutation → **abort with
   zero mutation**. Never fall back to "write a fresh default" or "restore
-  the last backup."
+  the last backup." The one narrow exception (see ADR-0009): a planned
+  unowned delete/replace is permitted when the user explicitly authorized
+  *that exact destructive change* as the task itself (e.g. "wipe my Claude
+  Code settings") — never inferred from a general install/repair request
+  ("install Circinus" is not implicit authorization to delete anything).
 - A confirmed destructive mutation of unowned host configuration is a
   **release-blocking product defect** — not a severity to negotiate down
   because a backup exists or reinstall is possible.
@@ -88,6 +92,10 @@ closing it.
 
 ## Precedence
 
-Company constitution (ADR-0009) → a product's own deliberate, recorded,
-*stricter* exception → implementation convenience. Convenience never
-justifies a destructive mutation of unowned configuration.
+ADR-0009 is a floor, not a target — see its own Consequences section. A
+product-local rule may narrow it (refuse a surface this rule would
+technically permit); it may never weaken it. This follows the same
+Company → Product → Repository precedence model as every other
+non-waivable invariant in `governance/README.md` (full rationale in
+ADR-0005). Convenience never justifies a destructive mutation of unowned
+configuration.
