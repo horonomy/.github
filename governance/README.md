@@ -88,7 +88,12 @@ see [`engineering/security.md`](./engineering/security.md).
   implementation at `scripts/doctor.py` + `scripts/doctor_checks.py`,
   HORO-510), and the repo-adoption tool's usage doc
   ([`workspace/repo-bootstrap.md`](./workspace/repo-bootstrap.md);
-  implementation at `scripts/repo_bootstrap.py`, HORO-511).
+  implementation at `scripts/repo_bootstrap.py`, HORO-511), and CI failure
+  classification — `CI_FAILED` vs. `CI_UNAVAILABLE_EXTERNAL`, including
+  verified private-repo GitHub Actions/SonarQube quota exhaustion, and
+  what the substitution does and does not waive
+  ([`workspace/ci-classification.md`](./workspace/ci-classification.md);
+  HORO-983/HORO-993).
 - `../agents/skills/` and `../agents/common/` (repo root, not under
   `governance/`) — shared skill canonical content (added by HORO-509). Kept
   outside `governance/` because it's consumed content (SKILL.md + scripts),
