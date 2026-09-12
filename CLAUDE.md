@@ -86,6 +86,24 @@ parameter policy, and verification standard:
 (HORO-566). Product-specific docs-analytics implementation is
 product-owned, not centralized here.
 
+## Product Integration Safety convention (non-waivable)
+
+**A Horonom product MUST preserve all host-tool configuration it does not
+explicitly own.** Unknown/unowned state = preserve or abort — never parse-
+failure-to-empty-config, whole-file/whole-list overwrite for convenience,
+stale-backup restore over newer state, or silent normalization of unknown
+fields. This applies to any product/integration that reads or mutates a
+third-party or native developer tool's configuration (coding agents, IDEs,
+git/shell/SSH/container/cloud-CLI config, etc.) at install/repair/upgrade/
+remove — not to HORO-967 engineering-execution work itself. A confirmed
+destructive mutation of unowned host configuration is a release-blocking
+product defect. Full ownership-class model, mutation-order rule, the
+`A+B+C → A+C` uninstall invariant, and worked examples:
+[`governance/product/product-integration-safety.md`](governance/product/product-integration-safety.md)
+→ [ADR-0009](https://github.com/horonomy/internal-docs/blob/main/docs/engineering/adr-0009-product-integration-safety-non-destructive-host-configuration.md)
+(HORO-996/HORO-997). Product-specific integration audit/remediation is
+product-owned, not centralized here.
+
 ## Universal conventions
 
 Commit/branch/PR format and worktree workflow are defined once, in

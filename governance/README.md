@@ -33,8 +33,10 @@ public-release truthfulness rules
 ([`releases/public-surfaces.md`](./releases/public-surfaces.md)), the
 domain surface / public analytics convention
 ([`engineering/domains-analytics.md`](./engineering/domains-analytics.md)),
-and the documentation analytics convention
-([`engineering/docs-analytics.md`](./engineering/docs-analytics.md)).
+the documentation analytics convention
+([`engineering/docs-analytics.md`](./engineering/docs-analytics.md)), and
+the Product Integration Safety non-destructive-host-configuration
+invariant ([`product/product-integration-safety.md`](./product/product-integration-safety.md)).
 This
 precedence rule, the full architecture rationale, and the ownership matrix
 below are decided in
@@ -74,6 +76,11 @@ see [`engineering/security.md`](./engineering/security.md).
   taxonomy/applicability/cross-org contract
   ([`engineering/agent-skill-architecture.md`](./engineering/agent-skill-architecture.md),
   HORO-969, extending ADR-0005 §6/§10).
+- [`product/`](./product/) — product-design/runtime integration-safety
+  invariants, distinct from `engineering/`'s build-process rules — the
+  non-destructive host-tool configuration contract
+  ([`product/product-integration-safety.md`](./product/product-integration-safety.md);
+  full constitution at ADR-0009, HORO-996/HORO-997).
 - [`releases/`](./releases/) — release and public-surface invariants, plus
   the [Public Release Surface Contract](./releases/public-release-contract.md)
   (7-state model, per-surface derivation rules; implementation at
