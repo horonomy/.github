@@ -80,6 +80,14 @@ Apply the reusable, tool-agnostic property list in
 controls that prove your test suite would actually catch a regression, not
 just pass once.
 
+## Disclosing your own integration to its users
+
+Apply the common UX/disclosure semantics in
+[`host-config-safety-ux-disclosure.md`](./host-config-safety-ux-disclosure.md)
+(HORO-1000) — what a plan/dry-run must distinguish, automation consent vs.
+OS-level authorization, and the documentation checklist every mutation-
+capable integration's docs should satisfy.
+
 ## Certification and coordination
 
 Company-common (HORO-996) owns: the constitution (this file + ADR-0009),
