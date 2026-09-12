@@ -12,7 +12,7 @@ first; this document is the user-facing half of the same invariant.
 ## Why this exists as semantics, not syntax
 
 A CLI's flag names are product-native and should stay that way — `circinus
-install claude-code --dry-run` and a Terraform-style `plan`/`apply` split
+install claude-code --print` and a Terraform-style `plan`/`apply` split
 solve the same problem in each product's own idiom. What must be common is
 that a user (or another engineer reading the product's docs) can answer six
 questions before a mutation happens, and three more after it:
@@ -109,7 +109,7 @@ silently."
 | Config changed on disk since the plan was formed | Re-read and re-plan, or abort — never apply a stale plan to new state |
 | Config is malformed or in an unsupported shape | No mutation at all — this is `MALFORMED_OR_UNSUPPORTED_CONFIG_FAILS_WITH_ZERO_MUTATION` from the test contract, surfaced to the user as a real refusal, not a silent skip |
 | A legacy receipt lacks enough ownership metadata to act safely | Offer a guided manual reconciliation/recovery path; never treat "I found *something* that looks like our old receipt" as license for an automatic destructive repair/remove |
-| Remove is run when there's no product-owned state left to remove | Idempotent no-op, reported as such — not an error, and not a fallback into "well, let me clean up whatever I can find" |
+| Remove is run when there's no product-owned state left to remove | Idempotent no-op *where safe*, reported as such — not an error, and not a fallback into "well, let me clean up whatever I can find" |
 
 ## Documentation checklist for product docs
 
@@ -144,8 +144,15 @@ skims past at their own risk.
 ## Status
 
 No product integration in this campaign has yet implemented this contract
-end-to-end with real evidence (HORO-999's inventory recorded *mutation*
-maturity, not UX/disclosure maturity, for Circinus and Glomeris). Real
+end-to-end with real evidence — HORO-999's inventory recorded *mutation*
+maturity, not UX/disclosure maturity, and those are genuinely different
+questions. Circinus already has real building blocks toward this (a
+`circinus install claude-code --print` plan-preview flag, an explicit
+`--scope project|user`, and a named `ConcurrentModificationError` for
+conflicts) — it doesn't yet expose the full categorized disclosure this
+document requires (owned-vs-preserved-vs-unknown broken out explicitly,
+surfaced read-back verification, a stated recovery path for legacy
+installs), which is the gap, not an absence of any starting point. Real
 demonstration against at least two integrations, or a truthful blocker per
 integration, is required before this ticket's own AC is satisfied — see
 HORO-1001 for the per-product remediation/certification tracking that
