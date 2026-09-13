@@ -61,3 +61,35 @@ result contradicts your expectation defeats its safety purpose (declaring
 victory on a result you don't actually understand). See
 `examples/escalation-from-compact-to-raw.md` for a worked case that climbs
 the full ladder.
+
+## Reusable helpers
+
+The ladder above is not just prose to re-derive by hand each session -
+two small, deterministic, unit-tested scripts under `scripts/` implement
+it (HORO-971):
+
+- **`scripts/diagnostic_compact.py`** - classifies a tool's raw output +
+  exit code into the L0-L3 ladder and renders whichever level you ask
+  for. Enforces all five non-negotiable rules above in code, not just
+  documentation: `passed` is derived from the exit code alone (never from
+  parsed text), a parser that raises degrades to an unstructured result
+  instead of crashing or silently reporting PASS, and `--level 3` always
+  returns the complete, unmodified raw text. Supports `pytest`, `cargo`
+  (build errors and test panics), and `vitest` output today, plus a
+  generic line-scanning fallback for anything else. Two entry points:
+  `run -- <command...>` (execute a real command and classify it live) and
+  `classify --exit-code N [--raw-file PATH]` (classify previously
+  captured output, offline). Tests: `test_diagnostic_compact.py`.
+- **`scripts/efficiency_eval.py`** - the standing Agent Efficiency Eval
+  harness: scores RAW vs compact bytes and confirms exit-code/failure-
+  signal preservation, either against the bundled deterministic
+  `fixtures/*.json` captures (Python/pytest, Rust/cargo, TypeScript/
+  Vitest - `run-all`) or against a real repo + command (`live --cwd DIR
+  -- <command...>`). This replaces the one-off manual RAW-vs-compact
+  session that originally motivated this contract with something
+  re-runnable. Tests: `test_efficiency_eval.py`.
+
+Both scripts are stdlib-only and follow the same CLI/testing conventions
+as `repo-scaffold/scripts/repo_scaffold.py` and
+`credential-operations/scripts/probe_env_presence.py` - see those for the
+house style if extending this further.
