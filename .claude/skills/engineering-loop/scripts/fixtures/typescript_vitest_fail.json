@@ -1,0 +1,6 @@
+{
+  "description": "vitest run: 9 tests pass, one assertion failure in a small self-contained fixture package (no external Horonom TS repo currently wires vitest; see harness README note).",
+  "exit_code": 1,
+  "tool_hint": "vitest",
+  "raw": " RUN  v1.6.0 /repo\n\n ✓ src/format.test.ts > formatCurrency > formats whole dollars (2ms)\n ✓ src/format.test.ts > formatCurrency > formats cents (1ms)\n ✓ src/format.test.ts > formatCurrency > formats negative values (1ms)\n ✓ src/parse.test.ts > parseDate > parses ISO date (1ms)\n ✓ src/parse.test.ts > parseDate > parses date with time (1ms)\n ✓ src/parse.test.ts > parseDate > rejects malformed input (2ms)\n ✓ src/sum.test.ts > sum > adds negative numbers (1ms)\n ✓ src/sum.test.ts > sum > adds zero (1ms)\n ✓ src/sum.test.ts > sum > handles large numbers (1ms)\n ❯ src/sum.test.ts > sum > adds 1 + 2 to equal 3\nAssertionError: expected 4 to be 3 // Object.is equality\n\n ❯ src/sum.test.ts:5:20\n      3| test('adds 1 + 2 to equal 3', () => {\n      4|   expect(sum(1, 2)).toBe(3)\n      5|                     ^\n      6| })\n      7|\n\n Test Files  1 failed | 2 passed (3)\n      Tests  1 failed | 9 passed (10)\n   Start at  10:04:12\n   Duration  184ms\n"
+}

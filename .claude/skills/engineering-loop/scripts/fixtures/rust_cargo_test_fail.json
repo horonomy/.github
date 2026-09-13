@@ -1,0 +1,6 @@
+{
+  "description": "cargo test: 11 tests pass, one panics on an assertion.",
+  "exit_code": 101,
+  "tool_hint": "cargo",
+  "raw": "running 12 tests\ntest tests::test_parse_empty ... ok\ntest tests::test_parse_single_field ... ok\ntest tests::test_parse_multi_field ... ok\ntest tests::test_parse_quoted_field ... ok\ntest tests::test_parse_escaped_quote ... ok\ntest tests::test_parse_trailing_comma ... ok\ntest tests::test_parse_crlf ... ok\ntest tests::test_parse_unicode ... ok\ntest tests::test_parse_large_input ... ok\ntest tests::test_serialize_roundtrip ... ok\ntest tests::test_serialize_special_chars ... ok\ntest tests::test_checksum_mismatch_is_rejected ... FAILED\n\nfailures:\n\n---- tests::test_checksum_mismatch_is_rejected stdout ----\nthread 'tests::test_checksum_mismatch_is_rejected' panicked at 'assertion failed: `(left == right)`\n  left: `Err(ChecksumMismatch)`,\n right: `Ok(())`', src/lib.rs:142:9\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    tests::test_checksum_mismatch_is_rejected\n\ntest result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s\n"
+}
