@@ -1,0 +1,6 @@
+{
+  "description": "cargo build: a workspace of several crates compiles cleanly except one type error.",
+  "exit_code": 101,
+  "tool_hint": "cargo",
+  "raw": "   Compiling proc-macro2 v1.0.86\n   Compiling unicode-ident v1.0.12\n   Compiling libc v0.2.155\n   Compiling cfg-if v1.0.0\n   Compiling autocfg v1.3.0\n   Compiling serde v1.0.203\n   Compiling quote v1.0.36\n   Compiling syn v2.0.68\n   Compiling serde_derive v1.0.203\n   Compiling memchr v2.7.4\n   Compiling itoa v1.0.11\n   Compiling ryu v1.0.18\n   Compiling serde_json v1.0.120\n   Compiling app-core v0.1.0 (/repo/crates/app-core)\nwarning: unused import: `std::fmt::Debug`\n --> crates/app-core/src/lib.rs:3:5\n  |\n3 | use std::fmt::Debug;\n  |     ^^^^^^^^^^^^^^^^\n  |\n  = note: `#[warn(unused_imports)]` on by default\n\nwarning: `app-core` (lib) generated 1 warning\n   Compiling app-http v0.1.0 (/repo/crates/app-http)\nerror[E0308]: mismatched types\n  --> crates/app-http/src/main.rs:10:5\n   |\n10 |     42\n   |     ^^ expected `()`, found integer type\n   |\nhelp: consider using a semicolon here\n   |\n10 |     42;\n   |       +\n\nerror: could not compile `app-http` (bin \"app-http\") due to previous error\nwarning: build failed, waiting for other jobs to finish...\n"
+}
