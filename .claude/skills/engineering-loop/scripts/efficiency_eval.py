@@ -206,37 +206,47 @@ def main(argv: list[str]) -> int:
 
     args = parser.parse_args(argv)
 
+    commands = {
+        "list": _cmd_list,
+        "fixture": _cmd_fixture,
+        "run-all": _cmd_run_all,
+        "live": _cmd_live,
+    }
+
     try:
-        if args.command == "list":
-            for name in list_fixtures():
-                print(name)
-            return 0
-
-        if args.command == "fixture":
-            result = evaluate_fixture(args.name, level=args.level)
-            print(format_table([result]))
-            return 0 if (result.exit_code_preserved and result.failure_signal_preserved) else 1
-
-        if args.command == "run-all":
-            results = [evaluate_fixture(name, level=args.level) for name in list_fixtures()]
-            print(format_table(results))
-            ok = all(r.exit_code_preserved and r.failure_signal_preserved for r in results)
-            return 0 if ok else 1
-
-        if args.command == "live":
-            cmd = args.cmd[1:] if args.cmd[:1] == ["--"] else args.cmd
-            if not cmd:
-                print("ERROR: no command given after 'live' (use: live --cwd DIR -- <command...>)", file=sys.stderr)
-                return 2
-            result = evaluate_live(args.cwd, cmd, level=args.level)
-            print(format_table([result]))
-            return 0 if (result.exit_code_preserved and result.failure_signal_preserved) else 1
-
+        return commands[args.command](args)
     except FixtureError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
-    return 2  # unreachable - argparse enforces a valid subcommand
+
+def _cmd_list(_args: argparse.Namespace) -> int:
+    for name in list_fixtures():
+        print(name)
+    return 0
+
+
+def _cmd_fixture(args: argparse.Namespace) -> int:
+    result = evaluate_fixture(args.name, level=args.level)
+    print(format_table([result]))
+    return 0 if (result.exit_code_preserved and result.failure_signal_preserved) else 1
+
+
+def _cmd_run_all(args: argparse.Namespace) -> int:
+    results = [evaluate_fixture(name, level=args.level) for name in list_fixtures()]
+    print(format_table(results))
+    ok = all(r.exit_code_preserved and r.failure_signal_preserved for r in results)
+    return 0 if ok else 1
+
+
+def _cmd_live(args: argparse.Namespace) -> int:
+    cmd = args.cmd[1:] if args.cmd[:1] == ["--"] else args.cmd
+    if not cmd:
+        print("ERROR: no command given after 'live' (use: live --cwd DIR -- <command...>)", file=sys.stderr)
+        return 2
+    result = evaluate_live(args.cwd, cmd, level=args.level)
+    print(format_table([result]))
+    return 0 if (result.exit_code_preserved and result.failure_signal_preserved) else 1
 
 
 if __name__ == "__main__":

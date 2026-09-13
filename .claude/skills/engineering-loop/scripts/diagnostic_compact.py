@@ -58,6 +58,7 @@ import argparse
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -70,6 +71,9 @@ from pathlib import Path
 # repetitive part, never the first evidence).
 _MAX_ITEMS = 20
 _MAX_L2_CHARS = 4000
+
+
+_NO_SUMMARY_LINE_FOUND = "no summary line found"
 
 
 @dataclass(frozen=True)
@@ -88,7 +92,7 @@ class ParseResult:
 
 def _parse_pytest(raw: str) -> ParseResult:
     counts = re.findall(r"(\d+) (passed|failed|error(?:s)?|skipped|xfailed|xpassed)", raw)
-    summary = ", ".join(f"{n} {label}" for n, label in counts) if counts else "no summary line found"
+    summary = ", ".join(f"{n} {label}" for n, label in counts) if counts else _NO_SUMMARY_LINE_FOUND
 
     failures: list[Failure] = []
     seen: set[str] = set()
@@ -109,7 +113,7 @@ def _parse_cargo(raw: str) -> ParseResult:
         summary_parts.append(m.group(0))
     if not summary_parts:
         summary_parts = re.findall(r"^error(?:\[E\d+\])?: .+$", raw, re.MULTILINE)[:1]
-    summary = "; ".join(summary_parts) if summary_parts else "no summary line found"
+    summary = "; ".join(summary_parts) if summary_parts else _NO_SUMMARY_LINE_FOUND
 
     failures: list[Failure] = []
     seen: set[str] = set()
@@ -146,7 +150,7 @@ def _parse_vitest(raw: str) -> ParseResult:
     ts = re.search(r"Tests\s+.+", raw)
     if ts:
         summary_parts.append(ts.group(0).strip())
-    summary = "; ".join(summary_parts) if summary_parts else "no summary line found"
+    summary = "; ".join(summary_parts) if summary_parts else _NO_SUMMARY_LINE_FOUND
 
     failures: list[Failure] = []
     seen: set[str] = set()
@@ -192,7 +196,10 @@ def _context_block(raw: str, start: int, end: int, radius: int = 300) -> str:
 # pytest run that happens to mention the word "cargo" in a docstring
 # doesn't get misclassified.
 _DETECTORS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("pytest", re.compile(r"={3,}.*\b(passed|failed|error)\b.*={3,}|^={3,} FAILURES ={3,}", re.MULTILINE)),
+    # Bounded `.{0,N}` rather than greedy `.*` around the alternation - caps
+    # worst-case backtracking on adversarial/pathological input instead of
+    # relying on unbounded wildcard matching.
+    ("pytest", re.compile(r"={3,}.{0,300}\b(passed|failed|error)\b.{0,300}={3,}|^={3,} FAILURES ={3,}", re.MULTILINE)),
     ("cargo", re.compile(r"^(running \d+ tests?|test result:|error\[E\d+\]:)", re.MULTILINE)),
     ("vitest", re.compile(r"^\s*(Test Files|RUN v\d|✓|❯|FAIL)\b", re.MULTILINE)),
 )
@@ -267,50 +274,58 @@ def classify_output(raw: str, exit_code: int, tool_hint: str | None = None) -> D
 def render(diag: Diagnostic, level: int) -> str:
     if level not in (0, 1, 2, 3):
         raise ValueError(f"level must be 0-3, got {level!r}")
+    if level == 3:
+        # Complete raw output, verbatim, always fully recoverable - no pointer needed.
+        return diag.raw
 
-    verdict = "PASS" if diag.passed else "FAIL"
-    l0 = f"{verdict} (exit={diag.exit_code}) tool={diag.tool}: {diag.summary}"
-    if diag.parse_error:
-        l0 += f" [parser degraded: {diag.parse_error}]"
+    body = _render_l0(diag)
+    if level >= 1:
+        body = _render_l1(diag, body)
+    if level >= 2:
+        body = _render_l2(diag, body)
+
     # A pointer to escalate only makes sense when there is something to
     # investigate; a clean PASS with nothing parsed has nothing to escalate
     # to (rule 5: collapse the successful case hard, no dangling prompts).
     needs_pointer = (not diag.passed) or bool(diag.failures)
-    if level == 0:
-        return _with_pointer(l0, level, needs_pointer)
+    return _with_pointer(body, level, needs_pointer)
 
+
+def _render_l0(diag: Diagnostic) -> str:
+    verdict = "PASS" if diag.passed else "FAIL"
+    l0 = f"{verdict} (exit={diag.exit_code}) tool={diag.tool}: {diag.summary}"
+    if diag.parse_error:
+        l0 += f" [parser degraded: {diag.parse_error}]"
+    return l0
+
+
+def _render_l1(diag: Diagnostic, l0: str) -> str:
     if not diag.failures:
-        l1_body = l0 if diag.passed else l0 + "\n(no structured failures parsed - escalate to --level 2 or 3)"
-    else:
-        shown = diag.failures[:_MAX_ITEMS]
-        lines = [f"{f.location}: {f.message}" for f in shown]
-        if len(diag.failures) > _MAX_ITEMS:
-            lines.append(f"... +{len(diag.failures) - _MAX_ITEMS} more (escalate to --level 2 or 3)")
-        l1_body = l0 + "\n" + "\n".join(lines)
-    if level == 1:
-        return _with_pointer(l1_body, level, needs_pointer)
+        return l0 if diag.passed else l0 + "\n(no structured failures parsed - escalate to --level 2 or 3)"
+    shown = diag.failures[:_MAX_ITEMS]
+    lines = [f"{f.location}: {f.message}" for f in shown]
+    if len(diag.failures) > _MAX_ITEMS:
+        lines.append(f"... +{len(diag.failures) - _MAX_ITEMS} more (escalate to --level 2 or 3)")
+    return l0 + "\n" + "\n".join(lines)
 
+
+def _render_l2(diag: Diagnostic, l1_body: str) -> str:
     if not diag.failures:
-        l2_body = l1_body
-    else:
-        blocks = []
-        used = 0
-        truncated = False
-        for f in diag.failures[:_MAX_ITEMS]:
-            block = f.context or "(no context captured)"
-            if used + len(block) > _MAX_L2_CHARS:
-                truncated = True
-                break
-            blocks.append(f"--- {f.location} ---\n{block}")
-            used += len(block)
-        l2_body = l1_body + "\n\n" + "\n\n".join(blocks)
-        if truncated:
-            l2_body += "\n\n(context truncated - escalate to --level 3 for the complete raw output)"
-    if level == 2:
-        return _with_pointer(l2_body, level, needs_pointer)
-
-    # level == 3: complete raw output, verbatim, always fully recoverable.
-    return diag.raw
+        return l1_body
+    blocks = []
+    used = 0
+    truncated = False
+    for f in diag.failures[:_MAX_ITEMS]:
+        block = f.context or "(no context captured)"
+        if used + len(block) > _MAX_L2_CHARS:
+            truncated = True
+            break
+        blocks.append(f"--- {f.location} ---\n{block}")
+        used += len(block)
+    l2_body = l1_body + "\n\n" + "\n\n".join(blocks)
+    if truncated:
+        l2_body += "\n\n(context truncated - escalate to --level 3 for the complete raw output)"
+    return l2_body
 
 
 def _with_pointer(body: str, level: int, needs_pointer: bool) -> str:
@@ -340,6 +355,27 @@ def _run_command(command: list[str]) -> tuple[str, int]:
         return f"could not execute {command!r}: {exc}", 127
 
 
+def _safe_path(raw: Path, *, flag: str) -> Path:
+    """Resolve a CLI-supplied path and refuse one that escapes an allowed tree.
+
+    This script is designed to be invoked with LLM-generated arguments (per
+    HORO-971's engineering-loop contract). A prompt-injected or malformed
+    ``--raw-log``/``--raw-file`` value must not be able to read from or
+    write to an arbitrary filesystem location - resolve it (eliminating any
+    ``..`` traversal) and require the result to land under the invoking
+    working directory or the system temp directory (where CI/test scratch
+    output legitimately lives), rather than trusting the argument as-is.
+    """
+    resolved = raw.resolve()
+    allowed_roots = (Path.cwd().resolve(), Path(tempfile.gettempdir()).resolve())
+    if not any(resolved == root or root in resolved.parents for root in allowed_roots):
+        raise SystemExit(
+            f"ERROR: {flag} path {raw!s} resolves to {resolved} which is outside "
+            f"the allowed working/temp directories; refusing for safety"
+        )
+    return resolved
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="diagnostic_compact.py",
@@ -367,14 +403,19 @@ def main(argv: list[str]) -> int:
             return 2
         raw, exit_code = _run_command(cmd)
         if args.raw_log is not None:
-            args.raw_log.parent.mkdir(parents=True, exist_ok=True)
-            args.raw_log.write_text(raw, encoding="utf-8")
+            raw_log = _safe_path(args.raw_log, flag="--raw-log")
+            raw_log.parent.mkdir(parents=True, exist_ok=True)
+            raw_log.write_text(raw, encoding="utf-8")
         diag = classify_output(raw, exit_code)
         print(render(diag, args.level))
         return exit_code
 
     if args.command == "classify":
-        raw = args.raw_file.read_text(encoding="utf-8") if args.raw_file is not None else sys.stdin.read()
+        raw = (
+            _safe_path(args.raw_file, flag="--raw-file").read_text(encoding="utf-8")
+            if args.raw_file is not None
+            else sys.stdin.read()
+        )
         diag = classify_output(raw, args.exit_code, tool_hint=args.tool)
         print(render(diag, args.level))
         return args.exit_code
