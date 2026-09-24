@@ -89,7 +89,11 @@ see [`engineering/security.md`](./engineering/security.md).
   ([`product/host-config-safety-ux-disclosure.md`](./product/host-config-safety-ux-disclosure.md);
   HORO-1000), and the DogFood local evidence store test contract
   ([`product/dogfood-evidence-store-test-contract.md`](./product/dogfood-evidence-store-test-contract.md);
-  full constitution at ADR-0012, HORO-1372/HORO-1369).
+  full constitution at ADR-0012, HORO-1372/HORO-1369), and the DogFood
+  evidence canonicalization/hashing procedure (`horonom-evidence-canon-v1`)
+  every adapter's `content_hash` must agree on
+  ([`product/dogfood-evidence-canonicalization-v1.md`](./product/dogfood-evidence-canonicalization-v1.md);
+  HORO-1376/HORO-1463).
 - [`releases/`](./releases/) — release and public-surface invariants, plus
   the [Public Release Surface Contract](./releases/public-release-contract.md)
   (7-state model, per-surface derivation rules; implementation at
