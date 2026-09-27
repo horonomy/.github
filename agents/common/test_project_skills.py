@@ -441,11 +441,26 @@ class BuildAssetProjectionsTest(unittest.TestCase):
         # spans multiple skills — a skill-by-skill pin, not a global count.
         projections = ps.build_asset_projections()
         engineering_loop_dir = ps.CLAUDE_SKILLS_DIR / "engineering-loop"
+        # Enumerated rather than derived from the source tree on purpose: a pin
+        # computed from the same directory the projection reads would agree with
+        # any projection at all, including one that silently dropped a file. The
+        # cost is that it has to be updated when the skill gains an asset — as
+        # happened with the scripts/ set below (HORO-1513), which the projection
+        # copied correctly while this list still named four files.
         expected_rel_paths = {
             "references/diagnostic-contract.md",
             "references/optional-tool-fallback.md",
             "examples/targeted-loop-then-full-gate.md",
             "examples/escalation-from-compact-to-raw.md",
+            "scripts/diagnostic_compact.py",
+            "scripts/efficiency_eval.py",
+            "scripts/test_diagnostic_compact.py",
+            "scripts/test_efficiency_eval.py",
+            "scripts/fixtures/python_pytest_pass.json",
+            "scripts/fixtures/python_pytest_fail.json",
+            "scripts/fixtures/rust_cargo_build_fail.json",
+            "scripts/fixtures/rust_cargo_test_fail.json",
+            "scripts/fixtures/typescript_vitest_fail.json",
         }
         actual_rel_paths = {
             str(p.relative_to(engineering_loop_dir))
