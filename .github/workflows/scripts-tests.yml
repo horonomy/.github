@@ -6,6 +6,14 @@
 # nothing here makes a live network call or requires `codex` on PATH.
 name: Scripts tests
 
+# The skill trees are in these filters because two of the checks below read
+# them: test_project_skills.py pins what the canonical sources under
+# agents/skills/ project to, and doctor.py's drift check compares the generated
+# .claude/skills/ and .codex/skills/ trees against those sources. Without them
+# the filter was root-anchored past the thing it guarded — `scripts/**` matches
+# scripts/doctor.py and not agents/skills/<skill>/scripts/*, so a skill asset
+# could be added, renamed or deleted and neither check would be consulted. That
+# is how a failing pin sat on main unreported (HORO-1513).
 on:
   pull_request:
     branches: [main]
@@ -13,6 +21,9 @@ on:
       - scripts/**
       - agents/common/**
       - agents/adapters/**
+      - agents/skills/**
+      - .claude/skills/**
+      - .codex/skills/**
       - .github/workflows/scripts-tests.yml
   push:
     branches: [main]
@@ -20,6 +31,9 @@ on:
       - scripts/**
       - agents/common/**
       - agents/adapters/**
+      - agents/skills/**
+      - .claude/skills/**
+      - .codex/skills/**
       - .github/workflows/scripts-tests.yml
 
 permissions:
