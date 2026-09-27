@@ -87,10 +87,37 @@ def real_gh_api(path: str) -> Any:
     return json.loads(proc.stdout)
 
 
+def tls_context() -> ssl.SSLContext:
+    """The TLS settings every live fetch here uses, stated rather than inherited.
+
+    `ssl.create_default_context()` already verifies the certificate chain and
+    the hostname, and this function does not relax either — it re-checks them,
+    so a future refactor that reaches for `check_hostname = False` has to delete
+    a check to do it. Those are raises rather than `assert`s deliberately:
+    `python -O` removes assertions, and a guard that disappears under a flag is
+    not a guard.
+
+    What it does add is a floor. The default context's `minimum_version` is
+    whatever the linked OpenSSL build decides, so the protocol this reconciler
+    accepts is a property of the machine it runs on rather than of this file:
+    the same check could negotiate TLS 1.0 on an old host and TLS 1.2 on CI and
+    report the same PASSED either way. That matters more here than in ordinary
+    client code, because one of the surfaces this module reconciles *is* a
+    site's TLS, so an unstated floor makes the verdict about the runner.
+    """
+    context = ssl.create_default_context()
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    if not context.check_hostname:
+        raise RuntimeError("hostname verification must stay on")
+    if context.verify_mode != ssl.CERT_REQUIRED:
+        raise RuntimeError("certificate verification must stay required")
+    return context
+
+
 def real_http_get(url: str) -> tuple[int, str]:
     req = urllib.request.Request(url, headers={"User-Agent": "horonom-release-reconcile/1"})
     try:
-        with urllib.request.urlopen(req, timeout=15, context=ssl.create_default_context()) as resp:
+        with urllib.request.urlopen(req, timeout=15, context=tls_context()) as resp:
             # Read cap, not a full-page assumption: check_horonom_com/check_docs
             # only need a substring match against the fetched body. 65536 bytes
             # was measured (HORO-533 audit) to already truncate a marketing

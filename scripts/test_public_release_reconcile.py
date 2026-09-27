@@ -8,6 +8,7 @@ a fake Fetchers. Run with:
 
 from __future__ import annotations
 
+import ssl
 import tempfile
 import unittest
 from pathlib import Path
@@ -368,6 +369,57 @@ class RealHttpGetReadLimitTest(unittest.TestCase):
             status, text = prr.real_http_get("https://example.com")
         self.assertEqual(status, 200)
         self.assertEqual(len(text), 200_000)
+
+
+class TlsContextTest(unittest.TestCase):
+    """AAASM-6183: the protocol floor for every live fetch is stated here rather
+    than inherited from whatever OpenSSL the runner happens to link, so the
+    verdict this reconciler prints is a property of the code and not of the
+    machine. Offline like the rest of the suite — no handshake is performed."""
+
+    def test_floor_is_tls_1_2_and_verification_stays_on(self) -> None:
+        context = prr.tls_context()
+        self.assertEqual(context.minimum_version, ssl.TLSVersion.TLSv1_2)
+        self.assertTrue(context.check_hostname)
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+
+    def test_real_http_get_actually_uses_it(self) -> None:
+        # The part that makes the test above non-vacuous: a helper nothing calls
+        # would pass it. Capture the context real_http_get hands to urlopen and
+        # assert the floor is on that object, not on a freshly built one.
+        seen = {}
+
+        class _FakeResp:
+            status = 200
+
+            def read(self, n):
+                return b""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def _fake_urlopen(req, timeout=None, context=None):
+            seen["context"] = context
+            return _FakeResp()
+
+        with mock.patch.object(prr.urllib.request, "urlopen", _fake_urlopen):
+            prr.real_http_get("https://example.com")
+        self.assertIsInstance(seen["context"], ssl.SSLContext)
+        self.assertEqual(seen["context"].minimum_version, ssl.TLSVersion.TLSv1_2)
+
+    def test_relaxed_verification_is_refused_rather_than_returned(self) -> None:
+        # And the guards bite. If a future change hands back a context with
+        # hostname checking off, tls_context must refuse it -- otherwise the two
+        # checks are decoration. `assert` would not survive `python -O`; these do.
+        weak = ssl.create_default_context()
+        weak.check_hostname = False
+        weak.verify_mode = ssl.CERT_NONE
+        with mock.patch.object(prr.ssl, "create_default_context", return_value=weak):
+            with self.assertRaises(RuntimeError):
+                prr.tls_context()
 
 
 class MainCLITest(unittest.TestCase):
