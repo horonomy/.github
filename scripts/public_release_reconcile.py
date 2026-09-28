@@ -34,6 +34,7 @@ from typing import Any, Callable
 import generate_company_metadata as company_meta
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+EVIDENCE_DIR = REPO_ROOT / "metadata" / "release-evidence"
 COMPANY_YAML_PATH = REPO_ROOT / "metadata" / "company.yaml"
 PROFILE_README_PATH = REPO_ROOT / "profile" / "README.md"
 HORONOM_COM_URL = "https://horonom.com"
@@ -139,6 +140,48 @@ REAL_FETCHERS = Fetchers(gh_api=real_gh_api, http_get=real_http_get)
 # ---------------------------------------------------------------------------
 # Evidence config
 # ---------------------------------------------------------------------------
+def resolve_evidence_path(raw: str) -> Path:
+    """Resolve a caller-supplied evidence path, refusing anything outside
+    `metadata/release-evidence/`.
+
+    `main()` takes this path straight from `argv` and hands it to
+    `load_evidence()`, which reads it — so before this guard existed, any
+    readable file on the machine was reachable (HORO-1554,
+    `pythonsecurity:S8707`). That rule's threat model is argv supplied by an
+    agent rather than typed by an operator, which is exactly how this repo's
+    scripts get invoked: `.claude/skills/public-release-reconcile/SKILL.md`
+    names this command for an agent to run. The sink is only a read, but
+    `load_evidence`'s own error path interpolates the parser's message, so an
+    out-of-tree target is a bounded information-disclosure surface.
+
+    This adds no restriction the CLI did not already document: the
+    `evidence_path` argument's help text has always said "Path to a
+    `metadata/release-evidence/<product>.yaml` file", and both module
+    docstring examples pass exactly that. It is enforcement of an existing
+    contract, not a new one.
+
+    Both sides are resolved before comparing, so a symlinked checkout root
+    (on macOS `/tmp` is itself a symlink to `/private/tmp`) compares equal
+    rather than spuriously failing containment. Resolving also means a
+    symlink *inside* the evidence directory pointing outward is caught, not
+    just a literal `../`.
+
+    `EVIDENCE_DIR` is read from the module at call time rather than bound as
+    a default argument, so a test can patch it and exercise this guard
+    without writing into the real checkout.
+    """
+    resolved = Path(raw).resolve()
+    base = EVIDENCE_DIR.resolve()
+    try:
+        resolved.relative_to(base)
+    except ValueError:
+        raise ReconcileError(
+            f"refusing to read {raw!r}: release-evidence configs live in {base}, "
+            f"and this resolves to {resolved}, outside it"
+        ) from None
+    return resolved
+
+
 def load_evidence(path: Path) -> dict[str, Any]:
     try:
         data = company_meta.parse_yaml(path.read_text(encoding="utf-8"))
@@ -414,7 +457,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     try:
-        evidence = load_evidence(Path(args.evidence_path))
+        evidence = load_evidence(resolve_evidence_path(args.evidence_path))
         result = reconcile(evidence)
     except ReconcileError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
