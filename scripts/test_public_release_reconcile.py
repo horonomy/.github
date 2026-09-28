@@ -8,6 +8,8 @@ a fake Fetchers. Run with:
 
 from __future__ import annotations
 
+import io
+import os
 import ssl
 import tempfile
 import unittest
@@ -62,6 +64,55 @@ class LoadEvidenceTest(unittest.TestCase):
         p.write_text("product: x\nclaimed_lifecycle: experimental\n", encoding="utf-8")
         with self.assertRaises(prr.ReconcileError):
             prr.load_evidence(p)
+
+
+class ResolveEvidencePathTest(unittest.TestCase):
+    """HORO-1554 / pythonsecurity:S8707 — argv must not reach outside
+    `metadata/release-evidence/`."""
+
+    def test_accepts_a_real_fixture_by_relative_path(self) -> None:
+        # The documented invocation shape. A relative path resolves against
+        # the cwd, so this pins the cwd explicitly rather than assuming the
+        # repo root — `unittest discover -s scripts` is run from the root in
+        # CI, but the suite must not break when run from scripts/ instead.
+        cwd = os.getcwd()
+        self.addCleanup(os.chdir, cwd)
+        os.chdir(prr.REPO_ROOT)
+        resolved = prr.resolve_evidence_path("metadata/release-evidence/horologium.yaml")
+        self.assertEqual(resolved, (prr.EVIDENCE_DIR / "horologium.yaml").resolve())
+
+    def test_accepts_a_real_fixture_by_absolute_path(self) -> None:
+        p = prr.EVIDENCE_DIR / "eridanus.yaml"
+        self.assertEqual(prr.resolve_evidence_path(str(p)), p.resolve())
+
+    def test_rejects_dotdot_traversal(self) -> None:
+        with self.assertRaises(prr.ReconcileError) as ctx:
+            prr.resolve_evidence_path("metadata/release-evidence/../../../../etc/hosts")
+        self.assertIn("outside it", str(ctx.exception))
+
+    def test_rejects_an_unrelated_absolute_path(self) -> None:
+        with self.assertRaises(prr.ReconcileError):
+            prr.resolve_evidence_path("/etc/hosts")
+
+    def test_rejects_a_symlink_inside_the_evidence_dir_pointing_out(self) -> None:
+        # A string-prefix containment check would accept this: the literal
+        # path really is under the evidence directory. Only resolving first
+        # catches it.
+        outside = Path(tempfile.mkdtemp()) / "outside.yaml"
+        outside.write_text("product: x\n", encoding="utf-8")
+        link = prr.EVIDENCE_DIR / "_horo1554_symlink_probe.yaml"
+        link.symlink_to(outside)
+        self.addCleanup(link.unlink)
+        with self.assertRaises(prr.ReconcileError):
+            prr.resolve_evidence_path(str(link))
+
+    def test_resolved_checkout_root_does_not_spuriously_fail(self) -> None:
+        # On macOS `/tmp` is a symlink to `/private/tmp`, so a checkout there
+        # only passes containment because both sides are resolved.
+        d = Path(tempfile.mkdtemp())
+        (d / "ok.yaml").write_text("product: x\n", encoding="utf-8")
+        with mock.patch.object(prr, "EVIDENCE_DIR", d):
+            self.assertEqual(prr.resolve_evidence_path(str(d / "ok.yaml")), (d / "ok.yaml").resolve())
 
 
 class RepoMetadataTest(unittest.TestCase):
@@ -424,11 +475,30 @@ class TlsContextTest(unittest.TestCase):
 
 class MainCLITest(unittest.TestCase):
     def test_main_returns_nonzero_when_evidence_file_invalid(self) -> None:
+        # HORO-1554: `EVIDENCE_DIR` is patched to the temp dir so this still
+        # fails on the *content* (a missing required field), which is what it
+        # was written to assert. Without the patch it would now exit 2 on
+        # containment instead, and pass while testing nothing.
         d = Path(tempfile.mkdtemp())
         p = d / "bad.yaml"
         p.write_text("product: x\n", encoding="utf-8")
-        exit_code = prr.main([str(p)])
+        with mock.patch.object(prr, "EVIDENCE_DIR", d):
+            with mock.patch("sys.stderr", new=io.StringIO()) as err:
+                exit_code = prr.main([str(p)])
         self.assertEqual(exit_code, 2)
+        self.assertIn("missing required field", err.getvalue())
+
+    def test_main_refuses_an_out_of_tree_evidence_path(self) -> None:
+        d = Path(tempfile.mkdtemp())
+        p = d / "bad.yaml"
+        p.write_text("product: x\n", encoding="utf-8")
+        with mock.patch("sys.stderr", new=io.StringIO()) as err:
+            exit_code = prr.main([str(p)])
+        self.assertEqual(exit_code, 2)
+        # Distinct from the case above: refused before the file was read, so
+        # the content complaint never appears.
+        self.assertIn("outside it", err.getvalue())
+        self.assertNotIn("missing required field", err.getvalue())
 
 
 if __name__ == "__main__":
