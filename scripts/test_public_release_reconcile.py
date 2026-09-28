@@ -98,13 +98,19 @@ class ResolveEvidencePathTest(unittest.TestCase):
         # A string-prefix containment check would accept this: the literal
         # path really is under the evidence directory. Only resolving first
         # catches it.
+        #
+        # EVIDENCE_DIR is patched to a temp dir rather than planting the
+        # symlink in the real metadata/release-evidence/, so the suite never
+        # writes into the checkout it is testing — addCleanup would remove it
+        # on an ordinary failure, but not if the process is killed.
+        base = Path(tempfile.mkdtemp())
         outside = Path(tempfile.mkdtemp()) / "outside.yaml"
         outside.write_text("product: x\n", encoding="utf-8")
-        link = prr.EVIDENCE_DIR / "_horo1554_symlink_probe.yaml"
+        link = base / "inside_pointing_out.yaml"
         link.symlink_to(outside)
-        self.addCleanup(link.unlink)
-        with self.assertRaises(prr.ReconcileError):
-            prr.resolve_evidence_path(str(link))
+        with mock.patch.object(prr, "EVIDENCE_DIR", base):
+            with self.assertRaises(prr.ReconcileError):
+                prr.resolve_evidence_path(str(link))
 
     def test_resolved_checkout_root_does_not_spuriously_fail(self) -> None:
         # On macOS `/tmp` is a symlink to `/private/tmp`, so a checkout there
