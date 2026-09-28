@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -39,6 +40,18 @@ except ImportError:
     horonom_codex = None
 
 
+# A product name is a single path *component*, never a path. The leading
+# alphanumeric is what makes `..` and any separator unrepresentable, so this
+# is a positive allowlist rather than a blocklist of the traversal spellings
+# someone happened to think of — the same idiom repo_bootstrap.py already
+# documents for attacker-influenced names.
+#
+# `\Z` rather than `$`, because `$` also matches immediately before a trailing
+# newline: with `$` this accepted "widget\n" while rejecting "widget ", which
+# is an inconsistency rather than a policy.
+_PRODUCT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+
+
 def _resolve_evidence_path(repo: Path, workspace_root: Path | None, product: str) -> Path:
     """The release-evidence file lives in the governance (`.github`) repo's
     `metadata/release-evidence/`, not in a product's own repo — resolve it
@@ -49,7 +62,22 @@ def _resolve_evidence_path(repo: Path, workspace_root: Path | None, product: str
     wrong path and always reports NOT_APPLICABLE, even when the evidence
     genuinely exists in the sibling governance checkout — a false negative
     found while dogfooding this exact invocation shape against a real
-    adopted product repo (HORO-533)."""
+    adopted product repo (HORO-533).
+
+    Raises `ValueError` for a `product` that is not a plain filename. Both
+    path-building branches below interpolate it directly, so before this
+    guard existed `--product ../../../../tmp/x` resolved outside both
+    checkouts and `check_public_release_adoption` read it and interpolated
+    the parser's message into the report — the same information-disclosure
+    surface as `public_release_reconcile.py`'s argv path (HORO-1554), by an
+    independent route, since that check calls `prr.load_evidence` directly
+    and so never passes through `prr.resolve_evidence_path`. SonarCloud
+    flagged only the other site; this one was found by reading the code."""
+    if not _PRODUCT_NAME.match(product):
+        raise ValueError(
+            f"--product {product!r} is not a product name: expected a single "
+            "filename component matching [A-Za-z0-9][A-Za-z0-9._-]*"
+        )
     candidate = repo / "metadata" / "release-evidence" / f"{product}.yaml"
     if candidate.is_file() or workspace_root is None:
         return candidate
@@ -96,8 +124,24 @@ def run_checks(
         ]
         results.append(checks.check_no_secrets_in_generated_files(generated_targets))
         if product:
-            evidence_path = _resolve_evidence_path(repo, workspace_root, product)
-            results.append(checks.check_public_release_adoption(evidence_path))
+            # Degrade to a FAIL result rather than propagating, matching the
+            # HORO-533 note inside _resolve_evidence_path: no failure mode in
+            # this function should throw an uncaught exception out of doctor.
+            # FAIL, not NOT_APPLICABLE — a refused argument must be visible in
+            # the report and in the exit code, not look like "no evidence".
+            try:
+                evidence_path = _resolve_evidence_path(repo, workspace_root, product)
+            except ValueError as exc:
+                results.append(
+                    checks.CheckResult(
+                        "public_release_adoption",
+                        checks.FAIL,
+                        f"refusing to resolve a release-evidence path: {exc}",
+                        fix="pass a bare product name, e.g. --product circinus",
+                    )
+                )
+            else:
+                results.append(checks.check_public_release_adoption(evidence_path))
     else:
         results.append(
             checks.CheckResult("repo_checks", checks.NOT_APPLICABLE, "no --repo given — repo-level checks skipped")
