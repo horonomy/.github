@@ -7,6 +7,7 @@ Stdlib unittest only. Run with:
 
 from __future__ import annotations
 
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -560,6 +561,72 @@ class ResolveEvidencePathTest(unittest.TestCase):
         repo = Path("/some/repo")
         result = doctor._resolve_evidence_path(repo, None, "widget")
         self.assertEqual(result, repo / "metadata" / "release-evidence" / "widget.yaml")
+
+
+class ProductNameGuardTest(unittest.TestCase):
+    """HORO-1554: --product is interpolated into two path expressions, so it
+    must be a single filename component. Sonar flagged the sibling site in
+    public_release_reconcile.py but not this one; it was found by reading
+    the code. Note the four tests above all pass "widget", so none of them
+    became a vacuous pass on this guard."""
+
+    def test_accepts_every_real_product_name_in_the_repo(self) -> None:
+        # Guards against an allowlist that is correct in the abstract but
+        # rejects a name this repo actually ships.
+        names = sorted(p.stem for p in (doctor._SCRIPTS_DIR.parent / "metadata" / "release-evidence").glob("*.yaml"))
+        self.assertTrue(names, "no release-evidence fixtures found — this test would be vacuous")
+        for name in names:
+            with self.subTest(product=name):
+                self.assertIsNotNone(doctor._PRODUCT_NAME.match(name))
+
+    def test_accepts_names_using_every_permitted_character_class(self) -> None:
+        for name in ("widget", "Widget2", "with-dash", "with_underscore", "with.dot", "9"):
+            with self.subTest(product=name):
+                result = doctor._resolve_evidence_path(Path("/some/repo"), None, name)
+                self.assertEqual(result.name, f"{name}.yaml")
+
+    def test_rejects_relative_traversal(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            doctor._resolve_evidence_path(Path("/some/repo"), None, "../../../../tmp/evil")
+        self.assertIn("not a product name", str(ctx.exception))
+
+    def test_rejects_an_absolute_path(self) -> None:
+        with self.assertRaises(ValueError):
+            doctor._resolve_evidence_path(Path("/some/repo"), None, "/etc/hosts")
+
+    def test_rejects_a_bare_separator_and_a_leading_dot(self) -> None:
+        # A leading dot is refused even without a separator: it is what makes
+        # ".." unrepresentable, so the guard does not depend on spotting the
+        # traversal spellings someone happened to enumerate.
+        # "widget\n" is in this set deliberately: with a `$` anchor it was
+        # accepted while "widget " was rejected, because `$` also matches
+        # before a trailing newline. `\Z` is what makes the two consistent.
+        for name in ("a/b", "a\\b", "..", ".hidden", "", " widget", "widget ", "widget\n", "a/b\n"):
+            with self.subTest(product=name):
+                with self.assertRaises(ValueError):
+                    doctor._resolve_evidence_path(Path("/some/repo"), None, name)
+
+    def test_run_checks_degrades_to_fail_rather_than_raising(self) -> None:
+        # The HORO-533 idiom: no failure mode here may throw out of doctor.
+        # FAIL and not NOT_APPLICABLE, so a refused argument cannot be
+        # mistaken for "this product has no evidence config".
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        results = doctor.run_checks(
+            repo=Path(tmp.name), workspace_root=None, expected_org="horonomy", product="../../../../tmp/evil"
+        )
+        result = next(r for r in results if r.name == "public_release_adoption")
+        self.assertEqual(result.status, checks.FAIL)
+        self.assertIn("refusing to resolve", result.detail)
+        self.assertEqual(doctor.compute_overall(results), checks.FAIL)
+
+    def test_main_exits_nonzero_on_a_refused_product(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        with mock.patch("sys.stdout", new=io.StringIO()) as out:
+            exit_code = doctor.main(["--repo", tmp.name, "--product", "../../../../tmp/evil"])
+        self.assertEqual(exit_code, 1)
+        self.assertIn("refusing to resolve", out.getvalue())
 
 
 class MainCLIIntegrationTest(unittest.TestCase):
