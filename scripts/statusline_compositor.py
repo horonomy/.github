@@ -284,5 +284,15 @@ def load_registry(path: pathlib.Path | None = None) -> Registry:
         raise RegistryError(f"registry at {target} is not valid JSON (line {exc.lineno})") from exc
 
 
+def depth() -> int:
+    """How many compositors are already in this process' ancestry."""
+    try:
+        return max(0, int(os.environ.get(DEPTH_ENV, "0")))
+    except ValueError:
+        # An unparseable marker is treated as "someone is already here", because
+        # the failure we are preventing is unbounded recursion.
+        return MAX_DEPTH
+
+
 if __name__ == "__main__":
     sys.exit(main())
