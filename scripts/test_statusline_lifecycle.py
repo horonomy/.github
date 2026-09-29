@@ -1007,11 +1007,45 @@ class AtomicWriteTest(LifecycleCase):
         with self.assertRaises(lifecycle.LifecycleError):
             lifecycle.atomic_write(blocker / "nested" / "registry.json", b"{}", mode=0o600)
 
-    def test_a_read_back_that_disagrees_with_the_plan_is_a_failure_not_a_success(self) -> None:
-        self.enable("fornax")
-        plan = self.plan_remove("fornax", operation="uninstall")
+    def test_a_settings_read_back_that_disagrees_with_the_plan_is_a_failure(self) -> None:
+        # Every other claim in the plan is cleared, so the only thing left that can
+        # raise is the settings read-back. An earlier version of this test kept the
+        # uninstall plan's `state_to_remove` and passed even with the read-back
+        # disabled -- a different check was firing.
+        plan = self.plan_enable("fornax")
+        lifecycle.apply(plan)
         tampered = dataclasses.replace(
-            plan, settings_after={"statusLine": {"type": "command", "command": "/never/written"}}
+            plan,
+            settings_after={"statusLine": {"type": "command", "command": "/never/written"}},
+            registry_after=None,
+            state_to_remove=(),
+        )
+        with self.assertRaises(lifecycle.VerificationError):
+            lifecycle._verify(tampered)
+
+    def test_a_registry_read_back_that_disagrees_with_the_plan_is_a_failure(self) -> None:
+        plan = self.plan_enable("fornax")
+        lifecycle.apply(plan)
+        tampered = dataclasses.replace(
+            plan,
+            settings_after=None,
+            registry_after=lifecycle.empty_registry(),
+            state_to_remove=(),
+        )
+        with self.assertRaises(lifecycle.VerificationError):
+            lifecycle._verify(tampered)
+
+    def test_a_registry_the_compositor_would_reject_is_not_a_success(self) -> None:
+        # The interesting question after a write is not "did our bytes land" but
+        # "is the statusline still working", and only the compositor's own parser
+        # answers that.
+        plan = self.plan_enable("fornax")
+        lifecycle.apply(plan)
+        registry = lifecycle.read_registry(self.home)
+        unusable = dict(registry.data) | {"registry_version": 99}
+        registry.path.write_bytes(lifecycle.serialize(unusable))
+        tampered = dataclasses.replace(
+            plan, settings_after=None, registry_after=unusable, state_to_remove=()
         )
         with self.assertRaises(lifecycle.VerificationError):
             lifecycle._verify(tampered)
@@ -1277,6 +1311,7 @@ class DoctorTest(LifecycleCase):
         data["env"]["ANTHROPIC_API_KEY"] = secret
         data["statusLine"]["command"] = "/Users/founder/.claude/private/secret-statusline.sh"
         self.write(data)
+
         self.enable("fornax", argv=("/Users/founder/private/bin/fornax", "statusline"))
 
         rendered = json.dumps(lifecycle.doctor(self.settings, self.home))
