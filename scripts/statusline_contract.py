@@ -787,6 +787,63 @@ class ProviderStatus:
         return payload
 
 
+_NOT_AVAILABLE_STATE = {
+    Availability.UNAVAILABLE: SegmentState.NEUTRAL,
+    Availability.UNSUPPORTED: SegmentState.NEUTRAL,
+    Availability.UNKNOWN: SegmentState.UNKNOWN,
+    Availability.ERROR: SegmentState.WARN,
+}
+
+
+def not_available(
+    provider: str,
+    provider_version: str,
+    scope: Scope,
+    availability: Availability,
+    reason_code: str,
+    reason_label: str,
+    *,
+    explain_key: str | None = None,
+    order_hint: int = 500,
+) -> ProviderStatus:
+    """Build the status a provider returns when it has no live reading.
+
+    Exists so the four not-available cases are expressed identically by every
+    product instead of each inventing its own shape — and so none of them can
+    reach for `AVAILABLE` with an empty segment list, which renders as silence
+    and reads as "all clear". `ERROR` maps to a `warn` segment because a failed
+    probe is something the user may need to act on; the other three are
+    `neutral`/`unknown`, which state a fact without claiming health.
+
+    The reason is a bounded code plus a short prose label, never a raw error
+    string: an exception message routinely carries a path, a URL or a command
+    line, and this value is rendered into the user's terminal.
+    """
+    if not isinstance(availability, Availability):
+        raise ContractViolation("availability must be an Availability")
+    if availability.has_live_readings:
+        raise ContractViolation(
+            "not_available() cannot build an available status; construct "
+            "ProviderStatus directly with the readings you actually have"
+        )
+    return ProviderStatus(
+        provider=provider,
+        provider_version=provider_version,
+        scope=scope,
+        availability=availability,
+        segments=(
+            Segment(
+                key="availability",
+                state=_NOT_AVAILABLE_STATE[availability],
+                label=reason_label,
+                reason_code=reason_code,
+                explain_key=explain_key,
+            ),
+        ),
+        order_hint=order_hint,
+    )
+
+
 def _segment_to_wire(segment: Segment) -> dict:
     """Serialise one segment, omitting unset optional fields."""
     payload: dict = {
