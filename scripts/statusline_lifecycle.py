@@ -1582,7 +1582,11 @@ def main(argv: list[str] | None = None, stdout: object = None) -> int:
     if options.command in ("doctor", "list"):
         report = doctor(path, probe=getattr(options, "probe", False))
         if options.command == "list":
-            report = {key: report[key] for key in ("slot", "upstream", "providers", "drift")}
+            # `.get`, because an unparseable settings file yields a report with no
+            # `upstream` section at all -- and that is precisely the state a user
+            # runs this command to understand, so it must not be the state that
+            # raises.
+            report = {key: report.get(key) for key in ("slot", "upstream", "providers", "drift")}
             print(json.dumps(report, indent=2) if options.json else _describe_list(report), file=stream)
             return EXIT_OK
         print(json.dumps(report, indent=2) if options.json else _describe_doctor(report), file=stream)
