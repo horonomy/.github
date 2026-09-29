@@ -249,3 +249,45 @@ class Ownership(enum.Enum):
             Ownership.HORONOM_HOST_OWNED,
             Ownership.PRODUCT_PROVIDER_OWNED,
         )
+
+
+# Ownership class of each concrete artifact/key this capability touches.
+# HORO-1564 requires this be stated exactly rather than left to each
+# lifecycle implementation to decide locally. Keys are stable identifiers,
+# not file paths, so nothing here hard-codes a personal directory.
+ARTIFACT_OWNERSHIP = {
+    # The person's own statusline program, whatever it is and wherever it
+    # lives. Invoked as a provider, never read as source, never edited.
+    "user_statusline_command": Ownership.USER_OWNED,
+    # Everything else the person wrote in the host's shared settings file.
+    "user_settings_keys": Ownership.USER_OWNED,
+    # The host tool's own settings file as a whole: a shared artifact.
+    "host_shared_settings_file": Ownership.HOST_OWNED,
+    # The host tool's own schema keys inside that file.
+    "host_settings_schema_keys": Ownership.HOST_OWNED,
+    # The one slot value, only while Horonom holds it.
+    "statusline_command_value": Ownership.HORONOM_HOST_OWNED,
+    # The composed-statusline program Horonom installs and the registry of
+    # which providers are enabled.
+    "horonom_statusline_program": Ownership.HORONOM_HOST_OWNED,
+    "horonom_provider_registry": Ownership.HORONOM_HOST_OWNED,
+    # The record of what the slot looked like before Horonom took it. Owned
+    # by the host, but evidence only: never restoration authority on its own.
+    "horonom_preserved_upstream_record": Ownership.HORONOM_HOST_OWNED,
+    # One product's registry entry, and that product's own state store.
+    "product_provider_entry": Ownership.PRODUCT_PROVIDER_OWNED,
+    "product_state_store": Ownership.PRODUCT_PROVIDER_OWNED,
+    # A statusline slot value with no recognised owner, and pre-marker
+    # legacy state. Both fail safe.
+    "unattributed_statusline_command": Ownership.UNKNOWN,
+    "legacy_unmarked_state": Ownership.UNKNOWN,
+}
+
+
+def classify_artifact(artifact: str) -> Ownership:
+    """Return the ownership class of a known artifact identifier.
+
+    An unrecognised identifier is `UNKNOWN`, not a guess: a new artifact
+    nobody has classified must not inherit write permission by accident.
+    """
+    return ARTIFACT_OWNERSHIP.get(artifact, Ownership.UNKNOWN)
