@@ -358,5 +358,29 @@ class SecretShapeTest(unittest.TestCase):
         self.assertEqual(sc.assert_no_secret_shape("v0.0.2", "label"), "v0.0.2")
 
 
+class HostShapeTest(unittest.TestCase):
+    def test_internal_endpoints_are_rejected(self) -> None:
+        for host in ("gateway.internal", "build.corp", "db.lan", "localhost"):
+            with self.subTest(host=host):
+                with self.assertRaises(sc.PrivacyViolation):
+                    sc.assert_no_host_shape(f"talking to {host}", "label")
+
+    def test_a_public_domain_is_also_rejected(self) -> None:
+        with self.assertRaises(sc.PrivacyViolation):
+            sc.assert_no_host_shape("api.example.com", "label")
+
+    def test_version_and_duration_strings_are_not_host_shaped(self) -> None:
+        for value in ("v0.0.2", "0.3s recon", "P90 ≤ 12m", "97% verified"):
+            with self.subTest(value=value):
+                self.assertEqual(sc.assert_no_host_shape(value, "label"), value)
+
+    def test_privacy_safe_applies_both_checks(self) -> None:
+        with self.assertRaises(sc.PrivacyViolation):
+            sc.assert_privacy_safe("ghp_" + "e" * 20, "label")
+        with self.assertRaises(sc.PrivacyViolation):
+            sc.assert_privacy_safe("gateway.internal", "label")
+        self.assertEqual(sc.assert_privacy_safe("Unverified", "label"), "Unverified")
+
+
 if __name__ == "__main__":
     unittest.main()
