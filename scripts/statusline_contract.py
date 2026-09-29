@@ -32,6 +32,7 @@ Stdlib only, matching the rest of `scripts/`.
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import enum
 import re
 
@@ -616,3 +617,135 @@ class Segment:
                 raise ContractViolation("segment.count must not exceed segment.total")
         if self.count_label is not None:
             require_safe_label(self.count_label, "segment.count_label")
+
+
+# A provider's own version token, for capability negotiation and for a
+# `doctor` surface to report. Version-shaped only: no free text.
+_PROVIDER_VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$")
+
+# `observed_at` is UTC with an explicit `Z`. A local-offset timestamp makes
+# freshness ambiguous across machines, which is the one thing this field is
+# for, so offsets are rejected rather than converted.
+_OBSERVED_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$")
+
+# Ceiling on a provider's declared cache lifetime. The statusline is a hot
+# path rendered on every host refresh, so caching is expected — but a long
+# TTL turns a live indicator into a stale one without saying so.
+MAX_CACHE_TTL_SECONDS = 60
+
+# Longest optional convenience rendering a provider may supply. The shared
+# host composes from segments; this exists only so a provider can be run
+# standalone and still print something useful.
+MAX_FALLBACK_TEXT_CHARS = 120
+
+
+def require_provider_version(value: object) -> str:
+    """Validate a provider's own version token."""
+    if not isinstance(value, str) or not _PROVIDER_VERSION_RE.match(value):
+        raise ContractViolation(
+            f"provider_version must match {_PROVIDER_VERSION_RE.pattern}"
+        )
+    return value
+
+
+def require_observed_at(value: object) -> str:
+    """Validate an explicit-UTC ISO 8601 timestamp.
+
+    Checked for real calendar validity too: a regex alone would accept
+    `2026-02-31T00:00:00Z`, and a nonsense date is worse than no timestamp
+    because a renderer would compute an age from it.
+    """
+    if not isinstance(value, str) or not _OBSERVED_AT_RE.match(value):
+        raise ContractViolation(
+            "observed_at must be an explicit-UTC ISO 8601 timestamp ending in Z"
+        )
+    try:
+        datetime.datetime.strptime(value.split(".")[0], "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc
+        )
+    except ValueError as exc:
+        raise ContractViolation(f"observed_at is not a real UTC instant: {exc}") from exc
+    return value
+
+
+@dataclasses.dataclass(frozen=True)
+class ProviderStatus:
+    """One provider's complete, validated answer for one render.
+
+    Constructing this is the contract. A provider that cannot answer still
+    returns one of these with a non-`AVAILABLE` availability and, usually, a
+    segment explaining why — because "unavailable" rendering as an empty
+    statusline is indistinguishable from "everything is fine".
+    """
+
+    provider: str
+    provider_version: str
+    scope: Scope
+    availability: Availability
+    segments: tuple[Segment, ...] = ()
+    observed_at: str | None = None
+    cache_ttl_seconds: int = 0
+    order_hint: int = 500
+    fallback_text: str | None = None
+    contract_version: int = CONTRACT_VERSION
+
+    def __post_init__(self) -> None:
+        if not is_supported_contract_version(self.contract_version):
+            raise ContractViolation(
+                f"contract_version {self.contract_version!r} is not supported by "
+                f"this host (supported: {sorted(SUPPORTED_CONTRACT_VERSIONS)})"
+            )
+        require_provider_id(self.provider)
+        require_provider_version(self.provider_version)
+        if not isinstance(self.scope, Scope):
+            raise ContractViolation("scope must be a Scope; it has no default")
+        if not isinstance(self.availability, Availability):
+            raise ContractViolation("availability must be an Availability")
+        self._validate_segments()
+        if self.observed_at is not None:
+            require_observed_at(self.observed_at)
+        require_bounded_int(
+            self.cache_ttl_seconds, "cache_ttl_seconds", MAX_CACHE_TTL_SECONDS
+        )
+        require_bounded_int(self.order_hint, "order_hint", 1000)
+        if self.fallback_text is not None:
+            require_safe_label(
+                self.fallback_text, "fallback_text", MAX_FALLBACK_TEXT_CHARS
+            )
+
+    def _validate_segments(self) -> None:
+        if not isinstance(self.segments, tuple):
+            raise ContractViolation("segments must be a tuple")
+        if len(self.segments) > MAX_SEGMENTS_PER_PROVIDER:
+            raise ContractViolation(
+                f"a provider may contribute at most {MAX_SEGMENTS_PER_PROVIDER} segments"
+            )
+        for segment in self.segments:
+            if not isinstance(segment, Segment):
+                raise ContractViolation("every entry in segments must be a Segment")
+        keys = [segment.key for segment in self.segments]
+        if len(keys) != len(set(keys)):
+            raise ContractViolation("segment keys must be unique within a provider")
+        self._validate_non_collapse()
+
+    def _validate_non_collapse(self) -> None:
+        """Forbid the two ways a non-answer gets rendered as a good answer.
+
+        A provider that could not read its state must not claim `OK`, and must
+        not report a count: an unavailable daemon reporting `0 would block` is
+        a false all-clear, which is the `UNAVAILABLE != ZERO` rule.
+        """
+        if self.availability.has_live_readings:
+            return
+        for segment in self.segments:
+            if segment.state is SegmentState.OK:
+                raise ContractViolation(
+                    f"availability {self.availability.value!r} cannot carry an "
+                    "'ok' segment; unknown is not healthy"
+                )
+            if segment.count is not None or segment.total is not None:
+                raise ContractViolation(
+                    f"availability {self.availability.value!r} cannot carry a "
+                    "count; an unavailable provider reporting zero is a false "
+                    "all-clear"
+                )
