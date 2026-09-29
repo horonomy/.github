@@ -133,5 +133,12 @@ class Registry:
     deadline_ms: int
 
 
+def state_home() -> pathlib.Path:
+    """Where Horonom keeps its own statusline state."""
+    override = os.environ.get(STATE_HOME_ENV)
+    root = pathlib.Path(override) if override else pathlib.Path(DEFAULT_STATE_HOME)
+    return root.expanduser()
+
+
 if __name__ == "__main__":
     sys.exit(main())
