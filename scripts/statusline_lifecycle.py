@@ -285,3 +285,104 @@ def read_settings(path: pathlib.Path) -> SettingsDocument:
         trailing_newline=raw.endswith(b"\n"),
         mode=mode,
     )
+
+
+def compositor_path() -> pathlib.Path:
+    """Where the compositor this lifecycle installs actually lives."""
+    return pathlib.Path(compositor.__file__).resolve()
+
+
+def compositor_command() -> str:
+    """The command string we put in the slot.
+
+    The interpreter is named by absolute path rather than left to `PATH`. The
+    host runs this through a shell whose environment we do not control, so
+    `python3` may not resolve to the interpreter that has the modules this
+    command needs -- and the failure mode of getting that wrong is a statusline
+    that works for whoever ran the installer and silently does not for the
+    session that matters.
+    """
+    return f"{shlex.quote(sys.executable)} {shlex.quote(str(compositor_path()))}"
+
+
+def refers_to_compositor(command: object) -> bool:
+    """Whether `command` invokes our compositor.
+
+    Every token is considered, not just the first, because our own command names
+    an interpreter first and the compositor second. Comparison is by inode, so a
+    relocated checkout or a symlinked path still identifies as ours -- string
+    equality against `compositor_command()` would report a stale install as
+    somebody else's command and then refuse to release the slot.
+
+    This parses the command, which the compositor is forbidden to do to the
+    user's command. The distinction is what the result is used for: asking "is
+    this program mine" is inspection, and the string is never reassembled from
+    the tokens or handed to a shell in any form but the one it arrived in.
+    """
+    if not isinstance(command, str):
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        # Unbalanced quoting. Not something this module wrote, and guessing at
+        # what the shell would make of it is exactly the parsing we avoid.
+        return False
+    target = compositor_path()
+    for token in tokens:
+        candidate = shutil.which(token) or token
+        try:
+            if os.path.samefile(candidate, target):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+class MarkerState(enum.Enum):
+    """Whether the marker slot in a `statusLine` object holds our marker.
+
+    `FOREIGN` is its own answer rather than being folded into `ABSENT`, because
+    the two license different actions: we may write a marker where there is
+    none, and may not write one over a value we did not put there.
+    """
+
+    ABSENT = "absent"
+    OURS = "ours"
+    FOREIGN = "foreign"
+
+
+def marker_state(status_line: dict) -> MarkerState:
+    found = status_line.get(MARKER_KEY)
+    if found is None:
+        return MarkerState.ABSENT
+    if isinstance(found, dict) and found.get("owner") == MARKER_OWNER:
+        return MarkerState.OURS
+    return MarkerState.FOREIGN
+
+
+def classify(document: SettingsDocument) -> Ownership:
+    """Who owns the `statusLine` in this document.
+
+    Refuses in every case where the shape is not one this module knows how to
+    leave working, which includes an explicit `null` and a `type` we do not
+    recognise. Both are cheap to refuse and expensive to guess at: a future
+    Claude Code that grows a second `statusLine.type` would have that feature
+    silently replaced by ours.
+    """
+    if STATUS_LINE_KEY not in document.data:
+        return Ownership.ABSENT
+    status_line = document.status_line
+    if not isinstance(status_line, dict):
+        return Ownership.UNSUPPORTED_SHAPE
+    if status_line.get("type") != SUPPORTED_STATUS_LINE_TYPE:
+        return Ownership.UNSUPPORTED_SHAPE
+    marker = marker_state(status_line)
+    if marker is MarkerState.FOREIGN:
+        return Ownership.UNSUPPORTED_SHAPE
+    command = status_line.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return Ownership.UNSUPPORTED_SHAPE
+    marked = marker is MarkerState.OURS
+    if refers_to_compositor(command):
+        return Ownership.HORONOM_OWNED if marked else Ownership.ADOPTABLE
+    return Ownership.DRIFTED if marked else Ownership.USER_OWNED
