@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Shared Horonom statusline provider contract (HORO-1564).
+
+A host agent tool such as Claude Code exposes exactly *one* statusline
+command. Several Horonom products each have live state worth showing there.
+This module defines the one typed, versioned contract those products speak,
+so that:
+
+- no product needs to know how to rewrite the host tool's configuration;
+- no product needs to know how the whole statusline is formatted;
+- adding a product does not require editing another product's renderer;
+- the shared host — not each product — owns iconography and layout.
+
+The contract is deliberately a *wire* contract (versioned JSON on a
+subprocess's stdout), not a library API. Horonom products are written in
+different languages (Fornax and Libra are Rust, Circinus is Python), so a
+shared library cannot serve them; a shared program plus a versioned wire
+format can. This also keeps the single host-configuration patcher in one
+place instead of reimplemented per product, per
+`governance/product/product-integration-safety.md`.
+
+Read alongside:
+
+- `governance/product/product-integration-safety.md` — the non-destructive
+  host-configuration invariant this contract's ownership model refines.
+- `governance/product/host-config-ownership-test-contract.md` — the 14
+  ownership property IDs the lifecycle commands must prove.
+
+Stdlib only, matching the rest of `scripts/`.
+"""
+
+from __future__ import annotations
+
+# The wire contract version a provider must declare. Bumped only when a
+# change is not backward compatible for an existing host; additive optional
+# fields do not bump it (see `docs/` and `is_supported_contract_version`).
+CONTRACT_VERSION = 1
+
+# Versions this host can parse. A provider declaring anything else is
+# reported as an explicit unsupported-version state, never guessed at.
+SUPPORTED_CONTRACT_VERSIONS = frozenset({1})
+
+
+def is_supported_contract_version(version: object) -> bool:
+    """Return whether `version` is a contract version this host can parse.
+
+    Deliberately strict about type: a provider that emits the version as a
+    string (`"1"`) has a real bug, and silently coercing it would let a
+    future incompatible provider be mis-parsed as v1.
+    """
+    return isinstance(version, int) and not isinstance(version, bool) and version in SUPPORTED_CONTRACT_VERSIONS
