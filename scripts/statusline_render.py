@@ -219,3 +219,22 @@ def is_emoji_presentation_safe(glyph: str) -> bool:
         or unicodedata.category(char) in _COMBINING_CATEGORIES
         for char in glyph
     )
+
+
+# Iconography is host-owned. A product never picks a glyph, so the same
+# semantic role looks the same everywhere and a new product cannot introduce a
+# second visual vocabulary for "warning".
+STATE_GLYPHS = {
+    "ok": "✅",  # WHITE HEAVY CHECK MARK
+    "attention": "⚠" + _VS16,  # WARNING SIGN, forced to emoji presentation
+    "warn": "\U0001f7e0",  # LARGE ORANGE CIRCLE
+    "critical": "\U0001f6d1",  # OCTAGONAL SIGN
+    "neutral": "⚪",  # MEDIUM WHITE CIRCLE
+    "unknown": "❔",  # WHITE QUESTION MARK ORNAMENT
+}
+
+SCOPE_GLYPHS = {
+    "host": "\U0001f4bb",  # PERSONAL COMPUTER
+    "session": "\U0001f4ac",  # SPEECH BALLOON
+    "project": "\U0001f4c1",  # FILE FOLDER
+}
