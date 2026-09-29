@@ -537,6 +537,11 @@ def run_provider(
             entry, contract.Availability.UNKNOWN, "deadline_exhausted", "No time left to ask"
         )
     try:
+        # Empty stdin, not the host's payload. Providers are deliberately denied
+        # it: it is the one thing here that carries the user's session — paths,
+        # model, context — and a provider that cannot receive it cannot render
+        # it, log it, or grow a dependency on it. Only the user's own command,
+        # which the host was already feeding before we took the slot, gets it.
         returncode, produced = _run_bounded(entry.argv, b"", timeout_ms, shell=False)
     except FileNotFoundError:
         return _host_not_available(
