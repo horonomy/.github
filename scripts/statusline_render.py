@@ -19,6 +19,7 @@ finding that produced this module's existence.
 
 from __future__ import annotations
 
+import dataclasses
 import enum
 import unicodedata
 
@@ -610,3 +611,22 @@ def _render_groups(statuses: "tuple", mode: PresentationMode, hidden: int = 0) -
         marker = _hidden_marker(hidden)
         text = f"{text}{SEGMENT_SEPARATORS[mode]}{marker}" if text else marker
     return text
+
+
+def _without_dropped(statuses: tuple, dropped: set) -> tuple:
+    """Rebuild the provider tuple minus the `(provider, segment)` pairs in `dropped`.
+
+    A provider that loses every segment disappears entirely rather than
+    rendering as an attributed nothing, which would read as "checked, all
+    clear".
+    """
+    rebuilt = []
+    for p_index, status in enumerate(statuses):
+        kept = tuple(
+            segment
+            for s_index, segment in enumerate(getattr(status, "segments", ()) or ())
+            if (p_index, s_index) not in dropped
+        )
+        if kept:
+            rebuilt.append(dataclasses.replace(status, segments=kept))
+    return tuple(rebuilt)
