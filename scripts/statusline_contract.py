@@ -350,3 +350,37 @@ def require_explain_key(value: object) -> str:
             f"explain_key must be a dotted key matching {_EXPLAIN_KEY_RE.pattern}"
         )
     return value
+
+
+# Longest human label a provider may emit. The statusline is one line shared
+# by several products; a long label is a layout bug, not a feature.
+MAX_LABEL_CHARS = 48
+
+# The only non-alphanumeric characters allowed in a human label. Everything
+# a path, URL, shell expansion or key=value pair needs is absent: no `/`,
+# `\`, `:`, `=`, `@`, `~`, `$`, quote or angle bracket. That makes those
+# disclosures structurally impossible rather than merely detected.
+_LABEL_EXTRA_CHARS = frozenset(" .,'-—()%+?!≤≥")
+
+
+def require_label(value: object, field: str = "label") -> str:
+    """Validate a short human label against a strict character allowlist.
+
+    Rejects emoji as well as separators: the shared host owns iconography, so
+    a provider embedding its own glyph would defeat consistent rendering
+    across products. Emoji are `Symbol, other` and so are not alphanumeric,
+    which is why the allowlist check catches them without an emoji table.
+    """
+    if not isinstance(value, str):
+        raise ContractViolation(f"{field} must be a string")
+    if not value:
+        raise ContractViolation(f"{field} must not be empty")
+    if len(value) > MAX_LABEL_CHARS:
+        raise ContractViolation(f"{field} must be at most {MAX_LABEL_CHARS} characters")
+    for char in value:
+        if not char.isalnum() and char not in _LABEL_EXTRA_CHARS:
+            raise ContractViolation(
+                f"{field} contains a disallowed character {char!r}; "
+                "labels are prose, and the host owns iconography and separators"
+            )
+    return value
