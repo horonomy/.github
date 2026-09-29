@@ -1076,6 +1076,30 @@ class TestMain(FixtureCase):
         first = self.run_main()[1]
         self.assertEqual(self.run_main()[1], first)
 
+    def test_a_render_writes_nowhere_but_the_cache(self):
+        # Asserted over the whole tree rather than against a named file, because
+        # the risk is a write nobody thought to look for -- a receipt, a log, a
+        # backup, a lock. Anything this render creates outside the cache appears
+        # here as a new path, whatever it is called.
+        good = self.answering("good9", wire())
+        self.write_registry(providers=[provider_document("fornax", [good])])
+        before = {
+            path: path.stat().st_mtime_ns
+            for path in self.home.rglob("*")
+            if path.is_file()
+        }
+        self.run_main()
+        after = {
+            path: path.stat().st_mtime_ns
+            for path in self.home.rglob("*")
+            if path.is_file()
+        }
+        cache = compositor.cache_dir()
+        self.assertEqual(
+            {p for p in after if p not in before or after[p] != before[p]},
+            {p for p in after if cache in p.parents},
+        )
+
     def test_the_recursion_guard_holds_in_a_real_child_process(self):
         # The in-process test covers the marker; this one proves a real child
         # inherits it, which is the case the guard exists for.
