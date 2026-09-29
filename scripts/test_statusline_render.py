@@ -546,5 +546,50 @@ class TestFormatReason(unittest.TestCase):
             with self.subTest(code=code, label=label):
                 self.assertEqual(render.format_reason(code, label), "")
 
+
+class TestSeparatorHierarchy(unittest.TestCase):
+    ALLOWLISTED_PUNCTUATION = set(". , ' - — ( ) % + ? ! ≤ ≥".split())
+
+    def separators(self):
+        yield "detail", render.DETAIL_SEPARATOR
+        for mode, value in render.SEGMENT_SEPARATORS.items():
+            yield f"segment/{mode.value}", value
+        for mode, value in render.UPSTREAM_SEPARATORS.items():
+            yield f"upstream/{mode.value}", value
+
+    def test_no_separator_uses_a_character_a_provider_label_may_contain(self):
+        # Otherwise a comma in a `reason_label` draws a boundary the provider
+        # never intended.
+        for name, value in self.separators():
+            with self.subTest(name=name):
+                self.assertFalse(set(value.strip()) & self.ALLOWLISTED_PUNCTUATION)
+
+    def test_every_separator_is_one_column_per_character(self):
+        for name, value in self.separators():
+            with self.subTest(name=name):
+                self.assertEqual(render.display_width(value), len(value))
+
+    def test_the_three_levels_are_distinguishable_within_a_mode(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    len({
+                        render.DETAIL_SEPARATOR,
+                        render.SEGMENT_SEPARATORS[mode],
+                        render.UPSTREAM_SEPARATORS[mode],
+                    }),
+                    3,
+                )
+
+    def test_plain_mode_separators_are_ascii(self):
+        self.assertTrue(render.SEGMENT_SEPARATORS[render.PresentationMode.PLAIN].isascii())
+        self.assertTrue(render.UPSTREAM_SEPARATORS[render.PresentationMode.PLAIN].isascii())
+        self.assertTrue(render.DETAIL_SEPARATOR.isascii())
+
+    def test_every_mode_has_a_separator_at_every_level(self):
+        for mode in MODES:
+            self.assertIn(mode, render.SEGMENT_SEPARATORS)
+            self.assertIn(mode, render.UPSTREAM_SEPARATORS)
+
 if __name__ == "__main__":
     unittest.main()
