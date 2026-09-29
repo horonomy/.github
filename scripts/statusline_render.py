@@ -416,3 +416,10 @@ DETAIL_SEPARATORS = {
     PresentationMode.COMPACT: " · ",
     PresentationMode.PLAIN: " | ",
 }
+
+
+def _enum_value(value: object) -> str | None:
+    """Accept either an enum member from the contract or its raw wire string."""
+    if value is None:
+        return None
+    return getattr(value, "value", value)
