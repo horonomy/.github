@@ -260,3 +260,16 @@ SCOPE_TEXT = {
     "session": "[session]",
     "project": "[project]",
 }
+
+# Severity drives two things: what survives the degradation ladder when the line
+# will not fit, and what refuses to be abbreviated. `neutral` ranks with `ok`
+# rather than below it because "not installed" is not a problem — the provider
+# contract routes `unsupported` and `unavailable` here for that reason.
+STATE_SEVERITY = {
+    "ok": 0,
+    "neutral": 0,
+    "unknown": 1,
+    "attention": 2,
+    "warn": 3,
+    "critical": 4,
+}
