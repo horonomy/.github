@@ -649,17 +649,15 @@ def collect(
     return upstream_text, tuple(statuses)
 
 
-def main(argv: list[str] | None = None, stdin: object = None, stdout: object = None) -> int:
-    """Render the statusline: the user's line, then the Horonom block.
+def _render(reader: object, writer: object) -> None:
+    """Do the work of one render, writing at most one line to `writer`.
 
-    Exits 0 in every case a user can cause. A statusline command that exits
-    non-zero gives the host nothing useful to do and risks turning a bad
-    registry into log noise on every refresh, so problems go to stderr, where
-    the diagnostic surface can find them, and the line still renders.
+    Split from `main` so that "this command always exits 0" is structural rather
+    than repeated: every early exit here is a bare `return`, and there is exactly
+    one place in the module that decides the exit status. Written as one function
+    with a `return 0` at each of several exits, the invariant would hold only for
+    as long as everyone adding an exit remembered it.
     """
-    del argv  # The host passes no arguments; accepted for testability only.
-    reader = stdin if stdin is not None else sys.stdin.buffer
-    writer = stdout if stdout is not None else sys.stdout
     payload = reader.read() or b""
 
     if depth() >= MAX_DEPTH:
@@ -667,7 +665,7 @@ def main(argv: list[str] | None = None, stdin: object = None, stdout: object = N
         # invoked us is going to print the line, and printing a second copy of
         # everything is how a recursion becomes visible instead of just deep.
         print("horonom-statusline: refusing to recurse", file=sys.stderr)
-        return 0
+        return
 
     try:
         registry = load_registry()
@@ -682,7 +680,7 @@ def main(argv: list[str] | None = None, stdin: object = None, stdout: object = N
             "Horonom statusline registry unreadable",
             file=writer,
         )
-        return 0
+        return
 
     if registry.upstream_command and names_this_command(registry.upstream_command):
         print("horonom-statusline: upstream names this command; not running it", file=sys.stderr)
@@ -704,6 +702,21 @@ def main(argv: list[str] | None = None, stdin: object = None, stdout: object = N
         print(f"horonom-statusline: render failed ({type(exc).__name__})", file=sys.stderr)
         line = upstream_text
     print(line, file=writer)
+
+
+def main(argv: list[str] | None = None, stdin: object = None, stdout: object = None) -> int:
+    """Render the statusline. Exits 0 in every case a user can cause.
+
+    A statusline command that exits non-zero gives the host nothing useful to do
+    and risks turning a bad registry into log noise on every refresh, so problems
+    go to stderr, where the diagnostic surface can find them, and the line still
+    renders. This is the only place the exit status is decided.
+    """
+    del argv  # The host passes no arguments; accepted for testability only.
+    _render(
+        stdin if stdin is not None else sys.stdin.buffer,
+        stdout if stdout is not None else sys.stdout,
+    )
     return 0
 
 
