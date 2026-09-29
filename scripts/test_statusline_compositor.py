@@ -628,5 +628,100 @@ class TestSourceFingerprint(unittest.TestCase):
         self.assertRegex(fingerprint, r"^[0-9a-f]{64}$")
 
 
+class TestCache(FixtureCase):
+    def status(self, **overrides) -> contract.ProviderStatus:
+        return contract.provider_status_from_wire(wire(**overrides))
+
+    def cache_file(self) -> pathlib.Path:
+        return compositor.cache_dir(self.home) / "fornax.json"
+
+    def test_a_fresh_entry_round_trips(self):
+        entry = self.entry("fornax", "/bin/true")
+        status = self.status(cache_ttl_seconds=30)
+        compositor.write_cache(entry, status, self.home)
+        self.assertEqual(compositor.read_cache(entry, self.home).to_wire(), status.to_wire())
+
+    def test_nothing_is_written_for_a_zero_ttl(self):
+        entry = self.entry("fornax", "/bin/true")
+        compositor.write_cache(entry, self.status(cache_ttl_seconds=0), self.home)
+        self.assertIsNone(compositor.read_cache(entry, self.home))
+
+    def test_an_expired_entry_is_not_served(self):
+        # A stale reading is not a substitute for a failed probe: rendering last
+        # minute's healthy state while the daemon is down is exactly the lie the
+        # not-available states exist to prevent.
+        entry = self.entry("fornax", "/bin/true")
+        compositor.write_cache(entry, self.status(cache_ttl_seconds=30), self.home)
+        payload = json.loads(self.cache_file().read_text())
+        payload["expires_at"] = time.time() - 1
+        self.cache_file().write_text(json.dumps(payload))
+        self.assertIsNone(compositor.read_cache(entry, self.home))
+
+    def test_an_entry_written_for_another_command_is_not_served(self):
+        compositor.write_cache(
+            self.entry("fornax", "/bin/true"), self.status(cache_ttl_seconds=30), self.home
+        )
+        self.assertIsNone(compositor.read_cache(self.entry("fornax", "/bin/false"), self.home))
+
+    def test_an_entry_with_no_source_recorded_is_not_served(self):
+        entry = self.entry("fornax", "/bin/true")
+        compositor.write_cache(entry, self.status(cache_ttl_seconds=30), self.home)
+        payload = json.loads(self.cache_file().read_text())
+        del payload["source"]
+        self.cache_file().write_text(json.dumps(payload))
+        self.assertIsNone(compositor.read_cache(entry, self.home))
+
+    def test_a_corrupt_or_absent_entry_is_not_served(self):
+        entry = self.entry("fornax", "/bin/true")
+        self.assertIsNone(compositor.read_cache(entry, self.home))
+        compositor.cache_dir(self.home).mkdir(parents=True, exist_ok=True)
+        for content in ("not json", "[]", '{"expires_at": "soon"}', '{"expires_at": 99999999999}'):
+            with self.subTest(content=content):
+                self.cache_file().write_text(content)
+                self.assertIsNone(compositor.read_cache(entry, self.home))
+
+    def test_an_entry_whose_payload_violates_the_contract_is_not_served(self):
+        entry = self.entry("fornax", "/bin/true")
+        compositor.write_cache(entry, self.status(cache_ttl_seconds=30), self.home)
+        payload = json.loads(self.cache_file().read_text())
+        payload["wire"]["availability"] = "definitely-fine"
+        self.cache_file().write_text(json.dumps(payload))
+        self.assertIsNone(compositor.read_cache(entry, self.home))
+
+    def test_the_cache_directory_and_files_are_not_world_readable(self):
+        compositor.write_cache(
+            self.entry("fornax", "/bin/true"), self.status(cache_ttl_seconds=30), self.home
+        )
+        self.assertEqual(compositor.cache_dir(self.home).stat().st_mode & 0o777, 0o700)
+        self.assertEqual(self.cache_file().stat().st_mode & 0o777, 0o600)
+
+    def test_a_write_leaves_no_temporary_file_behind(self):
+        compositor.write_cache(
+            self.entry("fornax", "/bin/true"), self.status(cache_ttl_seconds=30), self.home
+        )
+        names = sorted(path.name for path in compositor.cache_dir(self.home).iterdir())
+        self.assertEqual(names, ["fornax.json"])
+
+    def test_a_ttl_beyond_the_contract_maximum_is_clamped(self):
+        before = time.time()
+        compositor.write_cache(
+            self.entry("fornax", "/bin/true"),
+            self.status(cache_ttl_seconds=contract.MAX_CACHE_TTL_SECONDS),
+            self.home,
+        )
+        payload = json.loads(self.cache_file().read_text())
+        self.assertLessEqual(
+            payload["expires_at"] - before, contract.MAX_CACHE_TTL_SECONDS + 1
+        )
+
+    def test_an_unwritable_cache_directory_is_not_fatal(self):
+        # A cache is an optimisation. Failing to write one must not change what
+        # the user sees this refresh or any other.
+        entry = self.entry("fornax", "/bin/true")
+        (self.home / compositor.CACHE_DIRNAME).write_text("not a directory")
+        compositor.write_cache(entry, self.status(cache_ttl_seconds=30), self.home)
+        self.assertIsNone(compositor.read_cache(entry, self.home))
+
+
 if __name__ == "__main__":
     unittest.main()
