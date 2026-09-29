@@ -193,3 +193,15 @@ say that "high" is *preflight confidence* rather than risk; `wb` does not say
 The host renders the subject alongside the value, and a hypothetical verdict —
 a shadow-mode would-block — is marked so it can never read as an enforcement
 that actually happened.
+
+## Idempotence and read-only-ness
+
+Two renders of unchanged state produce the same line. A render writes nothing
+outside the host's own cache directory: no receipts, no logs, no backups, no
+locks, and in particular nothing under the host tool's configuration directory,
+which the compositor has no ownership of. Both properties have tests asserted
+over the whole state tree rather than against named files, because the risk is a
+write nobody thought to look for.
+
+Rendering also evaluates no policy, enforces or blocks nothing, mutates no
+decision, and starts no daemon. The statusline is not an approval interface.
