@@ -48,5 +48,30 @@ class ScopeTest(unittest.TestCase):
         self.assertEqual(len(values), len(set(values)))
 
 
+class AvailabilityTest(unittest.TestCase):
+    def test_only_available_has_live_readings(self) -> None:
+        live = {a for a in sc.Availability if a.has_live_readings}
+        self.assertEqual(live, {sc.Availability.AVAILABLE})
+
+    def test_unknown_is_not_treated_as_healthy(self) -> None:
+        self.assertIsNot(sc.Availability.UNKNOWN, sc.Availability.AVAILABLE)
+        self.assertFalse(sc.Availability.UNKNOWN.has_live_readings)
+
+    def test_unavailable_is_distinct_from_error_and_unsupported(self) -> None:
+        distinct = {
+            sc.Availability.UNAVAILABLE,
+            sc.Availability.ERROR,
+            sc.Availability.UNSUPPORTED,
+            sc.Availability.UNKNOWN,
+        }
+        self.assertEqual(len(distinct), 4)
+
+    def test_all_five_states_are_present(self) -> None:
+        self.assertEqual(
+            {a.value for a in sc.Availability},
+            {"available", "unavailable", "unsupported", "unknown", "error"},
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
