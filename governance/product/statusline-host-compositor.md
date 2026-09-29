@@ -70,3 +70,42 @@ These are not negotiable and each has a test that fails if it is broken.
    script or renamed copy the file check cannot see. An unparseable marker
    counts as *already recursing* — the failure being prevented is unbounded
    recursion, so the ambiguous case must fail towards stopping.
+
+## Hot-path containment
+
+This command runs every few seconds for the life of a session. Rendering it must
+not reach an LLM or any cloud API, install anything, build anything, start a
+daemon, or walk a filesystem tree. Concretely:
+
+| Control | Rule |
+|---|---|
+| Per-provider timeout | Bounded, defaulting to 250 ms, capped at 2 s |
+| Overall deadline | Bounded, defaulting to 600 ms, capped at 3 s |
+| Upstream timeout | Separate and more generous — their script is not ours to rush |
+| Concurrency | Providers and upstream run together, never serially |
+| Output caps | Provider and upstream stdout are read under byte caps |
+| Cache | Short TTL, capped at 60 s, keyed on more than the provider id |
+| Provider count | Capped, so the registry cannot become an unbounded fan-out |
+
+**Independent provider timeouts must never be serialised.** With N providers at
+a 250 ms timeout each, serial execution makes the worst case N × 250 ms while
+concurrent execution keeps it at roughly the slowest single provider. A serial
+implementation passes every correctness test and fails the only thing the
+deadline exists for, so concurrency has its own test measuring wall clock
+against the sum.
+
+**A timeout must kill the process group, not the child.** Killing only the
+direct child leaves a grandchild — a provider that shells out — orphaned and
+running past every deadline we set, once per refresh, for the life of the
+session. Children are started in a new session and the whole group is signalled,
+with a bounded wait afterwards so the reaped output of a partially-finished
+provider is still usable.
+
+**Cache keys include the command.** Keying on the provider id alone means a
+registry edit that repoints a provider at a different command is served the old
+answer until the TTL expires — the stale reading is attributed to the new
+command, which is the kind of wrong that looks right. The recorded key is a
+fingerprint of the resolved argv.
+
+When the deadline is exceeded, the upstream text is preserved first and the
+providers that did not answer in time become explicit not-available statuses.
