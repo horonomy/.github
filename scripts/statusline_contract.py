@@ -501,3 +501,29 @@ def assert_privacy_safe(value: str, field: str) -> str:
     assert_no_secret_shape(value, field)
     assert_no_host_shape(value, field)
     return value
+
+
+def require_safe_label(value: object, field: str) -> str:
+    """Validate a human label for both shape and privacy."""
+    return assert_privacy_safe(require_label(value, field), field)
+
+
+# A segment is one fact. A provider showing more than a handful of them is
+# competing with the other products for a single shared line.
+MAX_SEGMENTS_PER_PROVIDER = 4
+
+# Upper bounds on the numeric fields, so a provider cannot push an arbitrary
+# integer through the contract and break layout.
+MAX_COUNT = 10**9
+MAX_AGE_SECONDS = 10 * 365 * 24 * 60 * 60
+
+
+def require_bounded_int(value: object, field: str, maximum: int) -> int:
+    """Validate a non-negative integer within an explicit upper bound."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ContractViolation(f"{field} must be an integer")
+    if value < 0:
+        raise ContractViolation(f"{field} must not be negative")
+    if value > maximum:
+        raise ContractViolation(f"{field} must be at most {maximum}")
+    return value
