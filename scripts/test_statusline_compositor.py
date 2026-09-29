@@ -267,5 +267,160 @@ class TestScopeValidation(unittest.TestCase):
                     compositor._require_scope(value, "p")
 
 
+class TestRegistryParsing(unittest.TestCase):
+    def test_a_minimal_document_parses(self):
+        registry = compositor.parse_registry(registry_document())
+        self.assertIsNone(registry.upstream_command)
+        self.assertEqual(registry.providers, ())
+        self.assertEqual(registry.deadline_ms, compositor.DEFAULT_DEADLINE_MS)
+
+    def test_a_non_object_document_is_refused(self):
+        for payload in ([], "x", 1, None):
+            with self.subTest(payload=payload):
+                with self.assertRaises(compositor.RegistryError):
+                    compositor.parse_registry(payload)
+
+    def test_an_unsupported_registry_version_is_refused(self):
+        # Refused, not best-efforted: a future writer may have moved the very
+        # field we would go on to read.
+        for version in (0, 2, "1", None, 1.0):
+            with self.subTest(version=version):
+                with self.assertRaises(compositor.RegistryError):
+                    compositor.parse_registry(registry_document(registry_version=version))
+
+    def test_the_supported_version_set_matches_the_declared_version(self):
+        self.assertIn(compositor.REGISTRY_VERSION, compositor.SUPPORTED_REGISTRY_VERSIONS)
+
+    def test_an_upstream_command_is_preserved_verbatim(self):
+        command = """'/Users/someone/my scripts/statusline.sh' --flag "a b" | tr -d x"""
+        registry = compositor.parse_registry(registry_document(upstream={"command": command}))
+        self.assertEqual(registry.upstream_command, command)
+
+    def test_an_absent_upstream_is_a_valid_state(self):
+        for payload in (registry_document(), registry_document(upstream={})):
+            with self.subTest(payload=payload):
+                self.assertIsNone(compositor.parse_registry(payload).upstream_command)
+
+    def test_a_blank_upstream_command_is_refused(self):
+        for command in ("", "   ", "\n"):
+            with self.subTest(command=command):
+                with self.assertRaises(compositor.RegistryError):
+                    compositor.parse_registry(registry_document(upstream={"command": command}))
+
+    def test_a_non_object_upstream_is_refused(self):
+        with self.assertRaises(compositor.RegistryError):
+            compositor.parse_registry(registry_document(upstream="/bin/true"))
+
+    def test_providers_must_be_a_list(self):
+        with self.assertRaises(compositor.RegistryError):
+            compositor.parse_registry(registry_document(providers={"fornax": []}))
+
+    def test_too_many_providers_are_refused(self):
+        entries = [
+            provider_document(f"p{index}", ["/bin/true"])
+            for index in range(compositor.MAX_PROVIDERS + 1)
+        ]
+        with self.assertRaises(compositor.RegistryError):
+            compositor.parse_registry(registry_document(providers=entries))
+
+    def test_duplicate_provider_ids_are_refused(self):
+        # The cache is keyed by provider id, so two entries sharing one would
+        # overwrite each other's answers.
+        entries = [provider_document("fornax", ["/bin/true"])] * 2
+        with self.assertRaises(compositor.RegistryError):
+            compositor.parse_registry(registry_document(providers=entries))
+
+    def test_a_disabled_provider_is_dropped_without_failing_the_document(self):
+        entries = [
+            provider_document("fornax", ["/bin/true"], enabled=False),
+            provider_document("circinus", ["/bin/true"]),
+        ]
+        registry = compositor.parse_registry(registry_document(providers=entries))
+        self.assertEqual([entry.provider for entry in registry.providers], ["circinus"])
+
+    def test_only_a_literal_true_counts_as_enabled(self):
+        for value in (1, "true", "yes", None):
+            with self.subTest(value=value):
+                registry = compositor.parse_registry(
+                    registry_document(
+                        providers=[provider_document("fornax", ["/bin/true"], enabled=value)]
+                    )
+                )
+                self.assertEqual(registry.providers, ())
+
+    def test_a_disabled_entry_with_an_invalid_id_is_still_refused(self):
+        # The id is validated before the enabled check, so a malformed entry
+        # cannot hide behind being switched off.
+        with self.assertRaises(compositor.RegistryError):
+            compositor.parse_registry(
+                registry_document(
+                    providers=[{"provider": "Not An Id", "command": ["/bin/true"], "enabled": False}]
+                )
+            )
+
+    def test_an_invalid_provider_id_does_not_escape_as_a_contract_error(self):
+        # `main` recognises a bad registry by type. A contract exception
+        # escaping from here would reach the host as a traceback.
+        for identifier in ("Not An Id", "", None, 7, "x" * 64):
+            with self.subTest(identifier=identifier):
+                with self.assertRaises(compositor.RegistryError):
+                    compositor.parse_registry(
+                        registry_document(
+                            providers=[{"provider": identifier, "command": ["/bin/true"]}]
+                        )
+                    )
+
+    def test_a_non_object_provider_entry_is_refused(self):
+        with self.assertRaises(compositor.RegistryError):
+            compositor.parse_registry(registry_document(providers=["fornax"]))
+
+    def test_provider_timeouts_are_clamped(self):
+        registry = compositor.parse_registry(
+            registry_document(
+                providers=[provider_document("fornax", ["/bin/true"], timeout_ms=10**6)]
+            )
+        )
+        self.assertEqual(registry.providers[0].timeout_ms, compositor.MAX_PROVIDER_TIMEOUT_MS)
+
+    def test_the_deadline_and_upstream_timeout_are_clamped(self):
+        registry = compositor.parse_registry(
+            registry_document(deadline_ms=10**6, upstream_timeout_ms=10**6)
+        )
+        self.assertEqual(registry.deadline_ms, compositor.MAX_DEADLINE_MS)
+        self.assertEqual(registry.upstream_timeout_ms, compositor.MAX_UPSTREAM_TIMEOUT_MS)
+
+    def test_a_width_budget_must_be_a_positive_integer(self):
+        for width in (0, -10, "80", 80.5, True):
+            with self.subTest(width=width):
+                with self.assertRaises(compositor.RegistryError):
+                    compositor.parse_registry(
+                        registry_document(presentation={"width_budget": width})
+                    )
+
+    def test_an_absent_width_budget_means_unbounded(self):
+        self.assertIsNone(compositor.parse_registry(registry_document()).width_budget)
+
+    def test_a_non_object_presentation_is_refused(self):
+        with self.assertRaises(compositor.RegistryError):
+            compositor.parse_registry(registry_document(presentation="balanced"))
+
+    def test_an_unknown_presentation_mode_falls_back_rather_than_refusing(self):
+        # The one lenient field. It decides how the line looks, not what we
+        # execute, and losing the whole statusline over a cosmetic typo is
+        # worse than rendering it in the default style.
+        registry = compositor.parse_registry(
+            registry_document(presentation={"mode": "fancy-nonsense"})
+        )
+        self.assertIsInstance(registry.mode, render.PresentationMode)
+
+    def test_every_presentation_mode_can_be_selected(self):
+        for mode in render.PresentationMode:
+            with self.subTest(mode=mode):
+                registry = compositor.parse_registry(
+                    registry_document(presentation={"mode": mode.value})
+                )
+                self.assertIs(registry.mode, mode)
+
+
 if __name__ == "__main__":
     unittest.main()
