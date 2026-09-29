@@ -761,3 +761,53 @@ class ProviderStatus:
                     "count; an unavailable provider reporting zero is a false "
                     "all-clear"
                 )
+
+    def to_wire(self) -> dict:
+        """Serialise to the JSON-compatible form a provider prints on stdout.
+
+        Omits every field left at its default, so a minimal provider emits a
+        minimal payload and a reader can tell "not set" from "set to zero".
+        """
+        payload: dict = {
+            "contract_version": self.contract_version,
+            "provider": self.provider,
+            "provider_version": self.provider_version,
+            "scope": self.scope.value,
+            "availability": self.availability.value,
+        }
+        if self.observed_at is not None:
+            payload["observed_at"] = self.observed_at
+        if self.cache_ttl_seconds:
+            payload["cache_ttl_seconds"] = self.cache_ttl_seconds
+        payload["order_hint"] = self.order_hint
+        if self.fallback_text is not None:
+            payload["fallback_text"] = self.fallback_text
+        if self.segments:
+            payload["segments"] = [_segment_to_wire(s) for s in self.segments]
+        return payload
+
+
+def _segment_to_wire(segment: Segment) -> dict:
+    """Serialise one segment, omitting unset optional fields."""
+    payload: dict = {
+        "key": segment.key,
+        "state": segment.state.value,
+        "label": segment.label,
+    }
+    for name in ("reason_code", "reason_label", "count_label", "explain_key"):
+        value = getattr(segment, name)
+        if value is not None:
+            payload[name] = value
+    for name in ("age_seconds", "count", "total"):
+        value = getattr(segment, name)
+        if value is not None:
+            payload[name] = value
+    if segment.confidence is not None:
+        payload["confidence"] = segment.confidence.value
+        # Never emitted alone; `Segment` already refuses the split pair.
+        payload["confidence_of"] = segment.confidence_of.value  # type: ignore[union-attr]
+    if segment.hypothetical:
+        payload["hypothetical"] = True
+    if segment.order_hint:
+        payload["order_hint"] = segment.order_hint
+    return payload
