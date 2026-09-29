@@ -22,6 +22,11 @@ from __future__ import annotations
 import enum
 import unicodedata
 
+# Ordering is the contract's rule, not a presentation choice, so it is reused
+# rather than reimplemented here — two independent orderings would eventually
+# disagree and the line would stop being stable between renders.
+import statusline_contract
+
 
 class PresentationMode(enum.Enum):
     """How much room the host is willing to spend on being legible.
