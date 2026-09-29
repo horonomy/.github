@@ -325,3 +325,20 @@ def format_age(age_seconds: int, mode: PresentationMode) -> str:
         value, unit = age_seconds // 86400, "d"
     token = f"{value}{unit}"
     return token if mode is PresentationMode.COMPACT else f"{token} ago"
+
+
+def format_count(count: int, total: int | None, count_label: str, mode: PresentationMode) -> str:
+    """Render a count with the noun it counts.
+
+    `count_label` is never dropped, in any mode. A bare `2/14` is exactly the
+    opaque token this whole design replaces, and the noun is what makes the
+    number mean something — the provider contract refuses a `count` without one
+    for the same reason.
+    """
+    if total is None:
+        quantity = str(count)
+    elif mode is PresentationMode.COMPACT:
+        quantity = f"{count}/{total}"
+    else:
+        quantity = f"{count} of {total}"
+    return f"{quantity} {count_label}"
