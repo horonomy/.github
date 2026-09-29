@@ -291,3 +291,21 @@ def classify_artifact(artifact: str) -> Ownership:
     nobody has classified must not inherit write permission by accident.
     """
     return ARTIFACT_OWNERSHIP.get(artifact, Ownership.UNKNOWN)
+
+
+class ContractViolation(ValueError):
+    """A provider payload does not satisfy this contract.
+
+    Raised rather than returned so that a malformed payload cannot be
+    accidentally rendered as if it were valid. The compositor catches this
+    per provider and degrades that one provider, never the whole line.
+    """
+
+
+class PrivacyViolation(ContractViolation):
+    """A provider payload carries a value this contract forbids emitting.
+
+    A distinct type because the correct response differs: a shape error is a
+    provider bug to fix, while this is a potential disclosure, and the host
+    must drop the provider's output entirely rather than render part of it.
+    """
