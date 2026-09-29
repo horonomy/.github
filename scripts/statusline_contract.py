@@ -31,6 +31,7 @@ Stdlib only, matching the rest of `scripts/`.
 
 from __future__ import annotations
 
+import dataclasses
 import enum
 import re
 
@@ -527,3 +528,83 @@ def require_bounded_int(value: object, field: str, maximum: int) -> int:
     if value > maximum:
         raise ContractViolation(f"{field} must be at most {maximum}")
     return value
+
+
+@dataclasses.dataclass(frozen=True)
+class Segment:
+    """One bounded fact a provider contributes to the shared statusline.
+
+    Every field is either a bounded enum, a bounded integer, or a short human
+    label that has passed the privacy allowlist. There is deliberately no
+    free-text field: a provider with something longer to say puts it behind
+    `explain_key`, which the shared explain surface resolves, rather than
+    widening the statusline contract into a string channel.
+
+    Validated at construction, so a `Segment` that exists is renderable.
+    """
+
+    key: str
+    state: SegmentState
+    label: str
+    reason_code: str | None = None
+    reason_label: str | None = None
+    confidence: Confidence | None = None
+    confidence_of: ConfidenceSubject | None = None
+    age_seconds: int | None = None
+    count: int | None = None
+    total: int | None = None
+    count_label: str | None = None
+    hypothetical: bool = False
+    explain_key: str | None = None
+    order_hint: int = 0
+
+    def __post_init__(self) -> None:
+        require_token(self.key, "segment.key")
+        if not isinstance(self.state, SegmentState):
+            raise ContractViolation("segment.state must be a SegmentState")
+        require_safe_label(self.label, "segment.label")
+        if self.reason_code is not None:
+            require_token(self.reason_code, "segment.reason_code")
+        if self.reason_label is not None:
+            require_safe_label(self.reason_label, "segment.reason_label")
+        self._validate_confidence()
+        self._validate_counts()
+        if self.age_seconds is not None:
+            require_bounded_int(self.age_seconds, "segment.age_seconds", MAX_AGE_SECONDS)
+        if not isinstance(self.hypothetical, bool):
+            raise ContractViolation("segment.hypothetical must be a bool")
+        if self.explain_key is not None:
+            require_explain_key(self.explain_key)
+        require_bounded_int(self.order_hint, "segment.order_hint", 1000)
+
+    def _validate_confidence(self) -> None:
+        """A confidence without its subject reads as risk; forbid the pair split."""
+        if (self.confidence is None) != (self.confidence_of is None):
+            raise ContractViolation(
+                "segment.confidence and segment.confidence_of must be set together; "
+                "a bare high/medium/low reads as risk or priority"
+            )
+        if self.confidence is not None and not isinstance(self.confidence, Confidence):
+            raise ContractViolation("segment.confidence must be a Confidence")
+        if self.confidence_of is not None and not isinstance(
+            self.confidence_of, ConfidenceSubject
+        ):
+            raise ContractViolation("segment.confidence_of must be a ConfidenceSubject")
+
+    def _validate_counts(self) -> None:
+        """A bare number needs a noun, and a numerator cannot exceed its total."""
+        if self.count is not None:
+            require_bounded_int(self.count, "segment.count", MAX_COUNT)
+            if self.count_label is None:
+                raise ContractViolation(
+                    "segment.count requires segment.count_label; an unlabelled "
+                    "number is the opaque abbreviation this contract replaces"
+                )
+        if self.total is not None:
+            require_bounded_int(self.total, "segment.total", MAX_COUNT)
+            if self.count is None:
+                raise ContractViolation("segment.total requires segment.count")
+            if self.count > self.total:
+                raise ContractViolation("segment.count must not exceed segment.total")
+        if self.count_label is not None:
+            require_safe_label(self.count_label, "segment.count_label")
