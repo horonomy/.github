@@ -1372,27 +1372,27 @@ def doctor(
         "enabling_another_provider_changes_settings": not owned,
         "disabling_one_provider_changes_settings": owned and len(_provider_ids(registry)) == 1,
     }
-    report["remediation"] = list(_remediation(ownership, registry, owned))
+    report["remediation"] = _remediation(ownership, registry, owned)
     return report
 
 
-def _remediation(ownership: Ownership, registry: RegistryDocument, owned: bool) -> tuple[str, ...]:
+def _remediation(ownership: Ownership, registry: RegistryDocument, owned: bool) -> list[str]:
     """What to do next, where there is something to do and it is safe to say so."""
     if ownership is Ownership.UNSUPPORTED_SHAPE:
-        return (f"inspect {STATUS_LINE_KEY} in the settings file by hand",)
+        return [f"inspect {STATUS_LINE_KEY} in the settings file by hand"]
     if ownership is Ownership.DRIFTED:
-        return (
+        return [
             "the statusline was changed outside this lifecycle; `enable --adopt` takes it back "
             "and abandons the recorded original, `uninstall` removes the stale marker and leaves "
-            "the current command alone",
-        )
+            "the current command alone"
+        ]
     if ownership is Ownership.ADOPTABLE:
-        return ("`enable --adopt` records ownership of the configuration already in place",)
+        return ["`enable --adopt` records ownership of the configuration already in place"]
     if registry.present and not registry.usable:
-        return (f"repair or remove {registry.path} by hand",)
+        return [f"repair or remove {registry.path} by hand"]
     if owned and not _provider_ids(registry):
-        return ("no providers are registered, so the statusline renders only the original line",)
-    return ()
+        return ["no providers are registered, so the statusline renders only the original line"]
+    return []
 
 
 EXIT_OK = 0
