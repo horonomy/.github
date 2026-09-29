@@ -518,5 +518,185 @@ class SegmentTest(unittest.TestCase):
             segment.label = "Unverified"  # type: ignore[misc]
 
 
+def _segment(**overrides: object) -> sc.Segment:
+    """A valid minimal segment, with fields overridden per test."""
+    fields: dict = {
+        "key": "latest_finding",
+        "state": sc.SegmentState.OK,
+        "label": "Verified",
+    }
+    fields.update(overrides)
+    return sc.Segment(**fields)  # type: ignore[arg-type]
+
+
+def _status(**overrides: object) -> sc.ProviderStatus:
+    """A valid minimal provider status, with fields overridden per test."""
+    fields: dict = {
+        "provider": "fornax",
+        "provider_version": "0.0.8",
+        "scope": sc.Scope.HOST,
+        "availability": sc.Availability.AVAILABLE,
+    }
+    fields.update(overrides)
+    return sc.ProviderStatus(**fields)  # type: ignore[arg-type]
+
+
+class ProviderStatusTest(unittest.TestCase):
+    def test_a_minimal_available_status_is_valid(self) -> None:
+        status = _status()
+        self.assertEqual(status.contract_version, sc.CONTRACT_VERSION)
+        self.assertEqual(status.segments, ())
+        self.assertEqual(status.cache_ttl_seconds, 0)
+
+    def test_scope_has_no_default(self) -> None:
+        with self.assertRaises(TypeError):
+            sc.ProviderStatus(  # type: ignore[call-arg]
+                provider="fornax",
+                provider_version="0.0.8",
+                availability=sc.Availability.AVAILABLE,
+            )
+
+    def test_an_unsupported_contract_version_is_refused(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            _status(contract_version=sc.CONTRACT_VERSION + 1)
+
+    def test_segment_keys_must_be_unique_within_a_provider(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            _status(segments=(_segment(), _segment()))
+
+    def test_too_many_segments_is_refused(self) -> None:
+        many = tuple(
+            _segment(key=f"seg{i}") for i in range(sc.MAX_SEGMENTS_PER_PROVIDER + 1)
+        )
+        with self.assertRaises(sc.ContractViolation):
+            _status(segments=many)
+
+    def test_at_the_segment_bound_is_accepted(self) -> None:
+        many = tuple(
+            _segment(key=f"seg{i}") for i in range(sc.MAX_SEGMENTS_PER_PROVIDER)
+        )
+        self.assertEqual(len(_status(segments=many).segments), sc.MAX_SEGMENTS_PER_PROVIDER)
+
+
+class NonCollapseTest(unittest.TestCase):
+    """The rules that stop a non-answer being rendered as a good answer."""
+
+    def test_an_unavailable_provider_cannot_claim_ok(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            _status(
+                availability=sc.Availability.UNAVAILABLE,
+                segments=(_segment(state=sc.SegmentState.OK),),
+            )
+
+    def test_an_unknown_provider_cannot_claim_ok(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            _status(
+                availability=sc.Availability.UNKNOWN,
+                segments=(_segment(state=sc.SegmentState.OK),),
+            )
+
+    def test_an_errored_provider_cannot_claim_ok(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            _status(
+                availability=sc.Availability.ERROR,
+                segments=(_segment(state=sc.SegmentState.OK),),
+            )
+
+    def test_an_unavailable_provider_cannot_report_zero(self) -> None:
+        # UNAVAILABLE != ZERO: a stopped daemon reporting `0 would block`
+        # is a false all-clear.
+        with self.assertRaises(sc.ContractViolation):
+            _status(
+                availability=sc.Availability.UNAVAILABLE,
+                segments=(
+                    _segment(
+                        state=sc.SegmentState.UNKNOWN,
+                        label="not running",
+                        count=0,
+                        count_label="would block",
+                    ),
+                ),
+            )
+
+    def test_an_unavailable_provider_may_still_explain_itself(self) -> None:
+        # The point of the rules above is not to force silence: rendering
+        # nothing is indistinguishable from "everything is fine".
+        status = _status(
+            availability=sc.Availability.UNAVAILABLE,
+            segments=(
+                _segment(
+                    state=sc.SegmentState.UNKNOWN,
+                    label="daemon not running",
+                    reason_code="daemon_unreachable",
+                ),
+            ),
+        )
+        self.assertEqual(status.segments[0].reason_code, "daemon_unreachable")
+
+    def test_an_available_provider_may_report_zero(self) -> None:
+        status = _status(
+            segments=(
+                _segment(
+                    state=sc.SegmentState.OK,
+                    label="none would block",
+                    count=0,
+                    total=705,
+                    count_label="would block",
+                ),
+            )
+        )
+        self.assertEqual(status.segments[0].count, 0)
+
+
+class FreshnessTest(unittest.TestCase):
+    def test_explicit_utc_is_accepted(self) -> None:
+        self.assertEqual(
+            _status(observed_at="2026-09-29T08:00:00Z").observed_at,
+            "2026-09-29T08:00:00Z",
+        )
+
+    def test_fractional_seconds_are_accepted(self) -> None:
+        self.assertEqual(
+            _status(observed_at="2026-09-29T08:00:00.123456Z").observed_at,
+            "2026-09-29T08:00:00.123456Z",
+        )
+
+    def test_a_local_offset_is_refused_not_converted(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            _status(observed_at="2026-09-29T08:00:00+08:00")
+
+    def test_a_naive_timestamp_is_refused(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            _status(observed_at="2026-09-29T08:00:00")
+
+    def test_an_impossible_calendar_date_is_refused(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            _status(observed_at="2026-02-31T00:00:00Z")
+
+    def test_a_long_cache_ttl_is_refused(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            _status(cache_ttl_seconds=sc.MAX_CACHE_TTL_SECONDS + 1)
+
+    def test_a_short_cache_ttl_is_accepted(self) -> None:
+        self.assertEqual(_status(cache_ttl_seconds=5).cache_ttl_seconds, 5)
+
+
+class FallbackTextTest(unittest.TestCase):
+    def test_a_convenience_rendering_is_optional(self) -> None:
+        self.assertIsNone(_status().fallback_text)
+
+    def test_a_convenience_rendering_obeys_the_same_privacy_rules(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            _status(fallback_text="fornax: see /var/log/fornax.log")
+
+    def test_a_convenience_rendering_may_be_longer_than_one_label(self) -> None:
+        text = "v" * (sc.MAX_LABEL_CHARS + 1)
+        self.assertEqual(_status(fallback_text=text).fallback_text, text)
+
+    def test_a_convenience_rendering_is_still_bounded(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            _status(fallback_text="v" * (sc.MAX_FALLBACK_TEXT_CHARS + 1))
+
+
 if __name__ == "__main__":
     unittest.main()
