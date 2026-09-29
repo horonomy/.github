@@ -543,6 +543,10 @@ MAX_SEGMENTS_PER_PROVIDER = 4
 # Upper bounds on the numeric fields, so a provider cannot push an arbitrary
 # integer through the contract and break layout.
 MAX_COUNT = 10**9
+
+# Ordering is a hint within a fixed range rather than an absolute index, so a
+# product can leave room between itself and its neighbours without negotiating.
+MAX_ORDER_HINT = 1000
 MAX_AGE_SECONDS = 10 * 365 * 24 * 60 * 60
 
 
@@ -602,7 +606,7 @@ class Segment:
             raise ContractViolation("segment.hypothetical must be a bool")
         if self.explain_key is not None:
             require_explain_key(self.explain_key)
-        require_bounded_int(self.order_hint, "segment.order_hint", 1000)
+        require_bounded_int(self.order_hint, "segment.order_hint", MAX_ORDER_HINT)
 
     def _validate_confidence(self) -> None:
         """A confidence without its subject reads as risk; forbid the pair split."""
@@ -728,7 +732,7 @@ class ProviderStatus:
         require_bounded_int(
             self.cache_ttl_seconds, "cache_ttl_seconds", MAX_CACHE_TTL_SECONDS
         )
-        require_bounded_int(self.order_hint, "order_hint", 1000)
+        require_bounded_int(self.order_hint, "order_hint", MAX_ORDER_HINT)
         if self.fallback_text is not None:
             require_safe_label(
                 self.fallback_text, "fallback_text", MAX_FALLBACK_TEXT_CHARS
