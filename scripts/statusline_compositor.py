@@ -218,7 +218,15 @@ def parse_registry(payload: object) -> Registry:
     if not isinstance(payload, dict):
         raise RegistryError("registry must be a JSON object")
     version = payload.get("registry_version")
-    if version not in SUPPORTED_REGISTRY_VERSIONS:
+    # The type is checked as well as the value because membership alone is not a
+    # version check in Python: `True` and `1.0` both compare equal to `1`, so a
+    # document whose version field is a boolean would otherwise be accepted as
+    # version 1 and read with a schema nobody claimed it follows.
+    if (
+        not isinstance(version, int)
+        or isinstance(version, bool)
+        or version not in SUPPORTED_REGISTRY_VERSIONS
+    ):
         raise RegistryError(
             f"registry_version {version!r} is not supported by this compositor "
             f"(supported: {sorted(SUPPORTED_REGISTRY_VERSIONS)})"
@@ -656,15 +664,13 @@ def main(argv: list[str] | None = None, stdin: object = None, stdout: object = N
         registry = dataclasses.replace(registry, upstream_command=None)
 
     upstream_text, statuses = collect(registry, payload)
-    print(
-        render.compose(
-            upstream_text,
-            statuses,
-            mode=registry.mode,
-            width_budget=registry.width_budget,
-        ),
-        file=writer,
+    line = render.compose(
+        upstream_text,
+        statuses,
+        mode=registry.mode,
+        width_budget=registry.width_budget,
     )
+    print(line, file=writer)
     return 0
 
 
