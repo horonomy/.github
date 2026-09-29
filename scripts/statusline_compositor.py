@@ -398,5 +398,24 @@ def run_upstream(command: str, payload: bytes, timeout_ms: int) -> str:
     return text.rstrip("\n")
 
 
+def _host_not_available(
+    entry: ProviderEntry, availability: contract.Availability, reason_code: str, reason_label: str
+) -> contract.ProviderStatus:
+    """The status the *host* writes on a provider's behalf when it did not answer.
+
+    `provider_version` is the literal `unknown`, because a provider that failed
+    to answer did not tell us its version and inventing one would be a claim
+    about which build is installed.
+    """
+    return contract.not_available(
+        provider=entry.provider,
+        provider_version="unknown",
+        scope=entry.scope,
+        availability=availability,
+        reason_code=reason_code,
+        reason_label=reason_label,
+    )
+
+
 if __name__ == "__main__":
     sys.exit(main())
