@@ -292,8 +292,9 @@ class TestRegistryParsing(unittest.TestCase):
         # field we would go on to read.
         for version in (0, 2, "1", None, 1.0):
             with self.subTest(version=version):
+                document = registry_document(registry_version=version)
                 with self.assertRaises(compositor.RegistryError):
-                    compositor.parse_registry(registry_document(registry_version=version))
+                    compositor.parse_registry(document)
 
     def test_the_supported_version_set_matches_the_declared_version(self):
         self.assertIn(compositor.REGISTRY_VERSION, compositor.SUPPORTED_REGISTRY_VERSIONS)
@@ -311,31 +312,36 @@ class TestRegistryParsing(unittest.TestCase):
     def test_a_blank_upstream_command_is_refused(self):
         for command in ("", "   ", "\n"):
             with self.subTest(command=command):
+                document = registry_document(upstream={"command": command})
                 with self.assertRaises(compositor.RegistryError):
-                    compositor.parse_registry(registry_document(upstream={"command": command}))
+                    compositor.parse_registry(document)
 
     def test_a_non_object_upstream_is_refused(self):
+        document = registry_document(upstream="/bin/true")
         with self.assertRaises(compositor.RegistryError):
-            compositor.parse_registry(registry_document(upstream="/bin/true"))
+            compositor.parse_registry(document)
 
     def test_providers_must_be_a_list(self):
+        document = registry_document(providers={"fornax": []})
         with self.assertRaises(compositor.RegistryError):
-            compositor.parse_registry(registry_document(providers={"fornax": []}))
+            compositor.parse_registry(document)
 
     def test_too_many_providers_are_refused(self):
         entries = [
             provider_document(f"p{index}", ["/bin/true"])
             for index in range(compositor.MAX_PROVIDERS + 1)
         ]
+        document = registry_document(providers=entries)
         with self.assertRaises(compositor.RegistryError):
-            compositor.parse_registry(registry_document(providers=entries))
+            compositor.parse_registry(document)
 
     def test_duplicate_provider_ids_are_refused(self):
         # The cache is keyed by provider id, so two entries sharing one would
         # overwrite each other's answers.
         entries = [provider_document("fornax", ["/bin/true"])] * 2
+        document = registry_document(providers=entries)
         with self.assertRaises(compositor.RegistryError):
-            compositor.parse_registry(registry_document(providers=entries))
+            compositor.parse_registry(document)
 
     def test_a_disabled_provider_is_dropped_without_failing_the_document(self):
         entries = [
@@ -358,28 +364,27 @@ class TestRegistryParsing(unittest.TestCase):
     def test_a_disabled_entry_with_an_invalid_id_is_still_refused(self):
         # The id is validated before the enabled check, so a malformed entry
         # cannot hide behind being switched off.
+        document = registry_document(
+            providers=[{"provider": "Not An Id", "command": ["/bin/true"], "enabled": False}]
+        )
         with self.assertRaises(compositor.RegistryError):
-            compositor.parse_registry(
-                registry_document(
-                    providers=[{"provider": "Not An Id", "command": ["/bin/true"], "enabled": False}]
-                )
-            )
+            compositor.parse_registry(document)
 
     def test_an_invalid_provider_id_does_not_escape_as_a_contract_error(self):
         # `main` recognises a bad registry by type. A contract exception
         # escaping from here would reach the host as a traceback.
         for identifier in ("Not An Id", "", None, 7, "x" * 64):
             with self.subTest(identifier=identifier):
+                document = registry_document(
+                    providers=[{"provider": identifier, "command": ["/bin/true"]}]
+                )
                 with self.assertRaises(compositor.RegistryError):
-                    compositor.parse_registry(
-                        registry_document(
-                            providers=[{"provider": identifier, "command": ["/bin/true"]}]
-                        )
-                    )
+                    compositor.parse_registry(document)
 
     def test_a_non_object_provider_entry_is_refused(self):
+        document = registry_document(providers=["fornax"])
         with self.assertRaises(compositor.RegistryError):
-            compositor.parse_registry(registry_document(providers=["fornax"]))
+            compositor.parse_registry(document)
 
     def test_provider_timeouts_are_clamped(self):
         registry = compositor.parse_registry(
@@ -399,17 +404,17 @@ class TestRegistryParsing(unittest.TestCase):
     def test_a_width_budget_must_be_a_positive_integer(self):
         for width in (0, -10, "80", 80.5, True):
             with self.subTest(width=width):
+                document = registry_document(presentation={"width_budget": width})
                 with self.assertRaises(compositor.RegistryError):
-                    compositor.parse_registry(
-                        registry_document(presentation={"width_budget": width})
-                    )
+                    compositor.parse_registry(document)
 
     def test_an_absent_width_budget_means_unbounded(self):
         self.assertIsNone(compositor.parse_registry(registry_document()).width_budget)
 
     def test_a_non_object_presentation_is_refused(self):
+        document = registry_document(presentation="balanced")
         with self.assertRaises(compositor.RegistryError):
-            compositor.parse_registry(registry_document(presentation="balanced"))
+            compositor.parse_registry(document)
 
     def test_an_unknown_presentation_mode_falls_back_rather_than_refusing(self):
         # The one lenient field. It decides how the line looks, not what we
@@ -584,9 +589,10 @@ class TestHostSynthesisedStatuses(unittest.TestCase):
         for availability in contract.Availability:
             with self.subTest(availability=availability):
                 if availability.has_live_readings:
+                    entry = self.entry()
                     with self.assertRaises(contract.ContractViolation):
                         compositor._host_not_available(
-                            self.entry(), availability, "probe_failed", "Broke"
+                            entry, availability, "probe_failed", "Broke"
                         )
                 else:
                     status = compositor._host_not_available(
