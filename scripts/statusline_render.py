@@ -281,3 +281,26 @@ STATE_SEVERITY = {
 EMPHATIC_STATES = frozenset({"unknown", "attention", "warn", "critical"})
 
 UNKNOWN_STATE = "unknown"
+
+
+def state_marker(state: str, mode: PresentationMode) -> str:
+    """The leading marker for one segment's state.
+
+    In glyph modes this is normally the glyph alone, because the segment's own
+    label is rendered beside it and is the human-readable carrier of meaning —
+    `<check> Verified` says everything `<check> OK Verified` says.
+
+    The exception is COMPACT, which shortens and may drop labels: there an
+    emphatic state carries its own word, so an exception never depends on a
+    reader decoding a glyph. An unrecognised state degrades to `unknown` rather
+    than rendering blank, matching the provider contract's degradation rule —
+    blank would read as "nothing to report", the one meaning it must not have.
+    """
+    if state not in STATE_TEXT:
+        state = UNKNOWN_STATE
+    if not mode.uses_glyphs:
+        return STATE_TEXT[state]
+    glyph = STATE_GLYPHS[state]
+    if mode is PresentationMode.COMPACT and state in EMPHATIC_STATES:
+        return f"{glyph} {STATE_TEXT[state]}"
+    return glyph
