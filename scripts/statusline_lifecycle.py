@@ -26,13 +26,17 @@ enabling us would lose that adjustment — `A + B + C` must become `A + C`, and 
 snapshot restore produces `A`. This is why the only thing recorded about the
 original is its command string.
 
-**There is no backup of the user's settings file.** Atomicity comes from
-writing a temporary file, flushing it to disk and renaming it, so an
-interruption leaves either the old file or the new one. A backup would add
-nothing to that, and this particular file routinely holds credentials in its
+**There is no backup of the user's settings file, and no separate receipt.**
+Atomicity comes from writing a temporary file, flushing it to disk and renaming
+it, so an interruption leaves either the old file or the new one. A backup would
+add nothing to that, and this particular file routinely holds credentials in its
 `env` block — copying it somewhere else would be a real exposure bought for a
-recovery path we never use. What is recorded instead is a receipt of our own
-facts, which contains no user configuration at all.
+recovery path we never use. The record of what we did is the provider registry's
+own `lifecycle` block: it holds only our facts, it is the file `apply` re-reads
+and re-fingerprints before every write, and the one thing it remembers about the
+user — their original command — is only ever consulted when ownership is proven.
+A second artifact that nothing reads would be a thing to keep in step, not a
+safeguard.
 """
 
 from __future__ import annotations
@@ -40,7 +44,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import dataclasses
-import datetime
 import enum
 import hashlib
 import json
@@ -83,9 +86,6 @@ STATE_FILE_MODE = 0o600
 # create from nothing still has to pick something.
 DEFAULT_INDENT = 2
 
-RECEIPT_FILENAME = "receipt.json"
-
-
 class LifecycleError(Exception):
     """A lifecycle operation refused to proceed.
 
@@ -102,16 +102,6 @@ class SettingsParseError(LifecycleError):
     Deliberately not recoverable by writing a fresh default. A file that fails
     to parse is far more likely to be a user's config with a trailing comma than
     an absent one, and the cost of guessing wrong is their whole configuration.
-    """
-
-
-class UnsupportedShapeError(LifecycleError):
-    """The settings file parsed, but its `statusLine` is a shape we do not know.
-
-    Separate from `SettingsParseError` because the file itself is fine: it is
-    our understanding that is missing, most plausibly because a newer Claude
-    Code grew a `statusLine.type` this module predates. Refusing keeps that
-    newer feature working; claiming the slot anyway would silently disable it.
     """
 
 
