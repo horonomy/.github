@@ -921,7 +921,16 @@ def atomic_write(path: pathlib.Path, payload: bytes, *, mode: int) -> None:
         ) from exc
     temporary = path.with_name(f"{path.name}.tmp.{os.getpid()}")
     try:
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+        # O_EXCL, and a fresh name every time: the temporary path is predictable,
+        # and the settings file it carries holds credentials in `env`. Opening it
+        # with O_CREAT alone would follow a symlink already sitting at that name
+        # and write those bytes wherever it pointed. Unlinking first keeps a
+        # temporary left behind by a crash from wedging every later write, and
+        # O_EXCL turns anything that appears in the gap into a refusal rather
+        # than a target.
+        with contextlib.suppress(FileNotFoundError):
+            temporary.unlink()
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(payload)
             handle.flush()
