@@ -223,5 +223,34 @@ class TestBoundedMilliseconds(unittest.TestCase):
                     compositor._bounded_ms({"t": value}, "t", 250, 2000)
 
 
+class TestProviderArgvValidation(unittest.TestCase):
+    def test_a_string_command_is_refused(self):
+        # A string would have to be split to be executed, and splitting is
+        # parsing. Provider commands are ours, so they are argv from the start.
+        with self.assertRaises(compositor.RegistryError):
+            compositor._require_argv("/usr/bin/fornax statusline", "fornax")
+
+    def test_an_empty_list_is_refused(self):
+        with self.assertRaises(compositor.RegistryError):
+            compositor._require_argv([], "fornax")
+
+    def test_a_non_string_argument_is_refused(self):
+        with self.assertRaises(compositor.RegistryError):
+            compositor._require_argv(["/bin/echo", 7], "fornax")
+
+    def test_an_empty_argument_is_refused(self):
+        with self.assertRaises(compositor.RegistryError):
+            compositor._require_argv(["/bin/echo", ""], "fornax")
+
+    def test_an_over_long_argv_is_refused(self):
+        with self.assertRaises(compositor.RegistryError):
+            compositor._require_argv(["x"] * (compositor.MAX_ARGV_LENGTH + 1), "fornax")
+
+    def test_a_valid_argv_is_returned_as_a_tuple(self):
+        self.assertEqual(
+            compositor._require_argv(["/bin/echo", "a b"], "fornax"), ("/bin/echo", "a b")
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
