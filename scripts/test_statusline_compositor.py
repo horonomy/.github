@@ -89,5 +89,89 @@ def without_state_home(**environment) -> unittest.mock.patch:
     return patcher
 
 
+class FixtureCase(unittest.TestCase):
+    """A case with a private state home and a directory of executable fixtures."""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="horonom-test-")
+        self.addCleanup(temporary.cleanup)
+        self.home = pathlib.Path(temporary.name)
+        self.bin = self.home / "bin"
+        self.bin.mkdir()
+        patcher = unittest.mock.patch.dict(
+            os.environ, {compositor.STATE_HOME_ENV: str(self.home)}
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def script(self, name: str, body: str, *, warm: bool = True) -> str:
+        """Write an executable fixture and return its path.
+
+        Warmed by running it once, because the first execution of a newly
+        written file on this platform can cost hundreds of milliseconds, and a
+        test that then measures a timeout would be measuring the wrong thing.
+        """
+        path = self.bin / name
+        path.write_text("#!/bin/sh\n" + body)
+        path.chmod(0o755)
+        if warm:
+            subprocess.run([str(path)], capture_output=True, timeout=WARM_LIMIT_SECONDS)
+        return str(path)
+
+    def hanging_script(self, name: str, body: str) -> str:
+        """Write a fixture that never exits, with its first-execution cost paid.
+
+        A fixture that hangs cannot be warmed by running it to completion, and
+        guessing a warm-up duration would make these tests depend on a number
+        nobody can defend. It instead signals that it has reached its own first
+        line, at which point the execution cost has been paid and it is killed.
+        """
+        ready = self.home / f"{name}.started"
+        path = self.script(name, f": > '{ready}'\n{body}", warm=False)
+        child = subprocess.Popen(
+            [path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
+        )
+        deadline = time.monotonic() + WARM_LIMIT_SECONDS
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+        child.wait()
+        ready.unlink(missing_ok=True)
+        return path
+
+    def answering(self, name: str, payload: dict) -> str:
+        """A fixture that prints one JSON document and exits 0."""
+        return self.script(name, "cat <<'HORONOM_EOF'\n" + json.dumps(payload) + "\nHORONOM_EOF\n")
+
+    def entry(self, provider: str, command: str | list[str], **overrides):
+        argv = [command] if isinstance(command, str) else list(command)
+        return compositor.ProviderEntry(
+            provider=provider,
+            argv=tuple(argv),
+            scope=overrides.get("scope", contract.Scope.PROJECT),
+            timeout_ms=overrides.get("timeout_ms", GENEROUS_MS),
+        )
+
+    def write_registry(self, **overrides) -> None:
+        (self.home / compositor.REGISTRY_FILENAME).write_text(
+            json.dumps(registry_document(**overrides))
+        )
+
+    def run_main(self, payload: bytes = b"{}") -> tuple[int, str]:
+        """Run the entry point, returning its exit code and rendered line.
+
+        Diagnostics are captured rather than allowed through, both to keep the
+        suite's own output readable and because the separation matters: the
+        rendered line is the user's terminal and the diagnostic stream is not, so
+        a test that conflated them could not notice a detail crossing over.
+        """
+        writer = io.StringIO()
+        diagnostics = io.StringIO()
+        with unittest.mock.patch.object(sys, "stderr", diagnostics):
+            code = compositor.main(stdin=io.BytesIO(payload), stdout=writer)
+        self.diagnostics = diagnostics.getvalue()
+        return code, writer.getvalue()
+
+
 if __name__ == "__main__":
     unittest.main()
