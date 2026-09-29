@@ -140,5 +140,13 @@ def state_home() -> pathlib.Path:
     return root.expanduser()
 
 
+def registry_path(home: pathlib.Path | None = None) -> pathlib.Path:
+    return (home or state_home()) / REGISTRY_FILENAME
+
+
+def cache_dir(home: pathlib.Path | None = None) -> pathlib.Path:
+    return (home or state_home()) / CACHE_DIRNAME
+
+
 if __name__ == "__main__":
     sys.exit(main())
