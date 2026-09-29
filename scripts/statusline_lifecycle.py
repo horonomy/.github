@@ -717,7 +717,9 @@ def _enable_refusal(
     return (None, ())
 
 
-def _preservation_changes(document: SettingsDocument, others: tuple[str, ...]) -> list[Change]:
+def _preservation_changes(
+    document: SettingsDocument, others: tuple[str, ...], *, include_status_line: bool = True
+) -> list[Change]:
     """Disclosure of what this operation is deliberately leaving alone.
 
     Key *names* are listed; values never are. This file routinely holds
@@ -735,7 +737,7 @@ def _preservation_changes(document: SettingsDocument, others: tuple[str, ...]) -
             )
         )
     status_line = document.status_line
-    if isinstance(status_line, dict):
+    if include_status_line and isinstance(status_line, dict):
         kept = [key for key in status_line if key not in ("command", MARKER_KEY)]
         if kept:
             changes.append(
@@ -1037,4 +1039,187 @@ def apply(plan: Plan) -> ApplyResult:
         settings_written=settings_write is not None,
         registry_written=registry_write is not None,
         verified=True,
+    )
+
+
+def _remove_refusal(
+    ownership: Ownership, registry: RegistryDocument
+) -> tuple[str | None, tuple[str, ...]]:
+    """Why a removal must not proceed, or `(None, ())` if it may.
+
+    Note what is *not* here: neither `USER_OWNED` nor `DRIFTED` is a refusal.
+    Both mean the slot is no longer ours, and a user who has taken their
+    statusline back must still be able to unregister providers -- refusing would
+    leave them with state they cannot remove. What those states do prevent is
+    writing a command into their configuration, which is handled where the
+    restoration is planned rather than by blocking the whole operation.
+    """
+    if ownership is Ownership.UNSUPPORTED_SHAPE:
+        return (
+            "the configured statusLine is a shape this version does not understand, so it "
+            "cannot be told apart from one this lifecycle installed",
+            (f"inspect {STATUS_LINE_KEY} in the settings file by hand",),
+        )
+    if registry.present and not registry.usable:
+        return (
+            f"the provider registry is unusable ({registry.problem}), so removing one entry "
+            "would mean rewriting it from scratch and losing whatever else it holds",
+            (f"repair or delete {registry.path.name} by hand",),
+        )
+    return (None, ())
+
+
+def _released_status_line(
+    before: dict, ownership: Ownership, registry: RegistryDocument
+) -> tuple[dict | None, list[Change], list[str]]:
+    """The statusLine object after the slot is given back, and what that cost.
+
+    Restoration is a delta: the recorded command is written into the object that
+    is on disk now, so a `padding` the user changed after installing survives.
+    The recorded command is never authority over anything else in the object, and
+    never authority at all unless ownership is proven -- which is what stops a
+    remembered command from overwriting a newer one the user chose themselves.
+    """
+    after = dict(before)
+    after.pop(MARKER_KEY, None)
+    changes = [Change(ChangeKind.REMOVE, f"{STATUS_LINE_KEY}.{MARKER_KEY}", "ownership marker removed")]
+    notes: list[str] = []
+
+    if ownership is not Ownership.HORONOM_OWNED:
+        after["command"] = before.get("command")
+        changes.append(
+            Change(
+                ChangeKind.BLOCKED_UNKNOWN,
+                f"{STATUS_LINE_KEY}.command",
+                "CONFIG_DRIFT: the configured command is not the compositor this operation is "
+                "removing, so it is left exactly as it is",
+            )
+        )
+        notes.append(
+            "the statusline was changed outside this lifecycle; no command was written back"
+        )
+        return after, changes, notes
+
+    recorded = _upstream_of(registry)
+    if recorded is not None:
+        after["command"] = recorded
+        changes.append(
+            Change(
+                ChangeKind.UPDATE,
+                f"{STATUS_LINE_KEY}.command",
+                "the command registered as upstream is put back in charge of the statusline",
+            )
+        )
+        return after, changes, notes
+
+    after.pop("command", None)
+    changes.append(Change(ChangeKind.REMOVE, f"{STATUS_LINE_KEY}.command", "compositor removed"))
+    created = _lifecycle_of(registry).get("created_status_line")
+    if not [key for key in after if key != "type"]:
+        notes.append(
+            f"{STATUS_LINE_KEY} is removed entirely; it held nothing but this integration"
+            if created
+            else f"{STATUS_LINE_KEY} is removed entirely; no original command was ever recorded"
+        )
+        return None, changes, notes
+    notes.append(
+        f"no original command was recorded, so {STATUS_LINE_KEY} is left without one and no "
+        "statusline will render; its other settings are preserved rather than guessed at"
+    )
+    return after, changes, notes
+
+
+def plan_remove(
+    document: SettingsDocument,
+    registry: RegistryDocument,
+    *,
+    providers: tuple[str, ...],
+    operation: str = "disable",
+) -> Plan:
+    """What removing these providers would change, without changing anything.
+
+    The slot is given back only when the last provider goes, which is what makes
+    disabling one product a registry-only operation that cannot disturb the
+    others or the user's own statusline.
+    """
+    ownership = classify(document)
+    refusal, remediation = _remove_refusal(ownership, registry)
+    if refusal is not None:
+        return Plan(
+            operation=operation,
+            settings_path=document.path,
+            ownership=ownership,
+            changes=(Change(ChangeKind.BLOCKED_UNKNOWN, STATUS_LINE_KEY, refusal),),
+            fingerprint=document.fingerprint,
+            registry_path=registry.path,
+            registry_fingerprint=registry.fingerprint,
+            refusal=refusal,
+            remediation=remediation,
+        )
+
+    registered = _provider_ids(registry)
+    removing = tuple(provider for provider in providers if provider in registered)
+    remaining = tuple(provider for provider in registered if provider not in removing)
+    changes: list[Change] = []
+    notes: list[str] = [
+        f"{provider} is not registered; nothing to remove"
+        for provider in providers
+        if provider not in registered
+    ]
+    for provider in removing:
+        changes.append(
+            Change(ChangeKind.REMOVE, f"registry.providers[{provider}]", "provider unregistered")
+        )
+
+    settings_after: dict | None = None
+    state_to_remove: tuple[pathlib.Path, ...] = ()
+    if remaining:
+        entries = [
+            entry
+            for entry in (registry.data or {}).get("providers", [])
+            if not (isinstance(entry, dict) and entry.get("provider") in removing)
+        ]
+        registry_after: dict | None = dict(registry.data or {}) | {"providers": entries}
+        changes.extend(_preservation_changes(document, remaining))
+        if ownership is not Ownership.HORONOM_OWNED:
+            notes.append(
+                "the statusline slot is not currently the compositor's, so only the registry "
+                "changes here"
+            )
+    else:
+        registry_after = None
+        if registry.present:
+            state_to_remove = (registry.path,)
+            changes.append(
+                Change(ChangeKind.REMOVE, str(registry.path), "the last provider is gone with it")
+            )
+        before = document.status_line
+        if isinstance(before, dict):
+            released, release_changes, release_notes = _released_status_line(
+                before, ownership, registry
+            )
+            changes.extend(release_changes)
+            notes.extend(release_notes)
+            candidate = dict(document.data)
+            if released is None:
+                candidate.pop(STATUS_LINE_KEY, None)
+            else:
+                candidate[STATUS_LINE_KEY] = released
+            settings_after = candidate
+            changes.extend(
+                _preservation_changes(document, (), include_status_line=released is not None)
+            )
+
+    return Plan(
+        operation=operation,
+        settings_path=document.path,
+        ownership=ownership,
+        changes=tuple(changes),
+        fingerprint=document.fingerprint,
+        registry_path=registry.path,
+        registry_fingerprint=registry.fingerprint,
+        settings_after=None if settings_after == document.data else settings_after,
+        registry_after=None if registry_after == registry.data else registry_after,
+        state_to_remove=state_to_remove,
+        notes=tuple(notes),
     )
