@@ -93,7 +93,10 @@ see [`engineering/security.md`](./engineering/security.md).
   evidence canonicalization/hashing procedure (`horonom-evidence-canon-v1`)
   every adapter's `content_hash` must agree on
   ([`product/dogfood-evidence-canonicalization-v1.md`](./product/dogfood-evidence-canonicalization-v1.md);
-  HORO-1376/HORO-1463).
+  HORO-1376/HORO-1463), and the statusline provider wire contract by which
+  products contribute live status without owning the user's statusline
+  ([`product/statusline-provider-contract.md`](./product/statusline-provider-contract.md);
+  reference implementation at `scripts/statusline_contract.py`, HORO-1564).
 - [`releases/`](./releases/) — release and public-surface invariants, plus
   the [Public Release Surface Contract](./releases/public-release-contract.md)
   (7-state model, per-surface derivation rules; implementation at
