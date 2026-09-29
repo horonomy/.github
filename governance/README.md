@@ -101,7 +101,10 @@ see [`engineering/security.md`](./engineering/security.md).
   user's own statusline and every registered provider into one bounded line
   ([`product/statusline-host-compositor.md`](./product/statusline-host-compositor.md);
   implementation at `scripts/statusline_compositor.py` and
-  `scripts/statusline_render.py`, HORO-1565).
+  `scripts/statusline_render.py`, HORO-1565), and the lifecycle by which that
+  host takes the user's single statusline slot and gives it back unchanged
+  ([`product/statusline-lifecycle.md`](./product/statusline-lifecycle.md);
+  implementation at `scripts/statusline_lifecycle.py`, HORO-1566).
 - [`releases/`](./releases/) — release and public-surface invariants, plus
   the [Public Release Surface Contract](./releases/public-release-contract.md)
   (7-state model, per-surface derivation rules; implementation at
