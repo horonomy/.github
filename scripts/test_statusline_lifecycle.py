@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import io
 import json
 import os
 import pathlib
@@ -1315,6 +1316,104 @@ class DoctorTest(LifecycleCase):
         self.assertEqual(report["providers"][0]["availability"], "unavailable")
         self.assertEqual(report["providers"][0]["command_name"], "provider.sh")
         self.assertEqual(self.settings.read_bytes(), before)
+
+
+class CommandLineTest(LifecycleCase):
+    """The CLI exists so that nobody has to hand-edit JSON, so it is tested as the surface."""
+
+    def cli(self, *arguments: str) -> tuple[int, str]:
+        stream = io.StringIO()
+        with unittest.mock.patch.dict(
+            os.environ, {compositor.STATE_HOME_ENV: str(self.home)}
+        ):
+            code = lifecycle.main(
+                [*arguments, "--settings", str(self.settings)], stdout=stream
+            )
+        return code, stream.getvalue()
+
+    def test_a_dry_run_prints_the_plan_and_writes_nothing(self) -> None:
+        before = self.settings.read_bytes()
+
+        code, output = self.cli(
+            "enable", "--provider", "fornax", "--scope", "host", "--command", "/bin/echo", "--dry-run"
+        )
+
+        self.assertEqual(code, lifecycle.EXIT_OK)
+        self.assertIn("host_user_state_preserved", output)
+        self.assertEqual(self.settings.read_bytes(), before)
+        self.assertFalse(lifecycle.read_registry(self.home).present)
+
+    def test_the_dry_run_and_the_real_run_describe_the_same_plan(self) -> None:
+        _, preview = self.cli(
+            "enable", "--provider", "fornax", "--scope", "host", "--command", "/bin/echo",
+            "--dry-run", "--json",
+        )
+        _, applied = self.cli(
+            "enable", "--provider", "fornax", "--scope", "host", "--command", "/bin/echo", "--json"
+        )
+        # The preview is the same object the mutation acts on. A preview generated
+        # by separate code is a preview of nothing.
+        self.assertEqual(json.loads(preview)["changes"], json.loads(applied)["changes"])
+
+    def test_a_malformed_settings_file_is_refused_before_a_plan_exists(self) -> None:
+        self.settings.write_bytes(b'{"model": "claude-opus-4",')
+        before = self.settings.read_bytes()
+
+        code, output = self.cli(
+            "enable", "--provider", "fornax", "--scope", "host", "--command", "/bin/echo"
+        )
+
+        self.assertEqual(code, lifecycle.EXIT_REFUSED)
+        self.assertIn("refused", output)
+        self.assertEqual(self.settings.read_bytes(), before)
+        self.assertFalse(lifecycle.read_registry(self.home).present)
+
+    def test_an_unusable_provider_id_is_refused_and_named(self) -> None:
+        code, output = self.cli(
+            "enable", "--provider", "Not A Provider Id", "--scope", "host", "--command", "/bin/echo"
+        )
+        self.assertEqual(code, lifecycle.EXIT_REFUSED)
+        self.assertIn("refused", output)
+        self.assertFalse(lifecycle.read_registry(self.home).present)
+
+    def test_the_whole_lifecycle_is_reachable_from_the_command_line(self) -> None:
+        for arguments in (
+            ("enable", "--provider", "fornax", "--scope", "host", "--command", "/bin/echo"),
+            ("enable", "--provider", "circinus", "--scope", "session", "--command", "/bin/echo"),
+            ("list",),
+            ("doctor",),
+            ("disable", "--provider", "circinus"),
+            ("uninstall",),
+        ):
+            with self.subTest(command=arguments[0]):
+                code, output = self.cli(*arguments)
+                self.assertEqual(code, lifecycle.EXIT_OK, output)
+                self.assertTrue(output.strip())
+
+        self.assertEqual(self.read(), self.original)
+        self.assertFalse(lifecycle.read_registry(self.home).present)
+
+    def test_doctor_exits_non_zero_when_it_has_found_drift(self) -> None:
+        # So that a script can ask "is this healthy" without parsing prose.
+        self.cli("enable", "--provider", "fornax", "--scope", "host", "--command", "/bin/echo")
+        self.assertEqual(self.cli("doctor")[0], lifecycle.EXIT_OK)
+
+        data = self.read()
+        data[lifecycle.STATUS_LINE_KEY]["command"] = "/somewhere/else.sh"
+        self.write(data)
+        code, output = self.cli("doctor")
+        self.assertEqual(code, lifecycle.EXIT_REFUSED)
+        self.assertIn("drift: yes", output)
+
+    def test_listing_what_is_on_survives_an_unparseable_settings_file(self) -> None:
+        # The state a user runs `list` to understand must not be the state that
+        # raises. This asserted a traceback before the guard in `main` was added.
+        self.settings.write_bytes(b"{ not json")
+
+        code, output = self.cli("list")
+
+        self.assertEqual(code, lifecycle.EXIT_OK)
+        self.assertIn(lifecycle.Ownership.UNSUPPORTED_SHAPE.value, output)
 
 
 if __name__ == "__main__":
