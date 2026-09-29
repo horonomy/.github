@@ -381,5 +381,51 @@ class TestGlyphTables(unittest.TestCase):
         self.assertLess(render.STATE_SEVERITY["unknown"], render.STATE_SEVERITY["critical"])
         self.assertEqual(render.STATE_SEVERITY["ok"], render.STATE_SEVERITY["neutral"])
 
+
+class TestStateMarker(unittest.TestCase):
+    def test_plain_mode_uses_the_word(self):
+        for state, word in render.STATE_TEXT.items():
+            with self.subTest(state=state):
+                self.assertEqual(render.state_marker(state, render.PresentationMode.PLAIN), word)
+
+    def test_balanced_mode_uses_the_glyph_beside_the_label(self):
+        for state, glyph in render.STATE_GLYPHS.items():
+            with self.subTest(state=state):
+                self.assertEqual(
+                    render.state_marker(state, render.PresentationMode.BALANCED), glyph
+                )
+
+    def test_compact_mode_keeps_the_word_for_an_emphatic_state(self):
+        for state in render.EMPHATIC_STATES:
+            with self.subTest(state=state):
+                marker = render.state_marker(state, render.PresentationMode.COMPACT)
+                self.assertIn(render.STATE_TEXT[state], marker)
+                self.assertIn(render.STATE_GLYPHS[state], marker)
+
+    def test_compact_mode_drops_the_word_for_a_calm_state(self):
+        for state in ("ok", "neutral"):
+            with self.subTest(state=state):
+                self.assertEqual(
+                    render.state_marker(state, render.PresentationMode.COMPACT),
+                    render.STATE_GLYPHS[state],
+                )
+
+    def test_every_exception_state_is_emphatic(self):
+        self.assertEqual(render.EMPHATIC_STATES, {"unknown", "attention", "warn", "critical"})
+
+    def test_an_unrecognised_state_degrades_to_unknown_not_to_blank(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    render.state_marker("future_state", mode),
+                    render.state_marker("unknown", mode),
+                )
+
+    def test_no_state_ever_renders_blank(self):
+        for state in list(render.STATE_TEXT) + ["", "bogus"]:
+            for mode in MODES:
+                with self.subTest(state=state, mode=mode):
+                    self.assertTrue(render.state_marker(state, mode).strip())
+
 if __name__ == "__main__":
     unittest.main()
