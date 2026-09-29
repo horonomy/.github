@@ -660,7 +660,10 @@ def require_observed_at(value: object) -> str:
             "observed_at must be an explicit-UTC ISO 8601 timestamp ending in Z"
         )
     try:
-        datetime.datetime.strptime(value.split(".")[0], "%Y-%m-%dT%H:%M:%SZ").replace(
+        # The regex above fixes the layout up to seconds at 19 characters, so
+        # dropping any fractional part means slicing, not splitting on "." —
+        # splitting would discard the trailing "Z" the format string needs.
+        datetime.datetime.strptime(value[:19] + "Z", "%Y-%m-%dT%H:%M:%SZ").replace(
             tzinfo=datetime.timezone.utc
         )
     except ValueError as exc:
