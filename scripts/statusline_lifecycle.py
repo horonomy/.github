@@ -438,6 +438,8 @@ class Plan:
     registry_fingerprint: str | None = None
     settings_after: dict | None = None
     registry_after: dict | None = None
+    state_to_remove: tuple[pathlib.Path, ...] = ()
+    notes: tuple[str, ...] = ()
     refusal: str | None = None
     remediation: tuple[str, ...] = ()
 
@@ -448,7 +450,9 @@ class Plan:
     @property
     def mutates(self) -> bool:
         return self.refusal is None and (
-            self.settings_after is not None or self.registry_after is not None
+            self.settings_after is not None
+            or self.registry_after is not None
+            or bool(self.state_to_remove)
         )
 
     def to_json(self) -> dict:
@@ -467,6 +471,8 @@ class Plan:
             # having been waived. Nothing in this module escalates privilege.
             "requires_os_authorization": False,
             "changes": [change.to_json() for change in self.changes],
+            "horonom_state_removed": [str(path) for path in self.state_to_remove],
+            "notes": list(self.notes),
             "refusal": self.refusal,
             "remediation": list(self.remediation),
         }
@@ -963,6 +969,9 @@ def _verify(plan: Plan) -> None:
             raise VerificationError(
                 f"the registry just written is not one the compositor will accept ({after.problem})"
             )
+    for path in plan.state_to_remove:
+        if path.exists():
+            raise VerificationError(f"{path} still exists after it was removed")
 
 
 def apply(plan: Plan) -> ApplyResult:
@@ -1013,6 +1022,14 @@ def apply(plan: Plan) -> ApplyResult:
     order = (settings_write, registry_write) if _releases_slot(plan) else (registry_write, settings_write)
     for target, payload, mode in [write for write in order if write is not None]:
         atomic_write(target, payload, mode=mode)
+
+    # Deletions come last and only ever name state this module created. The
+    # settings file is never in this list: it is shared with the host tool and
+    # every other product, so removal takes entries out of it and never takes it
+    # away (SHARED_CONFIG_IS_NEVER_DELETED_BY_DEFAULT).
+    for path in plan.state_to_remove:
+        with contextlib.suppress(FileNotFoundError):
+            path.unlink()
 
     _verify(plan)
     return ApplyResult(
