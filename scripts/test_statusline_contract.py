@@ -291,5 +291,72 @@ class LabelAllowlistTest(unittest.TestCase):
             sc.require_label(None)
 
 
+class SecretShapeTest(unittest.TestCase):
+    # Assembled at runtime rather than written as literals so this test file
+    # cannot trip a secret scanner or push-protection rule.
+    SECRETS = (
+        "sk-" + "a" * 20,
+        "ghp_" + "b" * 20,
+        "AKIA" + "IOSFODNN7EXAMPLE",
+        "xoxb-" + "1-2-" + "c" * 12,
+        "eyJ" + "hbGciOiJIUzI1NiJ9",
+        "-----BEGIN" + " PRIVATE KEY",
+        "aB3dE5fG7hJ9kL1mN3pQ5",
+    )
+
+    CREDENTIAL_WORDS = (
+        "token abc",
+        "api_key present",
+        "Authorization Bearer x",
+        "password rotated",
+        "client secret ok",
+    )
+
+    def test_credential_shaped_values_are_rejected(self) -> None:
+        for secret in self.SECRETS:
+            with self.subTest(shape=secret[:4]):
+                with self.assertRaises(sc.PrivacyViolation):
+                    sc.assert_no_secret_shape(secret, "label")
+
+    def test_naming_a_credential_is_rejected(self) -> None:
+        for phrase in self.CREDENTIAL_WORDS:
+            with self.subTest(phrase=phrase):
+                with self.assertRaises(sc.PrivacyViolation):
+                    sc.assert_no_secret_shape(phrase, "label")
+
+    def test_the_error_message_never_echoes_the_value(self) -> None:
+        secret = "ghp_" + "d" * 20
+        with self.assertRaises(sc.PrivacyViolation) as caught:
+            sc.assert_no_secret_shape(secret, "segment.label")
+        message = str(caught.exception)
+        self.assertIn("segment.label", message)
+        self.assertNotIn(secret, message)
+        # Not even a prefix, suffix or hash fragment of the value.
+        self.assertNotIn(secret[:8], message)
+        self.assertNotIn(secret[-8:], message)
+
+    def test_legitimate_product_labels_are_not_false_positives(self) -> None:
+        for label in (
+            "Unverified",
+            "escalated — awaiting approval",
+            "P90 ≤ 12m",
+            "would block (113 of 705)",
+            "shadow mode",
+            "no findings yet",
+            "97% verified",
+            "task a3f9c2d1",
+            "sensor disabled",
+        ):
+            with self.subTest(label=label):
+                self.assertEqual(sc.assert_no_secret_shape(label, "label"), label)
+
+    def test_a_short_hex_task_id_is_not_treated_as_a_secret(self) -> None:
+        # Libra shows a truncated task id; that must stay renderable.
+        self.assertEqual(sc.assert_no_secret_shape("a3f9c2d1", "label"), "a3f9c2d1")
+
+    def test_a_version_string_is_not_treated_as_a_secret(self) -> None:
+        self.assertEqual(sc.assert_no_secret_shape("v0.0.2", "label"), "v0.0.2")
+
+
 if __name__ == "__main__":
     unittest.main()
