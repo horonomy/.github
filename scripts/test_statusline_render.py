@@ -1026,8 +1026,9 @@ class TestComposeDeterminism(unittest.TestCase):
         self.assertLess(block.index("Circinus"), block.index("Libra Governor"))
 
     def test_a_duplicate_provider_is_refused_rather_than_silently_deduplicated(self):
+        duplicated = (fornax_status(), fornax_status())
         with self.assertRaises(contract.ContractViolation):
-            render.compose(UPSTREAM, (fornax_status(), fornax_status()))
+            render.compose(UPSTREAM, duplicated)
 
 
 class TestNoUnknownFieldIsRendered(unittest.TestCase):
