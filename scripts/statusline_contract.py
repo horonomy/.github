@@ -385,6 +385,14 @@ def require_label(
     across products. Emoji are `Symbol, other` and so are not alphanumeric,
     which is why the allowlist check catches them without an emoji table.
 
+    Alphanumerics must be ASCII. Two reasons, and the second is the load-bearing
+    one: it removes a homoglyph channel (Cyrillic `а` is alphanumeric), and it
+    keeps `max_chars` an honest bound. `str.isalnum()` is true for fullwidth
+    and CJK characters, which occupy two terminal columns each, so without this
+    a 48-character label could be 96 columns wide and silently break the shared
+    line's layout. Widening this is a deliberate contract change that has to
+    come with column-aware bounds, not an incidental one.
+
     `max_chars` is explicit because the same character rules apply to a
     provider's optional whole-line convenience rendering, which is legitimately
     longer than one segment label.
@@ -396,7 +404,7 @@ def require_label(
     if len(value) > max_chars:
         raise ContractViolation(f"{field} must be at most {max_chars} characters")
     for char in value:
-        if not char.isalnum() and char not in _LABEL_EXTRA_CHARS:
+        if not (char.isascii() and char.isalnum()) and char not in _LABEL_EXTRA_CHARS:
             raise ContractViolation(
                 f"{field} contains a disallowed character {char!r}; "
                 "labels are prose, and the host owns iconography and separators"
