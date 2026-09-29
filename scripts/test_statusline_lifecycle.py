@@ -335,5 +335,160 @@ class SettingsScopeTest(unittest.TestCase):
                 self.assertEqual(lifecycle.settings_scope(path), expected)
 
 
+class EnablePreservationTest(LifecycleCase):
+    """What enabling a provider must leave exactly as it found it."""
+
+    def test_every_key_this_module_does_not_own_survives_enabling(self) -> None:
+        before = self.read()
+        self.enable("fornax")
+        after = self.read()
+        # PREEXISTING_UNOWNED_CONFIG_IS_PRESERVED -- compared structurally across
+        # the whole document, so a nested value silently dropped or retyped fails
+        # here rather than passing a spot check on the keys someone thought of.
+        self.assertEqual(unowned(after), unowned(before))
+        self.assertEqual(set(after), set(before))
+
+    def test_fields_this_versions_schema_has_never_seen_survive(self) -> None:
+        self.enable("fornax")
+        after = self.read()
+        # UNKNOWN_FUTURE_FIELDS_ARE_PRESERVED -- checked at both levels, because
+        # the dangerous one is inside `statusLine`: that object is the one this
+        # module rewrites, so a reduce-to-known-fields bug would only show there.
+        self.assertEqual(after["futureUnknownKey"], {"introducedIn": "a release this code predates", "keep": True})
+        self.assertEqual(after["statusLine"]["futureUnknownKey"], "keep-me")
+        self.assertEqual(after["statusLine"]["padding"], 1)
+        self.assertEqual(after["statusLine"]["refreshInterval"], 3)
+
+    def test_another_products_entries_survive_marked_or_not(self) -> None:
+        before = self.read()["hooks"]
+        self.enable("fornax")
+        # OTHER_PRODUCT_CONFIG_IS_PRESERVED -- the marked Circinus hook and the
+        # unmarked third-party one next to it both survive, which is what makes
+        # this an ownership test rather than a marker-matching test.
+        self.assertEqual(self.read()["hooks"], before)
+        serialised = self.settings.read_text()
+        self.assertIn("_circinus", serialised)
+        self.assertIn("/usr/local/bin/vendor-hook", serialised)
+
+    def test_the_mdm_shaped_value_is_never_touched(self) -> None:
+        self.enable("fornax")
+        # Organization/MDM-managed state untouched, in HORO-1000's vocabulary. This
+        # module has no reason to read it and no path that writes it; the assertion
+        # exists so that stays true.
+        self.assertEqual(
+            self.read()["managedSettingsSource"],
+            "/Library/Application Support/ClaudeCode/managed-settings.json",
+        )
+
+    def test_the_users_command_becomes_the_registered_upstream(self) -> None:
+        original = self.read()["statusLine"]["command"]
+        self.enable("fornax")
+        self.assertEqual(self.registry()["upstream"], {"command": original})
+        self.assertTrue(lifecycle.refers_to_compositor(self.read()["statusLine"]["command"]))
+        self.assertIs(
+            lifecycle.classify(lifecycle.read_settings(self.settings)),
+            lifecycle.Ownership.HORONOM_OWNED,
+        )
+
+    def test_the_worked_example_from_the_ticket_end_to_end(self) -> None:
+        """HORO-1566's own worked example, asserted item by item.
+
+        Kept as its own test rather than folded into the others because it is the
+        thing a reviewer reads to decide whether this works: a user with a rich
+        custom statusline enables Fornax and loses nothing.
+        """
+        self.write(
+            {
+                "statusLine": {
+                    "type": "command",
+                    "command": "/my/custom/statusline",
+                    "padding": 1,
+                    "refreshInterval": 3,
+                    "futureUnknownKey": "keep-me",
+                }
+            }
+        )
+        self.enable("fornax")
+        status_line = self.read()["statusLine"]
+        self.assertEqual(status_line["padding"], 1)
+        self.assertEqual(status_line["refreshInterval"], 3)
+        self.assertEqual(status_line["futureUnknownKey"], "keep-me")
+        self.assertEqual(status_line["type"], "command")
+        self.assertEqual(self.registry()["upstream"]["command"], "/my/custom/statusline")
+        self.assertEqual(
+            status_line[lifecycle.MARKER_KEY],
+            {"owner": lifecycle.MARKER_OWNER, "version": lifecycle.MARKER_VERSION},
+        )
+        # Only the routing changed. Everything else in the object is what it was.
+        self.assertEqual(
+            set(status_line) - {lifecycle.MARKER_KEY},
+            {"type", "command", "padding", "refreshInterval", "futureUnknownKey"},
+        )
+
+    def test_the_users_statusline_script_is_neither_read_nor_written(self) -> None:
+        script = self.root / "statusline-dogfood.sh"
+        script.write_text('#!/bin/sh\necho "the user wrote this"\n')
+        script.chmod(0o755)
+        before = script.read_bytes()
+        stamp = script.stat()
+
+        data = rich_settings()
+        data["statusLine"]["command"] = str(script)
+        self.write(data)
+        self.enable("fornax")
+        self.enable("circinus")
+        self.uninstall()
+
+        self.assertEqual(script.read_bytes(), before)
+        self.assertEqual(script.stat().st_mtime_ns, stamp.st_mtime_ns)
+        self.assertEqual(script.stat().st_mode, stamp.st_mode)
+
+    def test_file_permissions_are_preserved_and_new_state_is_owner_only(self) -> None:
+        self.settings.chmod(0o644)
+        self.enable("fornax")
+        # The host's own file keeps the mode the host chose. Ours does not inherit
+        # it: the registry records what the user's statusline used to be, and that
+        # has no reason to be world-readable.
+        self.assertEqual(self.settings.stat().st_mode & 0o777, 0o644)
+        registry_path = lifecycle.read_registry(self.home).path
+        self.assertEqual(registry_path.stat().st_mode & 0o777, lifecycle.STATE_FILE_MODE)
+        self.assertEqual(registry_path.parent.stat().st_mode & 0o777, lifecycle.STATE_DIR_MODE)
+
+    def test_a_settings_file_we_create_is_owner_only(self) -> None:
+        self.settings.unlink()
+        self.enable("fornax")
+        self.assertEqual(self.settings.stat().st_mode & 0o777, lifecycle.NEW_FILE_MODE)
+
+    def test_the_plan_discloses_what_it_changes_and_what_it_leaves(self) -> None:
+        self.enable("fornax")
+        plan = self.plan_enable("circinus").to_json()
+        categories = {change["category"] for change in plan["changes"]}
+        # HORO-1000's disclosure categories have to be distinguishable in the
+        # output, not merged into one "configuration updated" line.
+        self.assertIn("product_owned_add", categories)
+        self.assertIn("host_user_state_preserved", categories)
+        self.assertIn("other_product_state_preserved", categories)
+        self.assertEqual(plan["scope"], "project")
+        self.assertEqual(plan["ownership_model"], "shared_artifact")
+        self.assertFalse(plan["requires_os_authorization"])
+        self.assertTrue(plan["would_mutate"])
+
+    def test_a_plan_never_reproduces_a_value_from_the_settings_file(self) -> None:
+        # Assembled at run time so the literal never sits in the repository, and
+        # so push protection has nothing to match on.
+        secret = "sk-" + "ant" + "-not-a-real-key-" + "0" * 24
+        data = rich_settings()
+        data["env"]["ANTHROPIC_API_KEY"] = secret
+        data["statusLine"]["command"] = "/Users/founder/.claude/private/statusline.sh"
+        self.write(data)
+
+        rendered = json.dumps(self.plan_enable("fornax").to_json())
+        self.assertNotIn(secret, rendered)
+        self.assertNotIn("sk-", rendered)
+        self.assertNotIn("/Users/founder/.claude/private", rendered)
+        # The key *names* are disclosure, and are allowed. The values are not.
+        self.assertIn("env", rendered)
+
+
 if __name__ == "__main__":
     unittest.main()
