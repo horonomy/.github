@@ -75,5 +75,11 @@ def registry_document(**overrides) -> dict:
     return payload
 
 
+def provider_document(provider: str, command: list[str], **overrides) -> dict:
+    payload = {"provider": provider, "command": command, "scope": "project"}
+    payload.update(overrides)
+    return payload
+
+
 if __name__ == "__main__":
     unittest.main()
