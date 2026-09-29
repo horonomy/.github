@@ -206,5 +206,47 @@ class TestGraphemeClusters(unittest.TestCase):
         for text in ("", "a", "⚠️ ok", "\U0001f1f9\U0001f1fc\U0001f1ef\U0001f1f5", "éx"):
             self.assertEqual("".join(render.grapheme_clusters(text)), text)
 
+
+class TestDisplayWidth(unittest.TestCase):
+    def test_ascii_is_one_column_per_character(self):
+        self.assertEqual(render.display_width("hello"), 5)
+
+    def test_empty_text_is_zero_columns(self):
+        self.assertEqual(render.display_width(""), 0)
+
+    def test_a_default_emoji_presentation_glyph_is_two_columns(self):
+        self.assertEqual(render.display_width("✅"), 2)
+
+    def test_a_variation_selector_sequence_is_two_columns(self):
+        # U+26A0 alone is East-Asian-narrow; the selector is what makes it wide,
+        # so charging 1 here is the under-count that wraps the line.
+        self.assertEqual(render.display_width("⚠"), 1)
+        self.assertEqual(render.display_width("⚠️"), 2)
+
+    def test_a_zwj_sequence_is_charged_for_every_visible_component(self):
+        # Deliberately conservative: terminals disagree between 2 and 6, and
+        # over-charging can only leave a spare column.
+        self.assertEqual(render.display_width("\U0001f468‍\U0001f469‍\U0001f467"), 6)
+
+    def test_a_skin_tone_modifier_is_charged(self):
+        self.assertEqual(render.display_width("\U0001f44d\U0001f3fd"), 4)
+
+    def test_a_flag_is_two_columns(self):
+        self.assertEqual(render.display_width("\U0001f1f9\U0001f1fc"), 2)
+
+    def test_a_combining_mark_adds_nothing(self):
+        self.assertEqual(render.display_width("é"), 1)
+
+    def test_a_cluster_never_measures_zero(self):
+        for text in ("️", "‍", "́"):
+            self.assertGreaterEqual(render.display_width(text), 1)
+
+    def test_width_is_additive_over_clusters(self):
+        text = "ok ✅ ⚠️ done"
+        self.assertEqual(
+            render.display_width(text),
+            sum(render.cluster_width(c) for c in render.grapheme_clusters(text)),
+        )
+
 if __name__ == "__main__":
     unittest.main()
