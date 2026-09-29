@@ -1224,5 +1224,50 @@ class TestNothingLeaksAndNothingLeaksOut(FixtureCase):
         self.assertIn(self.CANARY, self.run_main()[1])
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestHotPathContainment(FixtureCase):
+    """What this module is structurally incapable of doing on a render."""
+
+    SOURCE = pathlib.Path(compositor.__file__).read_text()
+
+    def test_no_network_client_is_imported(self):
+        for module in ("urllib", "http", "socket", "requests", "ssl", "smtplib", "ftplib"):
+            with self.subTest(module=module):
+                self.assertNotRegex(self.SOURCE, rf"(?m)^import {module}\b")
+                self.assertNotRegex(self.SOURCE, rf"(?m)^from {module}\b")
+
+    def test_no_recursive_directory_walk_is_used(self):
+        for call in ("os.walk", "rglob", "glob.glob", "iterdir"):
+            with self.subTest(call=call):
+                self.assertNotIn(call, self.SOURCE)
+
+    def test_only_the_cache_directory_is_ever_created(self):
+        # Two creation sites would be two things to reason about at uninstall.
+        self.assertEqual(self.SOURCE.count(".mkdir("), 1)
+
+    def test_there_is_exactly_one_way_to_start_a_child(self):
+        # One execution helper, so there is no second path that could forget the
+        # time bound or the process group.
+        self.assertEqual(self.SOURCE.count("subprocess.Popen("), 1)
+        self.assertEqual(self.SOURCE.count("subprocess.run("), 0)
+
+    def test_a_shell_is_used_for_exactly_one_thing(self):
+        # The user's own command. Everything else is an argv, with no shell in
+        # the middle of it.
+        self.assertEqual(len(re.findall(r"shell=True", self.SOURCE)), 1)
+
+    def test_the_worst_case_render_is_bounded_by_the_declared_maximums(self):
+        self.assertLessEqual(compositor.MAX_DEADLINE_MS, 3000)
+        self.assertLessEqual(compositor.MAX_PROVIDER_TIMEOUT_MS, compositor.MAX_DEADLINE_MS)
+        self.assertLessEqual(compositor.DEFAULT_DEADLINE_MS, 1000)
+
+    def test_a_full_render_with_three_providers_is_prompt(self):
+        providers = []
+        for product in ("fornax", "circinus", "libra-governor"):
+            path = self.answering(f"prompt-{product}", wire(provider=product))
+            providers.append(provider_document(product, [path]))
+        upstream = self.script("theirs4", "printf 'THEIRS'\n")
+        self.write_registry(upstream={"command": f"'{upstream}'"}, providers=providers)
+        self.run_main()  # warm whatever this platform wants to warm
+        started = time.monotonic()
+        self.run_main()
+        self.assertLess(time.monotonic() - started, 1.0)
