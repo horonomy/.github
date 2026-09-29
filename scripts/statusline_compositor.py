@@ -348,5 +348,27 @@ def _run_bounded(
         return None, produced or b""
 
 
+def names_this_command(command: str) -> bool:
+    """Whether `command` looks like it re-invokes this very script.
+
+    A second, independent guard beside `DEPTH_ENV`, for the case where the shell
+    drops the environment. It compares the first whitespace-separated token to
+    this file by inode, which is an inspection, not a rewrite — the command
+    string handed to the shell is still the exact one from the registry.
+
+    Conservative by construction: it can only produce a false *negative* (a
+    quoted or `exec`-wrapped self-reference it fails to spot), and that case is
+    still caught by the depth marker one level down.
+    """
+    token = command.strip().split()[0] if command.strip() else ""
+    if not token:
+        return False
+    candidate = shutil.which(token) or token
+    try:
+        return os.path.samefile(candidate, __file__)
+    except OSError:
+        return False
+
+
 if __name__ == "__main__":
     sys.exit(main())
