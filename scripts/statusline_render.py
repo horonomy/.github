@@ -518,3 +518,33 @@ def scope_marker(scope: str, mode: PresentationMode) -> str:
     if mode.uses_glyphs and scope in SCOPE_GLYPHS:
         return SCOPE_GLYPHS[scope]
     return SCOPE_TEXT.get(scope, f"[{scope}]")
+
+
+NO_SEGMENTS_LABEL = "No status reported"
+
+
+def render_provider(status: object, mode: PresentationMode) -> str:
+    """Render one provider's whole group: attribution, scope, then segments.
+
+    Takes a `statusline_contract.ProviderStatus`. Segments are ordered by the
+    contract's own `order_segments`, so ordering is the contract's concern and
+    identical for every caller.
+
+    A provider with no segments does not render as nothing. The contract asks
+    providers to always emit at least one segment precisely because silence
+    reads as all-clear, but that is a rule providers can get wrong, so the host
+    states the absence explicitly rather than trusting them. `fallback_text` is
+    used for that only when present — it is a convenience rendering, never the
+    primary one.
+    """
+    segments = statusline_contract.order_segments(status)
+    if segments:
+        body = SEGMENT_SEPARATORS[mode].join(render_segment(s, mode) for s in segments)
+    elif getattr(status, "fallback_text", None):
+        body = f"{state_marker(UNKNOWN_STATE, mode)} {status.fallback_text}"
+    else:
+        body = f"{state_marker(UNKNOWN_STATE, mode)} {NO_SEGMENTS_LABEL}"
+
+    name = provider_display_name(status.provider)
+    scope = scope_marker(_enum_value(status.scope), mode)
+    return f"{name} {scope} {body}"
