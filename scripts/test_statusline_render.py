@@ -164,5 +164,47 @@ class TestPresentationModeParse(unittest.TestCase):
         self.assertTrue(render.PresentationMode.BALANCED.uses_glyphs)
         self.assertTrue(render.PresentationMode.COMPACT.uses_glyphs)
 
+
+class TestGraphemeClusters(unittest.TestCase):
+    def test_ascii_is_one_cluster_per_character(self):
+        self.assertEqual(render.grapheme_clusters("abc"), ["a", "b", "c"])
+
+    def test_empty_text_has_no_clusters(self):
+        self.assertEqual(render.grapheme_clusters(""), [])
+
+    def test_a_variation_selector_joins_its_base(self):
+        self.assertEqual(render.grapheme_clusters("⚠️"), ["⚠️"])
+
+    def test_a_zwj_sequence_is_one_cluster(self):
+        family = "\U0001f468‍\U0001f469‍\U0001f467"
+        self.assertEqual(render.grapheme_clusters(family), [family])
+
+    def test_a_skin_tone_modifier_joins_its_base(self):
+        self.assertEqual(render.grapheme_clusters("\U0001f44d\U0001f3fd"), ["\U0001f44d\U0001f3fd"])
+
+    def test_a_keycap_sequence_is_one_cluster(self):
+        self.assertEqual(render.grapheme_clusters("3️⃣"), ["3️⃣"])
+
+    def test_a_combining_mark_joins_its_base(self):
+        self.assertEqual(render.grapheme_clusters("é"), ["é"])
+
+    def test_two_regional_indicators_form_one_flag(self):
+        taiwan = "\U0001f1f9\U0001f1fc"
+        self.assertEqual(render.grapheme_clusters(taiwan), [taiwan])
+
+    def test_four_regional_indicators_form_two_flags(self):
+        # The case that makes pairing rather than run-length the right rule: a
+        # third indicator starts a new flag, it does not extend the first.
+        two = "\U0001f1f9\U0001f1fc\U0001f1ef\U0001f1f5"
+        self.assertEqual(render.grapheme_clusters(two), [two[:2], two[2:]])
+
+    def test_a_tag_sequence_flag_is_one_cluster(self):
+        scotland = "\U0001f3f4" + "".join(chr(cp) for cp in (0xE0067, 0xE0062, 0xE0073, 0xE0063, 0xE0074)) + "\U000E007F"
+        self.assertEqual(render.grapheme_clusters(scotland), [scotland])
+
+    def test_clusters_always_rejoin_to_the_original_text(self):
+        for text in ("", "a", "⚠️ ok", "\U0001f1f9\U0001f1fc\U0001f1ef\U0001f1f5", "éx"):
+            self.assertEqual("".join(render.grapheme_clusters(text)), text)
+
 if __name__ == "__main__":
     unittest.main()
