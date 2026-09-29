@@ -59,6 +59,11 @@ DEFAULT_STATE_HOME = "~/.horonom/statusline"
 REGISTRY_FILENAME = "registry.json"
 CACHE_DIRNAME = "cache"
 
+# Set on every child process. A registry whose upstream points back at this
+# command would otherwise fork bomb the host one refresh at a time.
+DEPTH_ENV = "HORONOM_STATUSLINE_DEPTH"
+MAX_DEPTH = 1
+
 
 if __name__ == "__main__":
     sys.exit(main())
