@@ -586,3 +586,12 @@ def _mode_candidates(mode: PresentationMode) -> tuple[PresentationMode, ...]:
     """
     start = MODE_LADDER.index(mode)
     return MODE_LADDER[start:]
+
+
+def _hidden_marker(count: int) -> str:
+    """How the line admits that it is not showing everything.
+
+    A budget that silently swallows a provider is indistinguishable from a
+    provider that reported nothing, and those mean opposite things.
+    """
+    return f"[+{count} more]"
