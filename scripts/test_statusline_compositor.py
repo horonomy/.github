@@ -602,5 +602,31 @@ class TestHostSynthesisedStatuses(unittest.TestCase):
         self.assertIn("Did not answer in time", rendered)
 
 
+class TestSourceFingerprint(unittest.TestCase):
+    def test_the_same_argv_fingerprints_the_same(self):
+        argv = ("/usr/bin/fornax", "statusline")
+        self.assertEqual(compositor.source_fingerprint(argv), compositor.source_fingerprint(argv))
+
+    def test_a_different_argv_fingerprints_differently(self):
+        self.assertNotEqual(
+            compositor.source_fingerprint(("/usr/bin/fornax",)),
+            compositor.source_fingerprint(("/usr/local/bin/fornax",)),
+        )
+
+    def test_argument_boundaries_are_not_collapsible(self):
+        # Joining on a separator that could appear inside an argument would let
+        # two different commands share a fingerprint.
+        self.assertNotEqual(
+            compositor.source_fingerprint(("a", "b")), compositor.source_fingerprint(("ab",))
+        )
+
+    def test_the_fingerprint_does_not_contain_the_path_it_covers(self):
+        # The cache file is something a user may reasonably open; there is no
+        # reason for it to restate their local paths.
+        fingerprint = compositor.source_fingerprint(("/Users/someone/private/tool",))
+        self.assertNotIn("someone", fingerprint)
+        self.assertRegex(fingerprint, r"^[0-9a-f]{64}$")
+
+
 if __name__ == "__main__":
     unittest.main()
