@@ -482,6 +482,47 @@ class TestFormatCount(unittest.TestCase):
         self.assertIn("0", render.format_count(0, 14, "tool calls", render.PresentationMode.COMPACT))
 
 
+class TestFormatDuration(unittest.TestCase):
+    def test_a_single_unit_when_the_span_divides_cleanly(self):
+        cases = {60: "1m", 3600: "1h", 86400: "1d", 45: "45s"}
+        for seconds, expected in cases.items():
+            with self.subTest(seconds=seconds):
+                self.assertEqual(render.format_duration(seconds, "P90"), f"P90 {expected}")
+
+    def test_a_second_unit_appears_when_the_remainder_reaches_it(self):
+        # 5d4h. The second unit is the reason this is not `format_age`: `5d` for
+        # anything up to six days is a 20% understatement of work remaining.
+        self.assertEqual(render.format_duration(447120, "P90"), "P90 5d4h")
+
+    def test_the_second_unit_is_the_adjacent_one_or_nothing(self):
+        # 1d 0h 1m. `1d1m` would imply a precision the day already discarded, so
+        # the minutes are dropped rather than promoted past the empty hour.
+        self.assertEqual(render.format_duration(86460, "P90"), "P90 1d")
+
+    def test_truncation_never_carries_into_the_larger_unit(self):
+        # 1d 23h 59m 59s: not `2d`, which would overstate by a whole unit, and
+        # not `1d24h`, which is not a thing.
+        self.assertEqual(render.format_duration(172799, "P90"), "P90 1d23h")
+
+    def test_zero_is_rendered_not_suppressed(self):
+        # A provider that means "no estimate" omits the field; 0 means 0.
+        self.assertEqual(render.format_duration(0, "P90"), "P90 0s")
+
+    def test_a_negative_span_is_clamped(self):
+        self.assertEqual(render.format_duration(-10, "P90"), "P90 0s")
+
+    def test_the_noun_comes_first_and_survives(self):
+        # `5d4h P90` reads as a typo; `P90 5d4h` reads as a qualified quantity.
+        # And the noun is the whole point — an unlabelled span could be elapsed,
+        # remaining, a budget or a timeout.
+        for seconds in (0, 45, 447120):
+            with self.subTest(seconds=seconds):
+                self.assertTrue(render.format_duration(seconds, "remaining").startswith("remaining "))
+
+    def test_the_rendering_is_ascii(self):
+        self.assertTrue(render.format_duration(447120, "P90").isascii())
+
+
 class TestFormatConfidence(unittest.TestCase):
     def test_a_preflight_confidence_says_it_is_a_preflight_confidence(self):
         self.assertEqual(
