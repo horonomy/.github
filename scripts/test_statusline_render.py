@@ -481,5 +481,51 @@ class TestFormatCount(unittest.TestCase):
         # from a provider that cannot answer for exactly this reason.
         self.assertIn("0", render.format_count(0, 14, "tool calls", render.PresentationMode.COMPACT))
 
+
+class TestFormatConfidence(unittest.TestCase):
+    def test_a_preflight_confidence_says_it_is_a_preflight_confidence(self):
+        self.assertEqual(
+            render.format_confidence("high", "preflight_estimate", render.PresentationMode.BALANCED),
+            "preflight confidence high",
+        )
+
+    def test_the_bare_value_is_never_the_whole_rendering(self):
+        # This is the `pf:high` readability defect: a bare `high` reads as risk,
+        # severity or priority rather than as confidence in an estimate.
+        for subject in list(render.CONFIDENCE_SUBJECT_TEXT) + ["bogus", None]:
+            for value in ("low", "medium", "high"):
+                for mode in MODES:
+                    with self.subTest(subject=subject, value=value, mode=mode):
+                        result = render.format_confidence(value, subject, mode)
+                        self.assertNotEqual(result, value)
+                        self.assertTrue(result.startswith(tuple("abcdefghijklmnopqrstuvwxyz")))
+                        self.assertTrue(result.endswith(value))
+
+    def test_compact_mode_still_names_the_subject(self):
+        self.assertEqual(
+            render.format_confidence("high", "preflight_estimate", render.PresentationMode.COMPACT),
+            "preflight high",
+        )
+
+    def test_a_verification_confidence_does_not_read_as_a_verdict(self):
+        # "verified low" would claim something about the subject rather than
+        # about how sure the provider is.
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertNotIn("verified", render.format_confidence("low", "verification", mode))
+
+    def test_an_unrecognised_subject_falls_back_without_dropping_the_qualifier(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    render.format_confidence("high", "future_subject", mode),
+                    render.format_confidence("high", "unspecified", mode),
+                )
+
+    def test_every_contract_subject_has_a_phrasing_in_both_tables(self):
+        subjects = {member.value for member in contract.ConfidenceSubject}
+        self.assertEqual(set(render.CONFIDENCE_SUBJECT_TEXT), subjects)
+        self.assertEqual(set(render.CONFIDENCE_SUBJECT_TEXT_COMPACT), subjects)
+
 if __name__ == "__main__":
     unittest.main()
