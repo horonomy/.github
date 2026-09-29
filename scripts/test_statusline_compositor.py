@@ -823,5 +823,56 @@ class TestRunProvider(FixtureCase):
         self.assertIn("malformed_output", self.reasons(status))
 
 
+class TestCollect(FixtureCase):
+    def registry(self, providers, **overrides):
+        payload = {"registry_version": 1, "providers": providers}
+        payload.update(overrides)
+        return compositor.parse_registry(payload)
+
+    def test_independent_providers_run_concurrently(self):
+        # Serialising them would make the worst case grow with every product the
+        # user enables, which is the cost this whole design exists to avoid.
+        slow = self.script("slow", "sleep 0.4\nexit 1\n")
+        providers = [provider_document(f"p{index}", [slow], timeout_ms=1500) for index in range(4)]
+        registry = self.registry(providers, deadline_ms=3000)
+        started = time.monotonic()
+        _, statuses = compositor.collect(registry, b"{}", self.home)
+        elapsed = time.monotonic() - started
+        self.assertEqual(len(statuses), 4)
+        self.assertLess(elapsed, 1.2, "four 0.4s providers took about as long as the sum")
+
+    def test_the_overall_deadline_bounds_the_total(self):
+        hanging = self.script("hanging3", f"sleep {LEAK_SLEEP}\n", warm=False)
+        providers = [
+            provider_document(f"p{index}", [hanging], timeout_ms=2000) for index in range(3)
+        ]
+        registry = self.registry(providers, deadline_ms=400)
+        started = time.monotonic()
+        _, statuses = compositor.collect(registry, b"{}", self.home)
+        self.assertLess(time.monotonic() - started, 3.0)
+        self.assertEqual(len(statuses), 3)
+
+    def test_every_registered_provider_produces_exactly_one_status(self):
+        good = self.answering("good2", wire())
+        bad = self.script("bad", "exit 1\n")
+        registry = self.registry(
+            [provider_document("fornax", [good]), provider_document("circinus", [bad])]
+        )
+        _, statuses = compositor.collect(registry, b"{}", self.home)
+        self.assertEqual(sorted(status.provider for status in statuses), ["circinus", "fornax"])
+
+    def test_the_upstream_command_receives_the_payload_we_were_given(self):
+        sink = self.home / "stdin.bin"
+        upstream = self.script("capture", f"cat > {sink}\nprintf 'line'\n")
+        registry = self.registry([], upstream={"command": f"'{upstream}'"})
+        payload = b'{"model": {"id": "x"}, "n": 1}\n'
+        text, _ = compositor.collect(registry, payload, self.home)
+        self.assertEqual(sink.read_bytes(), payload)
+        self.assertEqual(text, "line")
+
+    def test_there_is_no_upstream_text_when_there_is_no_upstream_command(self):
+        self.assertEqual(compositor.collect(self.registry([]), b"{}", self.home)[0], "")
+
+
 if __name__ == "__main__":
     unittest.main()
