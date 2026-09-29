@@ -687,6 +687,43 @@ class NonCollapseTest(unittest.TestCase):
         self.assertEqual(status.segments[0].count, 0)
 
 
+class NonCollapseConfidenceTest(unittest.TestCase):
+    def _with_confidence(self, availability: sc.Availability) -> sc.ProviderStatus:
+        return _status(
+            availability=availability,
+            segments=(
+                _segment(
+                    state=sc.SegmentState.ATTENTION,
+                    confidence=sc.Confidence.HIGH,
+                    confidence_of=sc.ConfidenceSubject.PREFLIGHT_ESTIMATE,
+                ),
+            ),
+        )
+
+    def test_a_provider_that_could_not_read_cannot_be_confident(self) -> None:
+        for availability in sc.Availability:
+            if availability.has_live_readings:
+                continue
+            with self.subTest(availability=availability):
+                with self.assertRaises(sc.ContractViolation):
+                    self._with_confidence(availability)
+
+    def test_an_available_provider_may_be_confident(self) -> None:
+        status = self._with_confidence(sc.Availability.AVAILABLE)
+        self.assertIs(status.segments[0].confidence, sc.Confidence.HIGH)
+
+    def test_a_last_seen_age_is_still_allowed_when_unavailable(self) -> None:
+        # "last read two hours ago, unavailable now" is true and useful; only
+        # claims about a computed result are forbidden.
+        status = _status(
+            availability=sc.Availability.UNAVAILABLE,
+            segments=(
+                _segment(state=sc.SegmentState.NEUTRAL, age_seconds=7200),
+            ),
+        )
+        self.assertEqual(status.segments[0].age_seconds, 7200)
+
+
 class FreshnessTest(unittest.TestCase):
     def test_explicit_utc_is_accepted(self) -> None:
         self.assertEqual(
