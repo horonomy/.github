@@ -67,6 +67,19 @@ MAX_DEPTH = 1
 REGISTRY_VERSION = 1
 SUPPORTED_REGISTRY_VERSIONS = frozenset({REGISTRY_VERSION})
 
+# Bounds, not preferences. The registry may lower any of these; it may not raise
+# them past the maximum, because a statusline that takes a visible moment to
+# appear is a regression in the host's own responsiveness and the user did not
+# consent to that by enabling a status provider.
+DEFAULT_PROVIDER_TIMEOUT_MS = 250
+MAX_PROVIDER_TIMEOUT_MS = 2000
+DEFAULT_DEADLINE_MS = 600
+MAX_DEADLINE_MS = 3000
+DEFAULT_UPSTREAM_TIMEOUT_MS = 1500
+MAX_UPSTREAM_TIMEOUT_MS = 5000
+MAX_PROVIDERS = 8
+MAX_ARGV_LENGTH = 16
+
 
 if __name__ == "__main__":
     sys.exit(main())
