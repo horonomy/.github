@@ -552,7 +552,11 @@ def read_registry(home: pathlib.Path | None = None) -> RegistryDocument:
     compositor can read it" cannot drift apart into two different ideas of what a
     valid registry is.
     """
-    target = compositor.registry_path(home)
+    return read_registry_at(compositor.registry_path(home))
+
+
+def read_registry_at(target: pathlib.Path) -> RegistryDocument:
+    """Read the registry at an exact path, for re-reading the one a plan named."""
     try:
         raw = target.read_bytes()
     except FileNotFoundError:
