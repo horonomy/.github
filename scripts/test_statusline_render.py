@@ -1029,5 +1029,85 @@ class TestComposeDeterminism(unittest.TestCase):
         with self.assertRaises(contract.ContractViolation):
             render.compose(UPSTREAM, (fornax_status(), fornax_status()))
 
+
+class TestNoUnknownFieldIsRendered(unittest.TestCase):
+    """Permanent guard: nothing outside the validated contract reaches the line.
+
+    Decoy attributes are attached to otherwise valid contract objects. The
+    renderer reads only contract fields, so none of these canaries can appear.
+    If a future change teaches it to read an unvalidated attribute, this fails.
+    """
+
+    DECOY_ATTRIBUTES = (
+        "api_key",
+        "token",
+        "secret",
+        "credential",
+        "authorization",
+        "prompt",
+        "tool_payload",
+        "rationale",
+        "claim_text",
+        "log",
+        "path",
+        "file_path",
+        "url",
+        "endpoint",
+        "command",
+        "argv",
+        "env",
+        "user_data",
+    )
+
+    def canary(self, name):
+        # Assembled at runtime so this file contains no secret-shaped literal.
+        return "CANARY" + "-" + name.upper().replace("_", "") + "-" + ("Z" * 8)
+
+    def bug(self, obj):
+        for name in self.DECOY_ATTRIBUTES:
+            object.__setattr__(obj, name, self.canary(name))
+        return obj
+
+    def test_no_decoy_attribute_reaches_a_rendered_segment(self):
+        for mode in MODES:
+            seg = self.bug(segment(reason_code="a_reason", age_seconds=30, count=1, count_label="things"))
+            text = render.render_segment(seg, mode)
+            with self.subTest(mode=mode):
+                self.assertNotIn("CANARY", text)
+
+    def test_no_decoy_attribute_reaches_a_rendered_provider(self):
+        for mode in MODES:
+            provider = self.bug(status(segments=(self.bug(segment()),)))
+            text = render.render_provider(provider, mode)
+            with self.subTest(mode=mode):
+                self.assertNotIn("CANARY", text)
+
+    def test_no_decoy_attribute_reaches_the_composed_line(self):
+        for mode in MODES:
+            for budget in (None, 200, 80, 30):
+                provider = self.bug(status(segments=(self.bug(segment()),)))
+                text = render.compose(UPSTREAM, (provider,), mode=mode, width_budget=budget)
+                with self.subTest(mode=mode, budget=budget):
+                    self.assertNotIn("CANARY", text)
+
+    def test_the_decoys_would_be_visible_if_they_were_rendered(self):
+        # Guards the guard: a canary that cannot appear in any output makes the
+        # three tests above vacuous.
+        seg = self.bug(segment())
+        self.assertIn("CANARY", seg.api_key)
+        self.assertNotIn("CANARY", render.render_segment(seg, render.PresentationMode.BALANCED))
+
+    def test_a_secret_shaped_label_cannot_be_constructed_in_the_first_place(self):
+        # Defence in depth: the renderer's safety rests on the contract having
+        # already refused these, so assert that it does.
+        shaped = "sk" + "-" + "live" + "".join("abcdefghijklmnopqrstuvwxyz012345")
+        with self.assertRaises(contract.PrivacyViolation):
+            segment(label=shaped)
+
+    def test_a_path_shaped_label_cannot_be_constructed_in_the_first_place(self):
+        with self.assertRaises((contract.PrivacyViolation, contract.ContractViolation)):
+            segment(label="/Users/someone/secrets/config.json")
+
+
 if __name__ == "__main__":
     unittest.main()
