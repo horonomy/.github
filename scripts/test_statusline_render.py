@@ -126,6 +126,18 @@ def libra_status(**overrides) -> contract.ProviderStatus:
                 reason_code="escalated_to_human",
                 order_hint=0,
             ),
+            # The remaining-work estimate: seconds and a noun, with the host
+            # owning the formatting. A product that sent `label="P90 ≤ 12m"`
+            # instead would be the drift the duration pair exists to prevent.
+            segment(
+                key="remaining",
+                state=contract.SegmentState.NEUTRAL,
+                label="Remaining work",
+                duration_seconds=720,
+                duration_label="P90",
+                explain_key="libra.remaining",
+                order_hint=20,
+            ),
         ),
     }
     fields.update(overrides)
@@ -677,6 +689,50 @@ class TestRenderSegment(unittest.TestCase):
                 self.assertIn(
                     "claims", render.render_segment(fornax_status().segments[0], mode)
                 )
+
+    def test_a_duration_keeps_its_noun(self):
+        remaining = libra_status().segments[-1]
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertIn("P90 12m", render.render_segment(remaining, mode))
+
+    def test_a_duration_sits_with_the_count_and_before_the_age(self):
+        # Both are quantities the segment reports; the age qualifies the whole
+        # reading, so it stays last whatever else is present.
+        text = render.render_segment(
+            segment(
+                count=2,
+                total=14,
+                count_label="tool calls",
+                duration_seconds=720,
+                duration_label="P90",
+                age_seconds=125,
+            ),
+            render.PresentationMode.BALANCED,
+        )
+        self.assertLess(text.index("tool calls"), text.index("P90"))
+        self.assertLess(text.index("P90"), text.index("ago"))
+
+    def test_a_segment_object_predating_the_duration_fields_still_renders(self):
+        # `render_segment` promises to accept anything with the same attributes,
+        # and the duration pair arrived after that promise. A provider pinned to
+        # an older copy of the contract must degrade to its other fields rather
+        # than raise. `Stub` below relies on the same tolerance.
+        class Older:
+            key = "k"
+            state = contract.SegmentState.OK
+            label = "Older"
+            reason_code = None
+            reason_label = None
+            confidence = None
+            confidence_of = None
+            age_seconds = None
+            count = None
+            total = None
+            count_label = None
+            hypothetical = False
+
+        self.assertIn("Older", render.render_segment(Older(), render.PresentationMode.PLAIN))
 
     def test_a_count_without_a_label_is_not_rendered_as_a_bare_number(self):
         # The contract refuses this combination, so this only guards a stub.
