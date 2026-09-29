@@ -35,7 +35,7 @@ drift and quietly retaking the slot would make upgrade indistinguishable from
 install, which a user who deliberately changed their statusline experiences as
 the tool fighting them.
 
-## Three decisions a reader is most likely to assume were oversights
+## Four decisions a reader is most likely to assume were oversights
 
 **There is no backup of the settings file, and no receipt artifact.** Atomicity
 comes from temp-file → fsync → rename → fsync-directory, so an interruption
@@ -46,6 +46,15 @@ backup-as-removal-authority; this goes one step further and declines to create
 the artifact at all. The record of what we did is the provider registry's own
 `lifecycle` block: only our facts, re-read and re-fingerprinted before every
 write.
+
+**The temporary file is opened with `O_EXCL`, and unlinked first.** Its name is
+derived from the target and the pid, so it is predictable, and what it briefly
+holds is the settings document — `env` and all. `O_CREAT` alone would follow a
+symlink already sitting at that name and write those bytes wherever it pointed.
+Unlinking first keeps a temporary left behind by a crash from wedging every
+later write; `O_EXCL` turns anything that appears in the gap into a refusal
+rather than a target. Same-user only, in a directory the user owns — which is
+why it is worth a sentence here rather than a threat model.
 
 **Restoration is a delta, not a snapshot.** Releasing the slot writes the
 recorded command string back into whatever `statusLine` object is on disk at
@@ -122,11 +131,12 @@ needed a real trigger rather than a plausible-looking one:
   every lifecycle step, because that contract is explicit that a test which
   "reads back clean" but breaks the tool doesn't count.
 
-The suite has been run against 17 deliberately broken variants of the
+The suite has been run against 18 deliberately broken variants of the
 implementation (that contract's mutation table plus whole-document
 replacement, template re-derivation, stale restore over drift, index-based
-removal, a missing read-back, and a diagnostic that prints the configured
-command). All 17 were killed, each by the test that names the property. Two
+removal, a missing read-back, a temporary file opened without `O_EXCL`, and a
+diagnostic that prints the configured command). All 18 were killed, each by the
+test that names the property. Two
 findings from that run were defects in the *tests*, not the implementation, and
 were fixed: the read-back assertion was passing because a different check in
 the same function raised, and the diagnostic's privacy assertion only ran
