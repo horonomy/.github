@@ -173,5 +173,31 @@ class FixtureCase(unittest.TestCase):
         return code, writer.getvalue()
 
 
+class TestStatePaths(unittest.TestCase):
+    def test_the_state_home_honours_the_environment_override(self):
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: "/tmp/elsewhere"}):
+            self.assertEqual(compositor.state_home(), pathlib.Path("/tmp/elsewhere"))
+
+    def test_the_default_state_home_is_expanded(self):
+        patcher = without_state_home(HOME="/tmp/fake-home")
+        self.addCleanup(patcher.stop)
+        home = compositor.state_home()
+        self.assertTrue(home.is_absolute())
+        self.assertNotIn("~", str(home))
+
+    def test_the_registry_and_cache_live_under_the_state_home(self):
+        home = pathlib.Path("/tmp/anywhere")
+        self.assertEqual(compositor.registry_path(home).parent, home)
+        self.assertEqual(compositor.cache_dir(home).parent, home)
+
+    def test_nothing_is_written_under_the_hosts_own_configuration_directory(self):
+        # The state home is ours; the host's config directory is not. Keeping
+        # these separate is what lets an uninstall remove our state without
+        # going anywhere near theirs.
+        patcher = without_state_home(HOME="/tmp/fake-home")
+        self.addCleanup(patcher.stop)
+        self.assertNotIn("/.claude", str(compositor.state_home()))
+
+
 if __name__ == "__main__":
     unittest.main()
