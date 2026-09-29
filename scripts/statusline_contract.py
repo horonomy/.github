@@ -208,3 +208,44 @@ class HostCapability(enum.Enum):
     def may_install(self) -> bool:
         """Whether a lifecycle command may attempt to claim the slot."""
         return self is HostCapability.SUPPORTED
+
+
+class Ownership(enum.Enum):
+    """Who owns a given artifact or key in the composed-statusline surface.
+
+    Refines ADR-0009's ownership classes for this one capability. The rule
+    that matters: a lifecycle command may only write what it owns, and
+    `USER_OWNED` plus `UNKNOWN` are both no-write classes.
+
+    - `USER_OWNED` — the person's own statusline command/script, and every
+      setting they wrote by hand. Read, invoke, preserve; never edit, never
+      parse the source, never rewrite.
+    - `HOST_OWNED` — the agent tool's own schema and keys inside a shared
+      settings file. Shared artifact; patch at key level only.
+    - `HORONOM_HOST_OWNED` — the composed-statusline host program, its
+      provider registry, and the single `statusLine.command` value while
+      Horonom holds the slot.
+    - `PRODUCT_PROVIDER_OWNED` — one product's own provider entry in the
+      registry, and that product's own state stores.
+    - `UNKNOWN` — anything unattributable, including legacy state with no
+      ownership marker. Fails safe: no automatic destructive action.
+    """
+
+    USER_OWNED = "user_owned"
+    HOST_OWNED = "host_owned"
+    HORONOM_HOST_OWNED = "horonom_host_owned"
+    PRODUCT_PROVIDER_OWNED = "product_provider_owned"
+    UNKNOWN = "unknown"
+
+    @property
+    def is_writable_by_lifecycle(self) -> bool:
+        """Whether enable/disable/upgrade may mutate state in this class.
+
+        `HOST_OWNED` is absent on purpose: the shared settings file is a
+        shared artifact, so the writable unit there is the Horonom-owned key
+        inside it, never the host's own keys.
+        """
+        return self in (
+            Ownership.HORONOM_HOST_OWNED,
+            Ownership.PRODUCT_PROVIDER_OWNED,
+        )
