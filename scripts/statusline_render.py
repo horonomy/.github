@@ -342,3 +342,41 @@ def format_count(count: int, total: int | None, count_label: str, mode: Presenta
     else:
         quantity = f"{count} of {total}"
     return f"{quantity} {count_label}"
+
+
+# `confidence_of` exists because a bare `high` reads as risk, severity or
+# priority. These phrasings say what the confidence is *about*, which is the
+# specific readability defect behind Libra's `pf:high`.
+CONFIDENCE_SUBJECT_TEXT = {
+    "preflight_estimate": "preflight confidence",
+    "verification": "verification confidence",
+    "policy_decision": "decision confidence",
+    "unspecified": "confidence",
+}
+
+# COMPACT still names the subject, just shorter. It never degrades to the bare
+# value, because "high" alone is the ambiguity this field was added to remove.
+CONFIDENCE_SUBJECT_TEXT_COMPACT = {
+    "preflight_estimate": "preflight",
+    # Not "verified": `verified low` reads as a verdict about the subject rather
+    # than as a confidence in one.
+    "verification": "verification",
+    "policy_decision": "decision",
+    "unspecified": "conf",
+}
+
+
+def format_confidence(confidence: str, confidence_of: str, mode: PresentationMode) -> str:
+    """Render a confidence together with what it is a confidence *in*.
+
+    An unrecognised subject falls back to `unspecified` rather than being
+    omitted: dropping the subject would leave the bare value this function
+    exists to qualify.
+    """
+    table = (
+        CONFIDENCE_SUBJECT_TEXT_COMPACT
+        if mode is PresentationMode.COMPACT
+        else CONFIDENCE_SUBJECT_TEXT
+    )
+    subject = table.get(confidence_of) or table["unspecified"]
+    return f"{subject} {confidence}"
