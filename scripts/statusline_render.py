@@ -548,3 +548,19 @@ def render_provider(status: object, mode: PresentationMode) -> str:
     name = provider_display_name(status.provider)
     scope = scope_marker(_enum_value(status.scope), mode)
     return f"{name} {scope} {body}"
+
+
+def provider_severity(status: object) -> int:
+    """The worst severity any of this provider's segments reports.
+
+    Used to decide what survives when the line will not fit. A provider with no
+    segments ranks as `unknown` rather than `ok`, because "reported nothing" is
+    a thing the user needs to see, not the first thing to hide.
+    """
+    segments = getattr(status, "segments", ()) or ()
+    if not segments:
+        return STATE_SEVERITY[UNKNOWN_STATE]
+    return max(
+        STATE_SEVERITY.get(_enum_value(s.state), STATE_SEVERITY[UNKNOWN_STATE])
+        for s in segments
+    )
