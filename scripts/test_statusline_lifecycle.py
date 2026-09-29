@@ -1069,6 +1069,24 @@ class AtomicWriteTest(LifecycleCase):
         self.assertEqual(decoy.read_text(), "untouched\n")
         self.assertEqual(self.settings.read_text(), '{"ok": true}\n')
 
+    def test_a_symlink_appearing_in_the_gap_is_refused_rather_than_followed(self) -> None:
+        # Unlinking first closes the ordinary case; O_EXCL is what covers the
+        # window between that unlink and the open. Simulated by making the unlink
+        # a no-op, which is indistinguishable from the link being re-planted the
+        # instant it was removed.
+        decoy = self.root / "decoy"
+        decoy.write_text("untouched\n")
+        self.settings.with_name(f"{self.settings.name}.tmp.{os.getpid()}").symlink_to(decoy)
+        before = self.settings.read_bytes()
+
+        with unittest.mock.patch.object(pathlib.Path, "unlink", lambda *a, **k: None):
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.atomic_write(self.settings, b'{"statusLine": {}}\n', mode=0o600)
+
+        # FAILED_MUTATION_IS_ATOMIC -- nothing was written, to either file.
+        self.assertEqual(decoy.read_text(), "untouched\n")
+        self.assertEqual(self.settings.read_bytes(), before)
+
     def test_a_directory_that_cannot_be_created_is_a_refusal_not_a_traceback(self) -> None:
         # The state directory's parent is a file here, so `mkdir` fails. A raw
         # OSError escaping would be reported to the user as a crash rather than as
