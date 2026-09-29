@@ -38,7 +38,8 @@ import re
 
 # The wire contract version a provider must declare. Bumped only when a
 # change is not backward compatible for an existing host; additive optional
-# fields do not bump it (see `docs/` and `is_supported_contract_version`).
+# fields do not bump it. The full evolution rules are in
+# `governance/product/statusline-provider-contract.md`.
 CONTRACT_VERSION = 1
 
 # Versions this host can parse. A provider declaring anything else is
