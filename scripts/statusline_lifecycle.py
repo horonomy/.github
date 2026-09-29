@@ -386,3 +386,81 @@ def classify(document: SettingsDocument) -> Ownership:
     if refers_to_compositor(command):
         return Ownership.HORONOM_OWNED if marked else Ownership.ADOPTABLE
     return Ownership.DRIFTED if marked else Ownership.USER_OWNED
+
+
+def settings_scope(path: pathlib.Path) -> str:
+    """The blast radius of writing this file, in HORO-1000's vocabulary.
+
+    Labelled on every plan rather than stated once in documentation, because the
+    difference between "this project" and "every project on this machine" is the
+    single most consequential thing about a host-config mutation and the easiest
+    to skim past.
+    """
+    parent = path.expanduser().parent
+    if parent == pathlib.Path.home() / ".claude":
+        return "user"
+    return "project" if parent.name == ".claude" else "other"
+
+
+@dataclasses.dataclass(frozen=True)
+class Change:
+    """One line of a plan, in one of HORO-1000's disclosure categories."""
+
+    kind: ChangeKind
+    target: str
+    detail: str
+
+    def to_json(self) -> dict:
+        return {"category": self.kind.value, "target": self.target, "detail": self.detail}
+
+
+@dataclasses.dataclass(frozen=True)
+class Plan:
+    """Everything an operation would do, before any of it has been done.
+
+    A plan is built from one read of the settings file and carries that read's
+    `fingerprint`, which is what lets `apply` refuse a plan that has gone stale.
+    `settings_after` and `registry_after` are the complete documents to be
+    written, not patches: the diffing has already happened, so there is no second
+    interpretation step between deciding and writing.
+    """
+
+    operation: str
+    settings_path: pathlib.Path
+    ownership: Ownership
+    changes: tuple[Change, ...]
+    fingerprint: str
+    settings_after: dict | None = None
+    registry_after: dict | None = None
+    refusal: str | None = None
+    remediation: tuple[str, ...] = ()
+
+    @property
+    def scope(self) -> str:
+        return settings_scope(self.settings_path)
+
+    @property
+    def mutates(self) -> bool:
+        return self.refusal is None and (
+            self.settings_after is not None or self.registry_after is not None
+        )
+
+    def to_json(self) -> dict:
+        return {
+            "operation": self.operation,
+            "settings_path": str(self.settings_path),
+            "scope": self.scope,
+            # Never "whole_artifact". The settings file is shared with the host
+            # tool and with every other product, so the answer to "what does
+            # uninstall do" is always "removes entries", never "removes a file".
+            "ownership_model": "shared_artifact",
+            "current_owner": self.ownership.value,
+            "would_mutate": self.mutates,
+            # Stated as its own field, separate from any automation consent, so
+            # that a caller passing a --yes equivalent cannot read this as
+            # having been waived. Nothing in this module escalates privilege.
+            "requires_os_authorization": False,
+            "changes": [change.to_json() for change in self.changes],
+            "refusal": self.refusal,
+            "remediation": list(self.remediation),
+        }
