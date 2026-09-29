@@ -1087,6 +1087,16 @@ class AtomicWriteTest(LifecycleCase):
         self.assertEqual(decoy.read_text(), "untouched\n")
         self.assertEqual(self.settings.read_bytes(), before)
 
+    def test_a_temporary_file_left_by_a_crash_does_not_wedge_the_next_write(self) -> None:
+        # The other half of using O_EXCL: a real file at that name is ours, from a
+        # run that died between opening and renaming, and refusing forever because
+        # of it would make one crash permanent.
+        stale = self.settings.with_name(f"{self.settings.name}.tmp.{os.getpid()}")
+        stale.write_text("half a document")
+        lifecycle.atomic_write(self.settings, b'{"ok": true}\n', mode=0o600)
+        self.assertEqual(self.settings.read_text(), '{"ok": true}\n')
+        self.assertFalse(stale.exists())
+
     def test_a_directory_that_cannot_be_created_is_a_refusal_not_a_traceback(self) -> None:
         # The state directory's parent is a file here, so `mkdir` fails. A raw
         # OSError escaping would be reported to the user as a crash rather than as
