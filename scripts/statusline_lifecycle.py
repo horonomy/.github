@@ -846,3 +846,17 @@ def plan_enable(
         settings_after=None if settings_after == document.data else settings_after,
         registry_after=None if registry_after == registry.data else registry_after,
     )
+
+
+def serialize(data: dict, *, indent: int | str = DEFAULT_INDENT, trailing_newline: bool = True) -> bytes:
+    """Render a settings document back to bytes as close to how it arrived as JSON allows.
+
+    `ensure_ascii=False` matters more than it looks: escaping non-ASCII would
+    rewrite every line of a settings file containing an emoji or a non-Latin path
+    into `\\uXXXX` form. The file would still parse, and the user's next `git
+    diff` of their dotfiles would be unreadable. The indent style and trailing
+    newline come from the file we read for the same reason -- a mutation that
+    reformats the parts it does not own is still a mutation of them.
+    """
+    text = json.dumps(data, indent=indent, ensure_ascii=False)
+    return (text + "\n" if trailing_newline else text).encode("utf-8")
