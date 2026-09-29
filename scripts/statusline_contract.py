@@ -183,3 +183,28 @@ _CONFIDENCE_SUBJECT_LABEL = {
     ConfidenceSubject.POLICY_DECISION: "decision confidence",
     ConfidenceSubject.UNSPECIFIED: "confidence",
 }
+
+
+class HostCapability(enum.Enum):
+    """Whether a given agent host tool can support a composed statusline.
+
+    `UNSUPPORTED` is a legitimate, final answer for a host with no statusline
+    contract of its own — it is not a prompt to synthesise one out of ANSI
+    escape sequences or background output, which would be a claim of support
+    the host never made.
+
+    `UNAVAILABLE` is different: the host *does* support this, but not on this
+    machine right now (not installed, wrong version). `UNKNOWN` means the
+    capability has not been established against the installed version, which
+    is the honest default for a host nobody has checked.
+    """
+
+    SUPPORTED = "supported"
+    UNSUPPORTED = "unsupported"
+    UNAVAILABLE = "unavailable"
+    UNKNOWN = "unknown"
+
+    @property
+    def may_install(self) -> bool:
+        """Whether a lifecycle command may attempt to claim the slot."""
+        return self is HostCapability.SUPPORTED
