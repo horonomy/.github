@@ -138,3 +138,39 @@ class VerificationError(LifecycleError):
     for a state nobody planned. A successful `os.replace` is evidence about the
     filesystem, not about the content.
     """
+
+
+class Ownership(enum.Enum):
+    """Who owns `statusLine` right now, in ADR-0009's vocabulary.
+
+    The classes that matter are the two that look the same from a distance.
+    `HORONOM_OWNED` means both our marker and our command are present, which is
+    the only state that authorises us to change the command back. `ADOPTABLE`
+    means the command is ours but the marker is not there -- a hand-written
+    config, or a marker some editor dropped. We cannot tell those apart, so it
+    is treated as unknown ownership and requires the operator to say so
+    explicitly rather than being claimed on a guess.
+    """
+
+    ABSENT = "absent"
+    USER_OWNED = "user_owned"
+    HORONOM_OWNED = "horonom_owned"
+    ADOPTABLE = "horonom_command_unmarked"
+    UNSUPPORTED_SHAPE = "unsupported_shape"
+
+
+class ChangeKind(enum.Enum):
+    """The disclosure categories a plan has to keep apart.
+
+    These are HORO-1000's categories, not ones invented here, because the reason
+    they are separate is that they carry different risk: a reader skimming a plan
+    needs `product_owned_remove` to look different from `host_user_state_
+    preserved` without reading the detail text.
+    """
+
+    ADD = "product_owned_add"
+    UPDATE = "product_owned_update"
+    REMOVE = "product_owned_remove"
+    PRESERVED_USER = "host_user_state_preserved"
+    PRESERVED_OTHER_PRODUCT = "other_product_state_preserved"
+    BLOCKED_UNKNOWN = "unknown_state_blocking_mutation"
