@@ -189,5 +189,22 @@ def _require_scope(value: object, provider: str) -> contract.Scope:
         raise RegistryError(f"provider {provider!r}: {value!r} is not a known scope") from exc
 
 
+def _parse_provider(payload: object) -> ProviderEntry | None:
+    """Parse one registry entry, or `None` if it is registered but disabled."""
+    if not isinstance(payload, dict):
+        raise RegistryError("each provider entry must be an object")
+    provider = contract.require_provider_id(payload.get("provider"))
+    if payload.get("enabled", True) is not True:
+        return None
+    return ProviderEntry(
+        provider=provider,
+        argv=_require_argv(payload.get("command"), provider),
+        scope=_require_scope(payload.get("scope"), provider),
+        timeout_ms=_bounded_ms(
+            payload, "timeout_ms", DEFAULT_PROVIDER_TIMEOUT_MS, MAX_PROVIDER_TIMEOUT_MS
+        ),
+    )
+
+
 if __name__ == "__main__":
     sys.exit(main())
