@@ -125,3 +125,71 @@ here at the point they would otherwise be lost:
 Because the host validates every document it parses, a provider bug degrades to
 that provider rendering as unknown rather than to a corrupted line or a leaked
 value. That is a backstop for the provider's own tests, not a replacement.
+
+## Presentation is host-owned
+
+All iconography, separators, widths, truncation and mode selection live in one
+pure module. A product emits semantics and never chooses a glyph, because two
+products independently picking an emoji for "warning" is how a shared line stops
+being readable.
+
+### Modes
+
+`BALANCED` (default), `COMPACT`, `PLAIN`. `PLAIN` is **not** a degraded mode —
+it is the correct mode for a terminal whose font or width handling makes emoji
+unreliable, and it carries exactly the same state meaning as `BALANCED`. Every
+glyph has a word equivalent, so a glyph is never the only carrier of meaning.
+Those equivalents are words rather than sigils: a reader who has never seen this
+line before can decode `WARN` and cannot decode `!`.
+
+An unrecognised mode falls back to the default instead of refusing. It decides
+how the line looks, not what gets executed, and losing the whole statusline over
+a typo in a cosmetic preference is the worse outcome.
+
+### Glyph safety
+
+A glyph is emoji-presentation-safe iff its last codepoint is U+FE0F or every
+codepoint is East-Asian wide/fullwidth. This is the mechanical form of a real
+defect: live Libra output used U+2696 SCALES and U+1F6E1 SHIELD bare, both
+`Emoji_Presentation=No`, so terminals were entitled to draw them as one column
+— and the column accounting around them went wrong with it. U+1F9ED COMPASS in
+the same line was fine, which is why the bug looked arbitrary. The host's glyph
+table is asserted against this rule, so the defect cannot be reintroduced by
+adding a glyph.
+
+Truncation is grapheme-cluster-aware, so a flag, a keycap, a ZWJ sequence or a
+skin-tone modifier is never split in half.
+
+### The degradation ladder
+
+When a width budget is set, in order: try each allowed mode and take the first
+that *measures* within budget; then shed the least important provider groups
+while saying how many segments went; then fall back to the single worst state
+with its label truncated. If even that cannot be said honestly, the upstream
+text is returned alone — the user's line is the last thing to go, never the
+first.
+
+Each candidate is **measured** rather than assumed, because `COMPACT` can be
+wider than `BALANCED`: compaction spells out states that refuse to be
+abbreviated. An exception must become *more* explicit under pressure, not less,
+and `unknown` is emphatic for the same reason — a provider that could not read
+its own state is the case a reader is most likely to misread as fine.
+
+### Separator hierarchy
+
+Details are parenthesised and comma-joined inside a segment; segments and
+provider groups are dot-joined; the user's line is divided from the Horonom
+block by the strongest divider of all. Every separator character is deliberately
+**absent** from the provider contract's label allowlist, so a separator can never
+be confused with a character a provider put there. Square brackets are reserved
+for host-owned semantic tokens, which is why `[host]` and `[NOT ENFORCED]` share
+a shape.
+
+### No opaque abbreviations
+
+A shortened token may not be the only carrier of a meaning. `pf:high` does not
+say that "high" is *preflight confidence* rather than risk; `wb` does not say
+"would block"; `!escalated` does not say that something is awaiting approval.
+The host renders the subject alongside the value, and a hypothetical verdict —
+a shadow-mode would-block — is marked so it can never read as an enforcement
+that actually happened.
