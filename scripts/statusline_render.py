@@ -304,3 +304,24 @@ def state_marker(state: str, mode: PresentationMode) -> str:
     if mode is PresentationMode.COMPACT and state in EMPHATIC_STATES:
         return f"{glyph} {STATE_TEXT[state]}"
     return glyph
+
+
+def format_age(age_seconds: int, mode: PresentationMode) -> str:
+    """Render a freshness reading as a single coarse unit.
+
+    Coarse on purpose: a statusline reader wants to know whether a reading is
+    seconds or days old, and the extra precision costs columns that a provider
+    label needs more. Rounds *down*, so "2m" never overstates freshness.
+
+    BALANCED and PLAIN say "ago" because a bare "2m" beside a count reads as a
+    duration or a budget rather than an age.
+    """
+    age_seconds = max(0, int(age_seconds))
+    for limit, unit, divisor in ((60, "s", 1), (3600, "m", 60), (86400, "h", 3600)):
+        if age_seconds < limit:
+            value = age_seconds // divisor
+            break
+    else:
+        value, unit = age_seconds // 86400, "d"
+    token = f"{value}{unit}"
+    return token if mode is PresentationMode.COMPACT else f"{token} ago"
