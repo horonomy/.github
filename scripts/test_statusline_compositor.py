@@ -979,5 +979,110 @@ class TestUpstreamIsNeverOurs(FixtureCase):
         self.assertIn("registry unreadable", out)
 
 
+class TestMain(FixtureCase):
+    def test_the_exit_code_is_always_zero(self):
+        cases = {
+            "no registry": None,
+            "malformed registry": "{ nope",
+            "unsupported version": '{"registry_version": 99}',
+            "invalid provider id": '{"registry_version": 1, "providers": [{"provider": "N O"}]}',
+            "valid": json.dumps(registry_document()),
+        }
+        for label, content in cases.items():
+            with self.subTest(label=label):
+                path = self.home / compositor.REGISTRY_FILENAME
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_text(content)
+                self.assertEqual(self.run_main()[0], 0)
+
+    def test_a_broken_registry_says_so_rather_than_printing_a_blank_line(self):
+        # A blank line reads as "no status", which is indistinguishable from
+        # working correctly.
+        (self.home / compositor.REGISTRY_FILENAME).write_text("{ nope")
+        out = self.run_main()[1]
+        self.assertTrue(out.strip())
+        self.assertIn("unreadable", out)
+
+    def test_an_empty_registry_renders_nothing_at_all(self):
+        self.write_registry()
+        self.assertEqual(self.run_main()[1].strip(), "")
+
+    def test_a_healthy_provider_renders_into_the_line(self):
+        path = self.answering("good3", wire())
+        self.write_registry(providers=[provider_document("fornax", [path])])
+        self.assertIn("Verified", self.run_main()[1])
+
+    def test_the_depth_marker_stops_us_printing_a_second_copy(self):
+        path = self.answering("good4", wire())
+        self.write_registry(providers=[provider_document("fornax", [path])])
+        with unittest.mock.patch.dict(
+            os.environ, {compositor.DEPTH_ENV: str(compositor.MAX_DEPTH)}
+        ):
+            code, out = self.run_main()
+        self.assertEqual((code, out), (0, ""))
+
+    def test_the_depth_marker_is_passed_to_children(self):
+        sink = self.home / "depth.txt"
+        # Warmed, and the warm-up's own write to the sink is why that is safe to
+        # do here: it records the ambient (unset) marker, which the run under
+        # test then overwrites. Unwarmed, the fixture's first execution can cost
+        # more than the provider timeout and the sink is never written at all.
+        path = self.script("reporting", f'printf "%s" "${compositor.DEPTH_ENV}" > {sink}\nexit 1\n')
+        self.write_registry(providers=[provider_document("fornax", [path])])
+        self.run_main()
+        self.assertEqual(sink.read_text(), "1")
+
+    def test_stdin_is_read_even_when_there_is_nothing_to_forward_it_to(self):
+        self.write_registry()
+        self.assertEqual(self.run_main(b'{"a": 1}')[0], 0)
+
+    def test_an_empty_stdin_is_not_an_error(self):
+        path = self.answering("good5", wire())
+        self.write_registry(providers=[provider_document("fornax", [path])])
+        self.assertIn("Verified", self.run_main(b"")[1])
+
+    def test_exactly_one_line_is_printed(self):
+        good = self.answering("good6", wire())
+        upstream = self.script("theirs3", "printf 'A'\n")
+        self.write_registry(
+            upstream={"command": f"'{upstream}'"},
+            providers=[provider_document("fornax", [good])],
+        )
+        out = self.run_main()[1]
+        self.assertEqual(out.count("\n"), 1)
+        self.assertTrue(out.endswith("\n"))
+
+    def test_a_width_budget_is_honoured(self):
+        good = self.answering("good7", wire())
+        self.write_registry(
+            providers=[provider_document("fornax", [good])],
+            presentation={"mode": "plain", "width_budget": 30},
+        )
+        out = self.run_main()[1].rstrip("\n")
+        self.assertLessEqual(render.display_width(out), 30)
+
+    def test_the_recursion_guard_holds_in_a_real_child_process(self):
+        # The in-process test covers the marker; this one proves a real child
+        # inherits it, which is the case the guard exists for.
+        self.write_registry()
+        result = subprocess.run(
+            [sys.executable, compositor.__file__],
+            input=b"{}",
+            capture_output=True,
+            env=dict(
+                os.environ,
+                **{
+                    compositor.STATE_HOME_ENV: str(self.home),
+                    compositor.DEPTH_ENV: str(compositor.MAX_DEPTH),
+                },
+            ),
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn(b"refusing to recurse", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
