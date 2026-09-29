@@ -294,5 +294,12 @@ def depth() -> int:
         return MAX_DEPTH
 
 
+def child_env() -> dict:
+    """The environment every child gets, carrying the recursion marker."""
+    env = dict(os.environ)
+    env[DEPTH_ENV] = str(depth() + 1)
+    return env
+
+
 if __name__ == "__main__":
     sys.exit(main())
