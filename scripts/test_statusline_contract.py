@@ -117,5 +117,79 @@ class ConfidenceTest(unittest.TestCase):
                 self.assertNotIn(":", subject.label)
 
 
+class HostCapabilityTest(unittest.TestCase):
+    def test_only_supported_may_install(self) -> None:
+        installable = {c for c in sc.HostCapability if c.may_install}
+        self.assertEqual(installable, {sc.HostCapability.SUPPORTED})
+
+    def test_unsupported_unavailable_and_unknown_are_distinct(self) -> None:
+        self.assertEqual(
+            len(
+                {
+                    sc.HostCapability.UNSUPPORTED,
+                    sc.HostCapability.UNAVAILABLE,
+                    sc.HostCapability.UNKNOWN,
+                }
+            ),
+            3,
+        )
+
+
+class OwnershipTest(unittest.TestCase):
+    def test_user_owned_is_never_writable(self) -> None:
+        self.assertFalse(sc.Ownership.USER_OWNED.is_writable_by_lifecycle)
+
+    def test_unknown_owner_is_never_writable(self) -> None:
+        self.assertFalse(sc.Ownership.UNKNOWN.is_writable_by_lifecycle)
+
+    def test_shared_host_artifact_is_not_writable_as_a_whole(self) -> None:
+        self.assertFalse(sc.Ownership.HOST_OWNED.is_writable_by_lifecycle)
+
+    def test_exactly_the_two_horonom_classes_are_writable(self) -> None:
+        writable = {o for o in sc.Ownership if o.is_writable_by_lifecycle}
+        self.assertEqual(
+            writable,
+            {sc.Ownership.HORONOM_HOST_OWNED, sc.Ownership.PRODUCT_PROVIDER_OWNED},
+        )
+
+    def test_the_users_own_statusline_command_is_user_owned(self) -> None:
+        self.assertIs(
+            sc.classify_artifact("user_statusline_command"), sc.Ownership.USER_OWNED
+        )
+
+    def test_the_shared_settings_file_is_a_shared_host_artifact(self) -> None:
+        self.assertIs(
+            sc.classify_artifact("host_shared_settings_file"), sc.Ownership.HOST_OWNED
+        )
+
+    def test_the_provider_registry_is_horonom_owned(self) -> None:
+        self.assertIs(
+            sc.classify_artifact("horonom_provider_registry"),
+            sc.Ownership.HORONOM_HOST_OWNED,
+        )
+
+    def test_an_unattributed_slot_value_fails_safe(self) -> None:
+        self.assertIs(
+            sc.classify_artifact("unattributed_statusline_command"),
+            sc.Ownership.UNKNOWN,
+        )
+
+    def test_legacy_unmarked_state_fails_safe(self) -> None:
+        self.assertIs(
+            sc.classify_artifact("legacy_unmarked_state"), sc.Ownership.UNKNOWN
+        )
+
+    def test_an_unclassified_artifact_is_unknown_not_writable(self) -> None:
+        owner = sc.classify_artifact("some_artifact_nobody_has_classified")
+        self.assertIs(owner, sc.Ownership.UNKNOWN)
+        self.assertFalse(owner.is_writable_by_lifecycle)
+
+    def test_no_user_owned_artifact_is_writable(self) -> None:
+        for artifact, owner in sc.ARTIFACT_OWNERSHIP.items():
+            if owner is sc.Ownership.USER_OWNED:
+                with self.subTest(artifact=artifact):
+                    self.assertFalse(owner.is_writable_by_lifecycle)
+
+
 if __name__ == "__main__":
     unittest.main()
