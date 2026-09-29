@@ -116,5 +116,22 @@ class ProviderEntry:
     timeout_ms: int
 
 
+@dataclasses.dataclass(frozen=True)
+class Registry:
+    """The read model of Horonom-owned statusline state.
+
+    `upstream_command` is the command string that occupied `statusLine.command`
+    before Horonom took the slot, stored exactly as the host had it. `None` means
+    there was no original statusline, which is an ordinary state.
+    """
+
+    upstream_command: str | None
+    upstream_timeout_ms: int
+    providers: tuple[ProviderEntry, ...]
+    mode: render.PresentationMode
+    width_budget: int | None
+    deadline_ms: int
+
+
 if __name__ == "__main__":
     sys.exit(main())
