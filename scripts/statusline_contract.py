@@ -31,6 +31,8 @@ Stdlib only, matching the rest of `scripts/`.
 
 from __future__ import annotations
 
+import enum
+
 # The wire contract version a provider must declare. Bumped only when a
 # change is not backward compatible for an existing host; additive optional
 # fields do not bump it (see `docs/` and `is_supported_contract_version`).
@@ -49,3 +51,23 @@ def is_supported_contract_version(version: object) -> bool:
     future incompatible provider be mis-parsed as v1.
     """
     return isinstance(version, int) and not isinstance(version, bool) and version in SUPPORTED_CONTRACT_VERSIONS
+
+
+class Scope(enum.Enum):
+    """Which breadth of state a provider is reporting.
+
+    Scope is the *semantic* value. A renderer may draw it as a glyph, but the
+    glyph is never the contract — `text_fallback` is always available, so a
+    terminal with no emoji support still shows unambiguous scope. Host-wide
+    state must never silently render as if it were session-scoped, which is
+    why there is no default: a provider states its scope or fails validation.
+    """
+
+    HOST = "host"
+    SESSION = "session"
+    PROJECT = "project"
+
+    @property
+    def text_fallback(self) -> str:
+        """The deterministic, emoji-free rendering of this scope."""
+        return f"[{self.value}]"
