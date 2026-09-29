@@ -52,6 +52,7 @@ import shutil
 import sys
 
 import statusline_compositor as compositor
+import statusline_contract as contract
 
 # The key Claude Code reads, and the only key in the settings file this module
 # is ever allowed to write.
@@ -464,3 +465,107 @@ class Plan:
             "refusal": self.refusal,
             "remediation": list(self.remediation),
         }
+
+
+@dataclasses.dataclass(frozen=True)
+class ProviderRegistration:
+    """What a product tells the host in order to appear in the line.
+
+    The command is an argv sequence, not a shell string, and that asymmetry with
+    the upstream command is deliberate. The upstream is a string because it is
+    the user's and must be reproduced exactly; a provider's command is supplied
+    by a product that knows its own arguments, so there is no reason to involve a
+    shell -- and therefore no shell to quote for.
+    """
+
+    provider: str
+    argv: tuple[str, ...]
+    scope: str
+    timeout_ms: int | None = None
+
+    def __post_init__(self) -> None:
+        contract.require_provider_id(self.provider)
+        # Constructed rather than compared so an unrecognised scope raises here,
+        # at registration, instead of at the first render.
+        contract.Scope(self.scope)
+        if not self.argv or not all(isinstance(part, str) and part for part in self.argv):
+            raise LifecycleError("a provider command must be a non-empty list of non-empty strings")
+        if len(self.argv) > compositor.MAX_ARGV_LENGTH:
+            raise LifecycleError(
+                f"a provider command may have at most {compositor.MAX_ARGV_LENGTH} parts"
+            )
+        if self.timeout_ms is not None and not (
+            0 < self.timeout_ms <= compositor.MAX_PROVIDER_TIMEOUT_MS
+        ):
+            raise LifecycleError(
+                f"a provider timeout must be between 1 and "
+                f"{compositor.MAX_PROVIDER_TIMEOUT_MS} milliseconds"
+            )
+
+    def to_entry(self) -> dict:
+        entry = {
+            "provider": self.provider,
+            "command": list(self.argv),
+            "scope": self.scope,
+            "enabled": True,
+        }
+        if self.timeout_ms is not None:
+            entry["timeout_ms"] = self.timeout_ms
+        return entry
+
+
+@dataclasses.dataclass(frozen=True)
+class RegistryDocument:
+    """One read of the provider registry.
+
+    `problem` is carried rather than raised so that the diagnostic surface can
+    report an unreadable registry instead of dying on it. Every write path checks
+    it: a registry we cannot parse may still hold the only record of the user's
+    original command, so overwriting it is a decision an operator has to make.
+    """
+
+    path: pathlib.Path
+    raw: bytes
+    present: bool
+    data: dict | None
+    problem: str | None
+
+    @property
+    def fingerprint(self) -> str:
+        return hashlib.sha256(self.raw).hexdigest()
+
+    @property
+    def usable(self) -> bool:
+        return self.problem is None
+
+
+def read_registry(home: pathlib.Path | None = None) -> RegistryDocument:
+    """Read the registry, validating it with the parser that will actually run it.
+
+    Validation goes through `compositor.parse_registry` rather than a second
+    schema kept in step here, so that "the lifecycle wrote it" and "the
+    compositor can read it" cannot drift apart into two different ideas of what a
+    valid registry is.
+    """
+    target = compositor.registry_path(home)
+    try:
+        raw = target.read_bytes()
+    except FileNotFoundError:
+        return RegistryDocument(path=target, raw=b"", present=False, data=None, problem=None)
+    except OSError as exc:
+        raise LifecycleError(f"registry at {target} could not be read (errno {exc.errno})") from exc
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return RegistryDocument(
+            path=target,
+            raw=raw,
+            present=True,
+            data=None,
+            problem=f"not valid JSON (line {exc.lineno}, column {exc.colno})",
+        )
+    try:
+        compositor.parse_registry(parsed)
+    except compositor.RegistryError as exc:
+        return RegistryDocument(path=target, raw=raw, present=True, data=parsed, problem=str(exc))
+    return RegistryDocument(path=target, raw=raw, present=True, data=parsed, problem=None)
