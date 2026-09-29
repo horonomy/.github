@@ -92,5 +92,14 @@ MAX_PROVIDER_OUTPUT_BYTES = 64 * 1024
 MAX_UPSTREAM_OUTPUT_BYTES = 256 * 1024
 
 
+class RegistryError(ValueError):
+    """The registry is missing, unreadable, or not a shape we recognise.
+
+    Always fatal for the Horonom block and never fatal for the user's line: the
+    two failure modes are handled separately in `main` precisely so a mistake in
+    our own state cannot take their statusline down with it.
+    """
+
+
 if __name__ == "__main__":
     sys.exit(main())
