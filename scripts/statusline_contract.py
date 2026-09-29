@@ -32,6 +32,7 @@ Stdlib only, matching the rest of `scripts/`.
 from __future__ import annotations
 
 import enum
+import re
 
 # The wire contract version a provider must declare. Bumped only when a
 # change is not backward compatible for an existing host; additive optional
@@ -309,3 +310,43 @@ class PrivacyViolation(ContractViolation):
     provider bug to fix, while this is a potential disclosure, and the host
     must drop the provider's output entirely rather than render part of it.
     """
+
+
+# Provider ids, segment keys and reason codes are machine tokens, not prose.
+# A narrow charset here is the first line of the privacy defence: a value
+# that cannot contain `/`, `:` or `=` cannot smuggle a path, a URL or a
+# key=value pair through a field the renderer will print.
+_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+_PROVIDER_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+_EXPLAIN_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){0,3}$")
+
+
+def require_token(value: object, field: str) -> str:
+    """Validate a lowercase machine token (segment key, reason code)."""
+    if not isinstance(value, str) or not _TOKEN_RE.match(value):
+        raise ContractViolation(
+            f"{field} must be a lowercase token matching {_TOKEN_RE.pattern}"
+        )
+    return value
+
+
+def require_provider_id(value: object) -> str:
+    """Validate a provider id, which may also contain hyphens."""
+    if not isinstance(value, str) or not _PROVIDER_ID_RE.match(value):
+        raise ContractViolation(
+            f"provider must be a lowercase id matching {_PROVIDER_ID_RE.pattern}"
+        )
+    return value
+
+
+def require_explain_key(value: object) -> str:
+    """Validate a dotted key naming an entry in the shared explain surface.
+
+    Bounded to four dotted parts so a provider cannot use this field as a
+    general-purpose string channel.
+    """
+    if not isinstance(value, str) or not _EXPLAIN_KEY_RE.match(value):
+        raise ContractViolation(
+            f"explain_key must be a dotted key matching {_EXPLAIN_KEY_RE.pattern}"
+        )
+    return value
