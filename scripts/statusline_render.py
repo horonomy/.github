@@ -595,3 +595,11 @@ def _hidden_marker(count: int) -> str:
     provider that reported nothing, and those mean opposite things.
     """
     return f"[+{count} more]"
+
+
+def _render_groups(statuses: "tuple", mode: PresentationMode, hidden: int = 0) -> str:
+    text = SEGMENT_SEPARATORS[mode].join(render_provider(s, mode) for s in statuses)
+    if hidden:
+        marker = _hidden_marker(hidden)
+        text = f"{text}{SEGMENT_SEPARATORS[mode]}{marker}" if text else marker
+    return text
