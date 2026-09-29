@@ -407,3 +407,12 @@ def format_reason(reason_code: str | None, reason_label: str | None) -> str:
 # executed block the user believes their agent was stopped when it was not, so
 # this marker is treated as load-bearing rather than decorative.
 HYPOTHETICAL_TEXT = "NOT ENFORCED"
+
+# PLAIN drops to ASCII for the same reason it drops glyphs: it exists for
+# terminals whose character handling cannot be trusted, and U+00B7 is one more
+# thing to get wrong for no gain.
+DETAIL_SEPARATORS = {
+    PresentationMode.BALANCED: " · ",  # MIDDLE DOT
+    PresentationMode.COMPACT: " · ",
+    PresentationMode.PLAIN: " | ",
+}
