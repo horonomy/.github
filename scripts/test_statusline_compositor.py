@@ -422,5 +422,36 @@ class TestRegistryParsing(unittest.TestCase):
                 self.assertIs(registry.mode, mode)
 
 
+class TestRegistryLoading(FixtureCase):
+    def test_a_missing_registry_is_a_registry_error(self):
+        with self.assertRaises(compositor.RegistryError):
+            compositor.load_registry(self.home / "absent.json")
+
+    def test_invalid_json_is_a_registry_error_naming_the_line(self):
+        path = self.home / compositor.REGISTRY_FILENAME
+        path.write_text('{"registry_version": 1,\n  "providers": [oops]}')
+        with self.assertRaises(compositor.RegistryError) as raised:
+            compositor.load_registry(path)
+        self.assertIn("line 2", str(raised.exception))
+
+    def test_a_valid_registry_loads_from_disk(self):
+        self.write_registry(upstream={"command": "/bin/echo hi"})
+        self.assertEqual(
+            compositor.load_registry(self.home / compositor.REGISTRY_FILENAME).upstream_command,
+            "/bin/echo hi",
+        )
+
+    def test_an_unreadable_registry_reports_an_errno_and_not_a_message(self):
+        # OSError messages on some platforms carry the full path of every
+        # parent directory, and this string is printed to the user's terminal.
+        path = self.home / compositor.REGISTRY_FILENAME
+        path.mkdir()
+        with self.assertRaises(compositor.RegistryError) as raised:
+            compositor.load_registry(path)
+        message = str(raised.exception)
+        self.assertRegex(message, r"\(\d+\)$")
+        self.assertNotIn("Is a directory", message)
+
+
 if __name__ == "__main__":
     unittest.main()
