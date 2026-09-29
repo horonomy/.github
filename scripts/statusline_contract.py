@@ -750,11 +750,17 @@ class ProviderStatus:
         self._validate_non_collapse()
 
     def _validate_non_collapse(self) -> None:
-        """Forbid the two ways a non-answer gets rendered as a good answer.
+        """Forbid the ways a non-answer gets rendered as a good answer.
 
         A provider that could not read its state must not claim `OK`, and must
         not report a count: an unavailable daemon reporting `0 would block` is
         a false all-clear, which is the `UNAVAILABLE != ZERO` rule.
+
+        Nor may it report a confidence. A confidence is a claim about a result
+        the provider computed, so `unavailable` carrying `high` is incoherent in
+        the most misleading direction available. `age_seconds` is deliberately
+        still allowed: "last read two hours ago, unavailable now" is a true and
+        useful thing to say.
         """
         if self.availability.has_live_readings:
             return
@@ -769,6 +775,12 @@ class ProviderStatus:
                     f"availability {self.availability.value!r} cannot carry a "
                     "count; an unavailable provider reporting zero is a false "
                     "all-clear"
+                )
+            if segment.confidence is not None:
+                raise ContractViolation(
+                    f"availability {self.availability.value!r} cannot carry a "
+                    "confidence; a provider that could not read its state has "
+                    "no result to be confident about"
                 )
 
     def to_wire(self) -> dict:
