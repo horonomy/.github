@@ -68,5 +68,12 @@ def wire(**overrides) -> dict:
     return payload
 
 
+def registry_document(**overrides) -> dict:
+    """A minimal valid registry document."""
+    payload = {"registry_version": 1, "providers": []}
+    payload.update(overrides)
+    return payload
+
+
 if __name__ == "__main__":
     unittest.main()
