@@ -417,5 +417,20 @@ def _host_not_available(
     )
 
 
+def source_fingerprint(argv: tuple[str, ...]) -> str:
+    """Identify *which command* produced a cached answer.
+
+    The cache is keyed by provider id, because that is what the registry
+    guarantees is unique. But the id alone does not say which executable
+    answered, so an entry written before the registry was re-pointed would
+    otherwise be served as though the new command had said it. Recording a
+    digest of the argv lets a re-pointed provider ignore the old answer instead
+    of attributing it. The argv is not secret — it is hashed only to keep local
+    paths out of a file the user may reasonably inspect.
+    """
+    joined = "\x00".join(argv).encode("utf-8")
+    return hashlib.sha256(joined).hexdigest()
+
+
 if __name__ == "__main__":
     sys.exit(main())
