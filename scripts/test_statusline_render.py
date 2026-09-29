@@ -427,5 +427,31 @@ class TestStateMarker(unittest.TestCase):
                 with self.subTest(state=state, mode=mode):
                     self.assertTrue(render.state_marker(state, mode).strip())
 
+
+class TestFormatAge(unittest.TestCase):
+    def test_seconds_minutes_hours_and_days(self):
+        cases = {0: "0s", 59: "59s", 60: "1m", 3599: "59m", 3600: "1h", 86399: "23h", 86400: "1d"}
+        for seconds, expected in cases.items():
+            with self.subTest(seconds=seconds):
+                self.assertEqual(
+                    render.format_age(seconds, render.PresentationMode.COMPACT), expected
+                )
+
+    def test_rounding_is_down_so_freshness_is_never_overstated(self):
+        self.assertEqual(render.format_age(119, render.PresentationMode.COMPACT), "1m")
+        self.assertEqual(render.format_age(7199, render.PresentationMode.COMPACT), "1h")
+
+    def test_a_negative_reading_is_clamped(self):
+        self.assertEqual(render.format_age(-10, render.PresentationMode.COMPACT), "0s")
+
+    def test_non_compact_modes_say_ago_so_it_is_not_read_as_a_budget(self):
+        for mode in (render.PresentationMode.BALANCED, render.PresentationMode.PLAIN):
+            with self.subTest(mode=mode):
+                self.assertEqual(render.format_age(60, mode), "1m ago")
+
+    def test_the_rendering_is_ascii_in_every_mode(self):
+        for mode in MODES:
+            self.assertTrue(render.format_age(90061, mode).isascii())
+
 if __name__ == "__main__":
     unittest.main()
