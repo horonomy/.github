@@ -73,5 +73,18 @@ class AvailabilityTest(unittest.TestCase):
         )
 
 
+class SegmentStateTest(unittest.TestCase):
+    def test_neutral_and_unknown_make_no_health_claim(self) -> None:
+        silent = {s for s in sc.SegmentState if not s.makes_a_health_claim}
+        self.assertEqual(silent, {sc.SegmentState.NEUTRAL, sc.SegmentState.UNKNOWN})
+
+    def test_unknown_is_not_ok(self) -> None:
+        self.assertIsNot(sc.SegmentState.UNKNOWN, sc.SegmentState.OK)
+
+    def test_states_are_distinct(self) -> None:
+        values = [s.value for s in sc.SegmentState]
+        self.assertEqual(len(values), len(set(values)))
+
+
 if __name__ == "__main__":
     unittest.main()
