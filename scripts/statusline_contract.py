@@ -798,9 +798,15 @@ class ProviderStatus:
 
         Nor may it report a confidence. A confidence is a claim about a result
         the provider computed, so `unavailable` carrying `high` is incoherent in
-        the most misleading direction available. `age_seconds` is deliberately
-        still allowed: "last read two hours ago, unavailable now" is a true and
-        useful thing to say.
+        the most misleading direction available. Nor a `duration_seconds`: a
+        remaining-work estimate is a reading about live work, and `remaining P90
+        5d4h` beside an unreachable daemon is the same false-currency claim a
+        count would be.
+
+        `age_seconds` is deliberately still allowed, and it is the one field that
+        should be: "last read two hours ago, unavailable now" is a true and
+        useful thing to say, and it is how a reader tells a provider that just
+        went down from one that was never up.
         """
         if self.availability.has_live_readings:
             return
@@ -821,6 +827,12 @@ class ProviderStatus:
                     f"availability {self.availability.value!r} cannot carry a "
                     "confidence; a provider that could not read its state has "
                     "no result to be confident about"
+                )
+            if segment.duration_seconds is not None:
+                raise ContractViolation(
+                    f"availability {self.availability.value!r} cannot carry a "
+                    "duration; an estimate about work in progress cannot be "
+                    "current when the state behind it could not be read"
                 )
 
     def to_wire(self) -> dict:
