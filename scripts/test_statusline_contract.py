@@ -86,5 +86,36 @@ class SegmentStateTest(unittest.TestCase):
         self.assertEqual(len(values), len(set(values)))
 
 
+class ConfidenceTest(unittest.TestCase):
+    def test_confidence_is_ordered_low_to_high(self) -> None:
+        ranks = [sc.Confidence.LOW.rank, sc.Confidence.MEDIUM.rank, sc.Confidence.HIGH.rank]
+        self.assertEqual(ranks, sorted(ranks))
+        self.assertEqual(len(set(ranks)), 3)
+
+    def test_every_confidence_has_a_rank(self) -> None:
+        for c in sc.Confidence:
+            with self.subTest(confidence=c):
+                self.assertIsInstance(c.rank, int)
+
+    def test_every_subject_has_a_disambiguating_noun(self) -> None:
+        for subject in sc.ConfidenceSubject:
+            with self.subTest(subject=subject):
+                self.assertIn("confidence", subject.label)
+
+    def test_preflight_subject_never_reads_as_risk_or_severity(self) -> None:
+        label = sc.ConfidenceSubject.PREFLIGHT_ESTIMATE.label
+        self.assertEqual(label, "preflight confidence")
+        for forbidden in ("risk", "severity", "priority", "impact"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, label)
+
+    def test_subject_labels_are_not_opaque_abbreviations(self) -> None:
+        # HORO-1569: `pf:high` was unreadable. Every label must be a word.
+        for subject in sc.ConfidenceSubject:
+            with self.subTest(subject=subject):
+                self.assertGreater(len(subject.label), 4)
+                self.assertNotIn(":", subject.label)
+
+
 if __name__ == "__main__":
     unittest.main()
