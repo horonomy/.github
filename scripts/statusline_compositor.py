@@ -219,6 +219,40 @@ def _parse_provider(payload: object) -> ProviderEntry | None:
     )
 
 
+def _parse_upstream_command(upstream: object) -> str | None:
+    """The user's original command string, or `None` if there was not one.
+
+    Absent and present-but-null are both ordinary: a user who had no statusline
+    before enabling a provider is a supported state, not a degraded one. A
+    present-but-blank command is refused instead, because that is our own writer
+    having recorded something it could not have meant.
+    """
+    if upstream is None:
+        return None
+    if not isinstance(upstream, dict):
+        raise RegistryError("upstream must be an object or absent")
+    command = upstream.get("command")
+    if command is not None and (not isinstance(command, str) or not command.strip()):
+        raise RegistryError("upstream.command must be a non-empty string or absent")
+    return command
+
+
+def _parse_presentation(presentation: object) -> tuple[object, int | None]:
+    """The raw mode preference and the validated width budget.
+
+    Returns the mode unvalidated on purpose — `parse_registry` hands it to a
+    parser that falls back rather than refuses, for the reason given there. The
+    width is validated here because a nonsensical budget is not a cosmetic
+    problem: it decides how much gets dropped from the line.
+    """
+    if not isinstance(presentation, dict):
+        raise RegistryError("presentation must be an object")
+    width = presentation.get("width_budget")
+    if width is not None and (isinstance(width, bool) or not isinstance(width, int) or width < 1):
+        raise RegistryError("presentation.width_budget must be a positive integer or absent")
+    return presentation.get("mode"), width
+
+
 def parse_registry(payload: object) -> Registry:
     """Validate the registry document, refusing anything unfamiliar.
 
@@ -245,15 +279,7 @@ def parse_registry(payload: object) -> Registry:
             f"(supported: {sorted(SUPPORTED_REGISTRY_VERSIONS)})"
         )
 
-    upstream = payload.get("upstream")
-    upstream_command: str | None = None
-    if upstream is not None:
-        if not isinstance(upstream, dict):
-            raise RegistryError("upstream must be an object or absent")
-        command = upstream.get("command")
-        if command is not None and (not isinstance(command, str) or not command.strip()):
-            raise RegistryError("upstream.command must be a non-empty string or absent")
-        upstream_command = command
+    upstream_command = _parse_upstream_command(payload.get("upstream"))
 
     entries = payload.get("providers", [])
     if not isinstance(entries, list):
@@ -265,12 +291,7 @@ def parse_registry(payload: object) -> Registry:
     if len(identifiers) != len(set(identifiers)):
         raise RegistryError("provider ids must be unique in the registry")
 
-    presentation = payload.get("presentation", {})
-    if not isinstance(presentation, dict):
-        raise RegistryError("presentation must be an object")
-    width = presentation.get("width_budget")
-    if width is not None and (isinstance(width, bool) or not isinstance(width, int) or width < 1):
-        raise RegistryError("presentation.width_budget must be a positive integer or absent")
+    presentation, width = _parse_presentation(payload.get("presentation", {}))
 
     return Registry(
         upstream_command=upstream_command,
@@ -282,7 +303,7 @@ def parse_registry(payload: object) -> Registry:
         # refusing: it decides how the line looks, not what we execute, and
         # losing the whole statusline over a typo in a cosmetic preference is a
         # worse outcome than rendering it in the default style.
-        mode=render.PresentationMode.parse(presentation.get("mode")),
+        mode=render.PresentationMode.parse(presentation),
         width_budget=width,
         deadline_ms=_bounded_ms(payload, "deadline_ms", DEFAULT_DEADLINE_MS, MAX_DEADLINE_MS),
     )
