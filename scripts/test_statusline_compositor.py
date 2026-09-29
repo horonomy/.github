@@ -874,5 +874,110 @@ class TestCollect(FixtureCase):
         self.assertEqual(compositor.collect(self.registry([]), b"{}", self.home)[0], "")
 
 
+class TestUpstreamIsNeverOurs(FixtureCase):
+    """The user's statusline survives everything we can do to ourselves."""
+
+    def test_a_command_with_spaces_and_quoting_runs_as_configured(self):
+        directory = self.home / "my scripts"
+        directory.mkdir()
+        path = directory / "status line.sh"
+        path.write_text('#!/bin/sh\nprintf \'%s|%s\' "$1" "$2"\n')
+        path.chmod(0o755)
+        command = f"'{path}' 'a b' \"c d\""
+        self.assertEqual(compositor.run_upstream(command, b"", GENEROUS_MS), "a b|c d")
+
+    def test_a_pipeline_is_preserved_because_a_shell_runs_it(self):
+        # Splitting the command into an argv would mean parsing it, which is the
+        # one thing this module must never do to the user's command.
+        self.assertEqual(
+            compositor.run_upstream("printf 'a b' | tr ' ' '-'", b"", GENEROUS_MS), "a-b"
+        )
+
+    def test_stdin_is_forwarded_byte_for_byte(self):
+        sink = self.home / "seen.bin"
+        path = self.script("capture2", f"cat > {sink}\n")
+        payload = b'{"workspace": {"current_dir": "/x"}}\n\xc3\xa9\x00'
+        compositor.run_upstream(f"'{path}'", payload, GENEROUS_MS)
+        self.assertEqual(sink.read_bytes(), payload)
+
+    def test_output_is_returned_verbatim_apart_from_the_trailing_newline(self):
+        # Leading and internal whitespace is theirs, including the indentation a
+        # padded statusline relies on.
+        path = self.script("padded", "printf '  a  b \\n'\n")
+        self.assertEqual(compositor.run_upstream(f"'{path}'", b"", GENEROUS_MS), "  a  b ")
+
+    def test_a_non_zero_exit_does_not_discard_their_line(self):
+        # A script that prints its line and then exits non-zero still printed
+        # their line; deciding it is invalid on their behalf is not ours to do.
+        path = self.script("grumpy", "printf 'their line'\nexit 1\n")
+        self.assertEqual(compositor.run_upstream(f"'{path}'", b"", GENEROUS_MS), "their line")
+
+    def test_a_missing_command_returns_empty_rather_than_raising(self):
+        self.assertEqual(compositor.run_upstream("/no/such/statusline --flag", b"", GENEROUS_MS), "")
+
+    def test_a_hanging_command_is_bounded(self):
+        path = self.script("hangup", f"sleep {LEAK_SLEEP}\n", warm=False)
+        started = time.monotonic()
+        compositor.run_upstream(f"'{path}'", b"", IMPATIENT_MS)
+        self.assertLess(time.monotonic() - started, 3.0)
+
+    def test_output_already_produced_survives_a_timeout(self):
+        path = self.hanging_script("partial", f"printf 'got this far'\nsleep {LEAK_SLEEP}\n")
+        self.assertEqual(compositor.run_upstream(f"'{path}'", b"", IMPATIENT_MS), "got this far")
+
+    def test_their_line_is_a_verbatim_prefix_when_every_provider_fails(self):
+        upstream = self.script("theirs", "printf '~/proj  main*  $0.42'\n")
+        hanging = self.script("hanging4", f"sleep {LEAK_SLEEP}\n", warm=False)
+        broken = self.script("broken", "printf 'not json'\n")
+        self.write_registry(
+            upstream={"command": f"'{upstream}'"},
+            providers=[
+                provider_document("fornax", [hanging], timeout_ms=200),
+                provider_document("circinus", [broken]),
+                provider_document("libra-governor", ["/no/such/binary"]),
+            ],
+            deadline_ms=1000,
+        )
+        code, out = self.run_main()
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith("~/proj  main*  $0.42"), out)
+
+    def test_their_line_survives_a_provider_that_floods_stdout(self):
+        upstream = self.script("theirs2", "printf 'THEIRS'\n")
+        flood = self.script(
+            "flood2",
+            f"head -c {compositor.MAX_PROVIDER_OUTPUT_BYTES * 2} /dev/zero | tr '\\0' 'a'\n",
+        )
+        self.write_registry(
+            upstream={"command": f"'{upstream}'"},
+            providers=[provider_document("fornax", [flood])],
+        )
+        self.assertTrue(self.run_main()[1].startswith("THEIRS"))
+
+    def test_their_line_survives_a_defect_in_our_own_rendering(self):
+        # The one broad catch in the module. They lose our block, which is ours
+        # to lose, and keep their line, which is not.
+        upstream = self.script("theirs5", "printf 'THEIRS'\n")
+        self.write_registry(upstream={"command": f"'{upstream}'"})
+        with unittest.mock.patch.object(
+            render, "compose", side_effect=RuntimeError("a bug of ours")
+        ):
+            code, out = self.run_main()
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "THEIRS\n")
+
+    def test_we_never_run_a_command_that_names_this_script(self):
+        self.write_registry(upstream={"command": compositor.__file__})
+        code, out = self.run_main()
+        self.assertEqual(code, 0)
+        self.assertNotIn("Traceback", out)
+
+    def test_our_own_broken_state_does_not_execute_anything(self):
+        (self.home / compositor.REGISTRY_FILENAME).write_text("{ not json")
+        code, out = self.run_main()
+        self.assertEqual(code, 0)
+        self.assertIn("registry unreadable", out)
+
+
 if __name__ == "__main__":
     unittest.main()
