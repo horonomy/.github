@@ -690,5 +690,22 @@ class TestRenderSegment(unittest.TestCase):
                         text = render.render_segment(seg, mode)
                         self.assertRegex(text, r"[A-Za-z]{3,}")
 
+
+class TestProviderDisplayName(unittest.TestCase):
+    def test_a_simple_id_is_capitalised(self):
+        self.assertEqual(render.provider_display_name("fornax"), "Fornax")
+
+    def test_separators_become_spaces_and_each_word_is_capitalised(self):
+        self.assertEqual(render.provider_display_name("libra-governor"), "Libra Governor")
+        self.assertEqual(render.provider_display_name("a_b_c"), "A B C")
+
+    def test_a_single_character_id_is_handled(self):
+        self.assertEqual(render.provider_display_name("x"), "X")
+
+    def test_an_unknown_provider_is_still_attributed(self):
+        # Derived rather than looked up, so a provider the host has never heard
+        # of does not render anonymously beside the ones it knows.
+        self.assertEqual(render.provider_display_name("future-product"), "Future Product")
+
 if __name__ == "__main__":
     unittest.main()
