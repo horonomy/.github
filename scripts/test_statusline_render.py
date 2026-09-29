@@ -876,5 +876,127 @@ class TestComposeUpstreamPreservation(unittest.TestCase):
                 out = render.compose(UPSTREAM, (fornax_status(),), mode=mode)
                 self.assertTrue(out.startswith(UPSTREAM + render.UPSTREAM_SEPARATORS[mode]))
 
+
+class TestComposeDegradation(unittest.TestCase):
+    ALL = (fornax_status(), circinus_status(), libra_status())
+    HIDDEN = re.compile(r"\[\+(\d+) more\]")
+    MAX_BUDGET = 240
+    _sweep = None
+
+    @classmethod
+    def setUpClass(cls):
+        # Every test here walks the same three-mode budget sweep, so it is
+        # rendered once rather than once per assertion.
+        cls._sweep = []
+        for mode in MODES:
+            separator = render.UPSTREAM_SEPARATORS[mode]
+            for budget in range(0, cls.MAX_BUDGET):
+                out = render.compose(UPSTREAM, cls.ALL, mode=mode, width_budget=budget)
+                tail = out[len(UPSTREAM):]
+                cls._sweep.append((mode, budget, out, tail[len(separator):] if tail else ""))
+
+    def block_of(self, out, mode):
+        tail = out[len(UPSTREAM):]
+        if not tail:
+            return ""
+        separator = render.UPSTREAM_SEPARATORS[mode]
+        self.assertTrue(tail.startswith(separator))
+        return tail[len(separator):]
+
+    def each_budget(self):
+        return iter(self._sweep)
+
+    def test_a_rendered_block_is_always_introduced_by_the_upstream_separator(self):
+        # setUpClass strips the separator by length rather than by match, so this
+        # is what makes the rest of the sweep's `block` values trustworthy.
+        for mode, budget, out, _ in self.each_budget():
+            tail = out[len(UPSTREAM):]
+            if tail:
+                self.assertTrue(
+                    tail.startswith(render.UPSTREAM_SEPARATORS[mode]), f"{mode.value}/{budget}"
+                )
+
+    def test_the_block_never_exceeds_its_budget(self):
+        for mode, budget, _, block in self.each_budget():
+            if render.display_width(block) > budget:
+                self.fail(f"mode={mode.value} budget={budget} width={render.display_width(block)}: {block}")
+
+    def test_the_not_enforced_marker_is_never_rendered_partially(self):
+        # A fragment like `Shadow mode [NOT` is a mangled form of the one marker
+        # that stops a hypothetical reading as an enforced block.
+        for mode, budget, _, block in self.each_budget():
+            if "[NOT" in block:
+                self.assertIn(f"[{render.HYPOTHETICAL_TEXT}]", block, f"{mode.value}/{budget}")
+
+    def test_the_hidden_marker_is_never_rendered_partially(self):
+        for mode, budget, _, block in self.each_budget():
+            if "[+" in block:
+                self.assertRegex(block, self.HIDDEN, f"{mode.value}/{budget}")
+
+    def test_a_hidden_count_is_always_between_one_and_all_but_one(self):
+        total = sum(len(s.segments) for s in self.ALL)
+        for mode, budget, _, block in self.each_budget():
+            match = self.HIDDEN.search(block)
+            if match:
+                self.assertTrue(1 <= int(match.group(1)) < total, f"{mode.value}/{budget}")
+
+    def test_plain_mode_stays_ascii_under_every_budget(self):
+        for mode, budget, _, block in self.each_budget():
+            if mode is render.PresentationMode.PLAIN:
+                self.assertTrue(block.isascii(), f"budget={budget}: {block}")
+
+    def test_a_non_empty_block_always_carries_a_readable_word(self):
+        for mode, budget, _, block in self.each_budget():
+            if block:
+                self.assertRegex(block, r"[A-Za-z]{3,}", f"{mode.value}/{budget}")
+
+    def test_no_grapheme_cluster_is_ever_split(self):
+        every_cluster = set()
+        for status_ in self.ALL:
+            every_cluster.update(render.grapheme_clusters(render.render_provider(status_, render.PresentationMode.BALANCED)))
+        for mode, budget, _, block in self.each_budget():
+            for cluster in render.grapheme_clusters(block):
+                # A split cluster would produce a lone ZWJ, variation selector
+                # or regional indicator that is not a cluster of any input.
+                self.assertNotIn(
+                    cluster, ("‍", "️"), f"{mode.value}/{budget}: {block!r}"
+                )
+
+    def test_a_wide_budget_shows_every_provider_with_nothing_hidden(self):
+        out = render.compose(UPSTREAM, self.ALL, mode=render.PresentationMode.BALANCED, width_budget=400)
+        block = self.block_of(out, render.PresentationMode.BALANCED)
+        for name in ("Fornax", "Circinus", "Libra Governor"):
+            self.assertIn(name, block)
+        self.assertNotRegex(block, self.HIDDEN)
+
+    def test_the_critical_state_is_the_last_thing_standing(self):
+        # At the narrowest rung that still renders anything, what survives is the
+        # worst news, not the first provider in the list. The label is truncated
+        # there, so the claim is about the state and the label's beginning.
+        narrowest = next(
+            block
+            for mode, _, _, block in self.each_budget()
+            if block and mode is render.PresentationMode.BALANCED
+        )
+        self.assertIn(render.STATE_TEXT["critical"], narrowest)
+        self.assertIn("Awa", narrowest)
+        for other in ("Verified", "Shadow mode", "Preflight"):
+            self.assertNotIn(other, narrowest)
+
+    def test_every_rung_that_renders_at_all_renders_the_critical_state(self):
+        # The degradation ladder must not be able to shed the one segment the
+        # user has to act on while keeping a calmer one.
+        for mode, budget, _, block in self.each_budget():
+            if block:
+                self.assertIn(
+                    render.state_marker("critical", mode), block, f"{mode.value}/{budget}"
+                )
+
+    def test_no_budget_means_no_degradation(self):
+        out = render.compose(UPSTREAM, self.ALL, mode=render.PresentationMode.BALANCED)
+        block = self.block_of(out, render.PresentationMode.BALANCED)
+        self.assertNotRegex(block, self.HIDDEN)
+        self.assertIn("Fornax", block)
+
 if __name__ == "__main__":
     unittest.main()
