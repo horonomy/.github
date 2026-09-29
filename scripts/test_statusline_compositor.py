@@ -1084,5 +1084,145 @@ class TestMain(FixtureCase):
         self.assertIn(b"refusing to recurse", result.stderr)
 
 
+class TestNothingLeaksAndNothingLeaksOut(FixtureCase):
+    """Process containment, and output containment."""
+
+    CANARY = "CANARY" + "-" + "S" * 8
+
+    def running(self, marker: str) -> int:
+        """Count live processes whose command line contains the marker.
+
+        Counted from `ps` rather than asked of `pgrep -c`, and with `check=True`,
+        because a count is what these tests treat as evidence of containment. A
+        `pgrep` that rejects its own arguments prints nothing to stdout, which is
+        indistinguishable from finding no process — a leak canary that reports
+        all-clear because it never ran.
+        """
+        listing = subprocess.run(
+            ["ps", "-A", "-o", "command="], capture_output=True, text=True, check=True
+        ).stdout
+        return sum(1 for line in listing.splitlines() if marker in line)
+
+    def forking_fixture(self, name: str) -> tuple[str, str]:
+        """A provider that forks a worker and then hangs; the worker is the canary.
+
+        The worker's own path is the marker, because it is unique to this test
+        run. It sleeps in a loop rather than in a single call so that the shell
+        does not replace itself with `sleep` — that optimisation would leave the
+        surviving process named `sleep`, with the marker nowhere `pgrep -f` can
+        see it, and the canary would report no leak however badly we leaked.
+        """
+        worker = self.hanging_script(
+            f"{name}-worker", f"n=0\nwhile [ $n -lt {LEAK_SLEEP} ]; do sleep 1; n=$((n+1)); done\n"
+        )
+        parent = self.hanging_script(name, f"'{worker}' &\nsleep {LEAK_SLEEP}\n")
+        self.addCleanup(subprocess.run, ["pkill", "-f", worker], capture_output=True)
+        return parent, worker
+
+    def test_a_timed_out_provider_leaves_no_process_behind(self):
+        # This command re-runs every few seconds for the life of a session, so a
+        # worker orphaned per refresh accumulates into a real process count.
+        parent, worker = self.forking_fixture("orphan-probe")
+        self.assertEqual(self.running(worker), 0)
+        compositor.run_provider(self.entry("fornax", parent), IMPATIENT_MS, self.home)
+        time.sleep(0.5)
+        self.assertEqual(self.running(worker), 0)
+
+    def test_a_timed_out_upstream_leaves_no_process_behind(self):
+        parent, worker = self.forking_fixture("orphan-upstream")
+        compositor.run_upstream(f"'{parent}'", b"", IMPATIENT_MS)
+        time.sleep(0.5)
+        self.assertEqual(self.running(worker), 0)
+
+    def test_a_forked_worker_would_survive_if_only_the_child_were_killed(self):
+        # Guards the guard: the two tests above only mean something if this
+        # fixture does in fact leave a process behind when the process group is
+        # not killed, which is what `subprocess.run(timeout=)` would do.
+        parent, worker = self.forking_fixture("orphan-control")
+        with self.assertRaises(subprocess.TimeoutExpired):
+            subprocess.run([parent], capture_output=True, timeout=IMPATIENT_MS / 1000)
+        time.sleep(0.5)
+        self.assertGreaterEqual(self.running(worker), 1)
+
+    def test_a_hanging_provider_cannot_stall_the_render_by_holding_our_pipe(self):
+        # An orphan holding the write end of our stdout pipe can delay EOF for
+        # as long as it likes; the wait after the kill is bounded for that.
+        parent, _ = self.forking_fixture("pipe-holder")
+        started = time.monotonic()
+        compositor.run_provider(self.entry("fornax", parent), IMPATIENT_MS, self.home)
+        self.assertLess(time.monotonic() - started, 3.0)
+
+    def test_a_secret_shaped_field_never_reaches_the_line(self):
+        path = self.answering(
+            "leaky",
+            wire(
+                segments=[
+                    {
+                        "key": "latest_verdict",
+                        "state": "ok",
+                        "label": "Verified",
+                        "api_key": self.CANARY,
+                        "token": self.CANARY,
+                        "prompt": self.CANARY,
+                    }
+                ]
+            ),
+        )
+        self.write_registry(providers=[provider_document("fornax", [path])])
+        out = self.run_main()[1]
+        self.assertNotIn(self.CANARY, out)
+        self.assertIn("Verified", out, "the decoys were dropped but so was the real answer")
+
+    def test_a_secret_shaped_label_is_refused_outright(self):
+        path = self.answering(
+            "leaky2",
+            wire(
+                segments=[
+                    {
+                        "key": "latest_verdict",
+                        "state": "ok",
+                        "label": f"token=sk-live-{self.CANARY}",
+                    }
+                ]
+            ),
+        )
+        self.write_registry(providers=[provider_document("fornax", [path])])
+        out = self.run_main()[1]
+        self.assertNotIn(self.CANARY, out)
+        self.assertIn("invalid status", out)
+
+    def test_our_own_state_paths_do_not_reach_the_line(self):
+        path = self.home / compositor.REGISTRY_FILENAME
+        for label, content in (
+            ("malformed", "{ nope"),
+            ("unsupported version", '{"registry_version": 99}'),
+            ("invalid provider id", '{"registry_version": 1, "providers": [{"provider": "N O"}]}'),
+        ):
+            with self.subTest(label=label):
+                path.write_text(content)
+                self.assertNotIn(str(self.home), self.run_main()[1])
+
+    def test_the_detailed_diagnostic_goes_to_the_other_stream(self):
+        # The detail names our state path, which is useful to whoever is
+        # debugging and has no business on the user's statusline.
+        (self.home / compositor.REGISTRY_FILENAME).write_text("{ nope")
+        out = self.run_main()[1]
+        self.assertIn(str(self.home), self.diagnostics)
+        self.assertNotIn(str(self.home), out)
+
+    def test_an_unreadable_registry_path_does_not_reach_the_line(self):
+        path = self.home / compositor.REGISTRY_FILENAME
+        path.mkdir()
+        self.addCleanup(path.rmdir)
+        self.assertNotIn(str(self.home), self.run_main()[1])
+
+    def test_the_canary_would_be_visible_if_it_were_rendered(self):
+        # Guards the guard: the assertions above only mean something if a value
+        # of this shape would in fact show up in the output.
+        upstream = self.script("shouting", f"printf '{self.CANARY}'\n")
+        self.write_registry(upstream={"command": f"'{upstream}'"})
+        self.assertIn(self.CANARY, self.run_main()[1])
+
+
 if __name__ == "__main__":
     unittest.main()
