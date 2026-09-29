@@ -527,5 +527,24 @@ class TestFormatConfidence(unittest.TestCase):
         self.assertEqual(set(render.CONFIDENCE_SUBJECT_TEXT), subjects)
         self.assertEqual(set(render.CONFIDENCE_SUBJECT_TEXT_COMPACT), subjects)
 
+
+class TestFormatReason(unittest.TestCase):
+    def test_prose_is_preferred_over_the_machine_token(self):
+        self.assertEqual(
+            render.format_reason("daemon_not_running", "Daemon is not running"),
+            "Daemon is not running",
+        )
+
+    def test_a_machine_token_is_made_readable(self):
+        self.assertEqual(render.format_reason("daemon_not_running", None), "daemon not running")
+        self.assertEqual(render.format_reason("no-receipt-store", None), "no receipt store")
+
+    def test_no_reason_yields_nothing_rather_than_an_invented_one(self):
+        # "unknown reason" and "no reason clause" are different claims, and only
+        # the provider can tell them apart.
+        for code, label in ((None, None), ("", ""), ("", None), (None, "")):
+            with self.subTest(code=code, label=label):
+                self.assertEqual(render.format_reason(code, label), "")
+
 if __name__ == "__main__":
     unittest.main()
