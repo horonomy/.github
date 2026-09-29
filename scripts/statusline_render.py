@@ -423,3 +423,39 @@ def _enum_value(value: object) -> str | None:
     if value is None:
         return None
     return getattr(value, "value", value)
+
+
+def render_segment(segment: object, mode: PresentationMode) -> str:
+    """Render one provider segment as a single readable phrase.
+
+    Takes a `statusline_contract.Segment` (or anything with the same
+    attributes), so the renderer stays usable against a hand-built stub in
+    tests. Every value it reads has already passed the contract's privacy
+    allowlist; this function adds no field of its own, so it cannot widen that
+    surface.
+
+    Clause order is fixed and deliberate: the hypothetical marker sits
+    immediately after the label, ahead of every optional detail, so no
+    degradation step can separate "would block" from "not enforced".
+    """
+    state = _enum_value(segment.state)
+    parts = [f"{state_marker(state, mode)} {segment.label}".strip()]
+
+    if getattr(segment, "hypothetical", False):
+        parts.append(HYPOTHETICAL_TEXT)
+    if segment.count is not None and segment.count_label:
+        parts.append(format_count(segment.count, segment.total, segment.count_label, mode))
+    confidence = _enum_value(segment.confidence)
+    if confidence is not None:
+        parts.append(format_confidence(confidence, _enum_value(segment.confidence_of), mode))
+
+    reason = format_reason(segment.reason_code, segment.reason_label)
+    # COMPACT spends its remaining columns on exceptions only: a reason for an
+    # `ok` segment is the least useful thing on the line, and a reason for a
+    # `critical` one is the most.
+    if reason and (mode is not PresentationMode.COMPACT or state in EMPHATIC_STATES):
+        parts.append(reason)
+    if segment.age_seconds is not None:
+        parts.append(format_age(segment.age_seconds, mode))
+
+    return DETAIL_SEPARATORS[mode].join(parts)
