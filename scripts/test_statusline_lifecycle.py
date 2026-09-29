@@ -911,6 +911,7 @@ class MalformedConfigTest(LifecycleCase):
         )
 
 
+
 class ConcurrentChangeTest(LifecycleCase):
     def test_a_settings_edit_between_plan_and_apply_aborts_the_write(self) -> None:
         plan = self.plan_enable("fornax")

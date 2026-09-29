@@ -562,7 +562,17 @@ def read_registry_at(target: pathlib.Path) -> RegistryDocument:
     except FileNotFoundError:
         return RegistryDocument(path=target, raw=b"", present=False, data=None, problem=None)
     except OSError as exc:
-        raise LifecycleError(f"registry at {target} could not be read (errno {exc.errno})") from exc
+        # Present but unusable, not an exception: `doctor` exists to be run when
+        # the host is broken, and the refusal paths already treat an unusable
+        # registry as a reason to stop. Raising here made the one read-only
+        # command in this module end in a traceback instead of an answer.
+        return RegistryDocument(
+            path=target,
+            raw=b"",
+            present=True,
+            data=None,
+            problem=f"could not be read (errno {exc.errno})",
+        )
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
