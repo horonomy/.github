@@ -630,3 +630,48 @@ def _without_dropped(statuses: tuple, dropped: set) -> tuple:
         if kept:
             rebuilt.append(dataclasses.replace(status, segments=kept))
     return tuple(rebuilt)
+
+
+def _fit_by_dropping(statuses: tuple, mode: PresentationMode, budget: int) -> str | None:
+    """Shed the least important segments until the block fits.
+
+    Works one segment at a time rather than one provider at a time, so a
+    provider with a `critical` segment and a chatty `ok` one keeps the part that
+    matters and keeps its attribution. Dropping whole providers first would spend
+    the remaining columns on nothing.
+
+    Order: lowest segment severity first, and among equals the one furthest
+    right — which is the one the contract's own ordering already judged least
+    important. Never drops below one segment, because a block consisting only of
+    `[+3 more]` says there is news without saying any of it.
+
+    Returns `None` when even a single segment will not fit, so the caller can
+    move to the next rung. It deliberately does *not* truncate: a rendered
+    segment is shown whole or not at all. Cutting one mid-way produces fragments
+    like `Shadow mode [NOT` — a mangled form of the marker whose entire job is
+    to stop a hypothetical from reading as an enforced block.
+    """
+    pairs = [
+        (p_index, s_index, segment)
+        for p_index, status in enumerate(statuses)
+        for s_index, segment in enumerate(getattr(status, "segments", ()) or ())
+    ]
+    total = len(pairs)
+    order = sorted(
+        pairs,
+        key=lambda item: (
+            STATE_SEVERITY.get(_enum_value(item[2].state), STATE_SEVERITY[UNKNOWN_STATE]),
+            -item[0],
+            -item[1],
+        ),
+    )
+    dropped: set = set()
+    for p_index, s_index, _ in order:
+        if total - len(dropped) <= 1:
+            break
+        dropped.add((p_index, s_index))
+        remaining = _without_dropped(statuses, dropped)
+        text = _render_groups(remaining, mode, hidden=len(dropped))
+        if display_width(text) <= budget:
+            return text
+    return None
