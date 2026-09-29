@@ -560,5 +560,47 @@ class TestBoundedExecution(FixtureCase):
             compositor._run_bounded(("/no/such/binary",), b"", GENEROUS_MS, shell=False)
 
 
+class TestHostSynthesisedStatuses(unittest.TestCase):
+    def entry(self, scope=contract.Scope.HOST):
+        return compositor.ProviderEntry(
+            provider="fornax", argv=("/bin/true",), scope=scope, timeout_ms=250
+        )
+
+    def test_a_synthesised_status_carries_the_declared_scope(self):
+        status = compositor._host_not_available(
+            self.entry(), contract.Availability.ERROR, "probe_failed", "Could not be started"
+        )
+        self.assertIs(status.scope, contract.Scope.HOST)
+
+    def test_the_version_is_literally_unknown_rather_than_invented(self):
+        # A provider that failed to answer did not tell us its version, and
+        # inventing one would be a claim about which build is installed.
+        status = compositor._host_not_available(
+            self.entry(), contract.Availability.ERROR, "probe_failed", "Could not be started"
+        )
+        self.assertEqual(status.provider_version, "unknown")
+
+    def test_a_synthesised_status_never_claims_to_be_available(self):
+        for availability in contract.Availability:
+            with self.subTest(availability=availability):
+                if availability.has_live_readings:
+                    with self.assertRaises(contract.ContractViolation):
+                        compositor._host_not_available(
+                            self.entry(), availability, "probe_failed", "Broke"
+                        )
+                else:
+                    status = compositor._host_not_available(
+                        self.entry(), availability, "probe_failed", "Broke"
+                    )
+                    self.assertFalse(status.availability.has_live_readings)
+
+    def test_a_synthesised_status_renders_as_something_the_user_can_read(self):
+        status = compositor._host_not_available(
+            self.entry(), contract.Availability.ERROR, "probe_timeout", "Did not answer in time"
+        )
+        rendered = render.render_provider(status, render.PresentationMode.BALANCED)
+        self.assertIn("Did not answer in time", rendered)
+
+
 if __name__ == "__main__":
     unittest.main()
