@@ -156,6 +156,7 @@ class Ownership(enum.Enum):
     USER_OWNED = "user_owned"
     HORONOM_OWNED = "horonom_owned"
     ADOPTABLE = "horonom_command_unmarked"
+    DRIFTED = "horonom_marker_without_command"
     UNSUPPORTED_SHAPE = "unsupported_shape"
 
 
