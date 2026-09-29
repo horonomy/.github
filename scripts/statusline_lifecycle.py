@@ -753,6 +753,49 @@ def _preservation_changes(
     return changes
 
 
+def _taking_the_slot(
+    document: SettingsDocument, ownership: Ownership, registry: RegistryDocument
+) -> tuple[dict, str | None, object, list[Change]]:
+    """The slot as it will look once it is ours, and what we remember of what was there.
+
+    Returns the `statusLine` object to write (minus the command and marker the
+    caller stamps on), the command to record as upstream, whether this install
+    is what created the slot, and the disclosure for what changed. Separated
+    from planning because remembering the *right* original is the one decision
+    here that a later `uninstall` depends on being correct.
+    """
+    before = document.status_line if isinstance(document.status_line, dict) else None
+    changes: list[Change] = []
+    if before is None:
+        return (
+            {"type": SUPPORTED_STATUS_LINE_TYPE},
+            None,
+            True,
+            [Change(ChangeKind.ADD, STATUS_LINE_KEY, "created; no statusline was configured")],
+        )
+
+    if ownership is Ownership.USER_OWNED:
+        changes.append(
+            Change(
+                ChangeKind.UPDATE,
+                f"{STATUS_LINE_KEY}.command",
+                "routed through the compositor; the existing command is registered as the "
+                "upstream provider, run first, and its output kept at the front of the line",
+            )
+        )
+        return dict(before), before["command"], False, changes
+
+    # Only a proven prior install may hand down a recorded original. An adopted
+    # configuration's registry might name a command that stopped being the
+    # user's statusline long ago, and restoring that later would write a stale
+    # command into their config -- which is the very thing this lifecycle exists
+    # to prevent.
+    proven = ownership is Ownership.HORONOM_OWNED and registry.usable
+    upstream = _upstream_of(registry) if proven else None
+    created = _lifecycle_of(registry).get("created_status_line") if proven else None
+    return dict(before), upstream, created, changes
+
+
 def plan_enable(
     document: SettingsDocument,
     registry: RegistryDocument,
@@ -781,38 +824,7 @@ def plan_enable(
             remediation=remediation,
         )
 
-    before = document.status_line if isinstance(document.status_line, dict) else None
-    changes: list[Change] = []
-    if before is None:
-        status_line = {"type": SUPPORTED_STATUS_LINE_TYPE}
-        upstream: str | None = None
-        created: object = True
-        changes.append(
-            Change(ChangeKind.ADD, STATUS_LINE_KEY, "created; no statusline was configured")
-        )
-    else:
-        status_line = dict(before)
-        # Only a proven prior install may hand down a recorded original. An
-        # adopted configuration's registry might name a command that stopped
-        # being the user's statusline long ago, and restoring that later would
-        # write a stale command into their config -- which is the very thing
-        # this lifecycle exists to prevent.
-        proven = ownership is Ownership.HORONOM_OWNED and registry.usable
-        if ownership is Ownership.USER_OWNED:
-            upstream = before["command"]
-            created = False
-            changes.append(
-                Change(
-                    ChangeKind.UPDATE,
-                    f"{STATUS_LINE_KEY}.command",
-                    "routed through the compositor; the existing command is registered as the "
-                    "upstream provider, run first, and its output kept at the front of the line",
-                )
-            )
-        else:
-            upstream = _upstream_of(registry) if proven else None
-            created = _lifecycle_of(registry).get("created_status_line") if proven else None
-
+    status_line, upstream, created, changes = _taking_the_slot(document, ownership, registry)
     status_line["command"] = compositor_command()
     status_line[MARKER_KEY] = {"owner": MARKER_OWNER, "version": MARKER_VERSION}
     settings_after = dict(document.data)
