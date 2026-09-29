@@ -1063,6 +1063,19 @@ class TestMain(FixtureCase):
         out = self.run_main()[1].rstrip("\n")
         self.assertLessEqual(render.display_width(out), 30)
 
+    def test_repeated_renders_produce_the_same_line(self):
+        # This command runs every few seconds for the life of a session, so a
+        # render that is not a pure function of the state it read would make the
+        # line flicker between two truths without either of them changing.
+        good = self.answering("good8", wire())
+        upstream = self.script("theirs4", "printf 'A'\n")
+        self.write_registry(
+            upstream={"command": f"'{upstream}'"},
+            providers=[provider_document("fornax", [good])],
+        )
+        first = self.run_main()[1]
+        self.assertEqual(self.run_main()[1], first)
+
     def test_the_recursion_guard_holds_in_a_real_child_process(self):
         # The in-process test covers the marker; this one proves a real child
         # inherits it, which is the case the guard exists for.
