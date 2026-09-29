@@ -1051,6 +1051,24 @@ class AtomicWriteTest(LifecycleCase):
         self.assertEqual(self.settings.read_bytes(), before)
         self.assertEqual(sorted(path.name for path in self.settings.parent.iterdir()), ["settings.json"])
 
+    def test_a_symlink_at_the_temporary_path_is_never_written_through(self) -> None:
+        """The temporary name is predictable, and what it carries is credentials.
+
+        `~/.claude` is user-owned, so this is a same-user attack -- but the
+        payload is the settings document, `env` and all, and a plain `O_CREAT`
+        would have written it wherever the link pointed. Asserting on the decoy's
+        contents rather than on an exception, because the safe outcome here is a
+        write that simply succeeds somewhere else.
+        """
+        decoy = self.root / "decoy"
+        decoy.write_text("untouched\n")
+        self.settings.with_name(f"{self.settings.name}.tmp.{os.getpid()}").symlink_to(decoy)
+
+        lifecycle.atomic_write(self.settings, b'{"ok": true}\n', mode=0o600)
+
+        self.assertEqual(decoy.read_text(), "untouched\n")
+        self.assertEqual(self.settings.read_text(), '{"ok": true}\n')
+
     def test_a_directory_that_cannot_be_created_is_a_refusal_not_a_traceback(self) -> None:
         # The state directory's parent is a file here, so `mkdir` fails. A raw
         # OSError escaping would be reported to the user as a crash rather than as
