@@ -267,5 +267,22 @@ def parse_registry(payload: object) -> Registry:
     )
 
 
+def load_registry(path: pathlib.Path | None = None) -> Registry:
+    """Read and validate the registry from disk."""
+    target = path or registry_path()
+    try:
+        raw = target.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise RegistryError(f"no registry at {target}") from exc
+    except OSError as exc:
+        # Deliberately reports the errno class and not the message, which on
+        # some platforms carries the full path of every parent directory.
+        raise RegistryError(f"registry at {target} could not be read ({exc.errno})") from exc
+    try:
+        return parse_registry(json.loads(raw))
+    except json.JSONDecodeError as exc:
+        raise RegistryError(f"registry at {target} is not valid JSON (line {exc.lineno})") from exc
+
+
 if __name__ == "__main__":
     sys.exit(main())
