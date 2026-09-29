@@ -860,3 +860,47 @@ def serialize(data: dict, *, indent: int | str = DEFAULT_INDENT, trailing_newlin
     """
     text = json.dumps(data, indent=indent, ensure_ascii=False)
     return (text + "\n" if trailing_newline else text).encode("utf-8")
+
+
+def atomic_write(path: pathlib.Path, payload: bytes, *, mode: int) -> None:
+    """Replace a file's contents such that an interruption leaves it intact.
+
+    Write to a sibling temporary file, flush it all the way to the platter, then
+    rename over the target: a reader at any instant sees either the old file or
+    the new one, never a half-written one. The `fsync` before the rename is the
+    part that is easy to leave out and impossible to notice missing, because
+    without it the rename can reach disk before the data it renames and a crash
+    leaves a correctly-named empty file.
+
+    The directory itself is synced afterwards so the rename survives the same
+    crash it was there to protect against.
+
+    `mode` is applied explicitly rather than left to the `open` call because the
+    umask would silently narrow or widen it, and this function is used to
+    preserve the permissions a file already had.
+    """
+    try:
+        path.parent.mkdir(mode=STATE_DIR_MODE, parents=True, exist_ok=True)
+    except OSError as exc:
+        raise LifecycleError(
+            f"the directory for {path} could not be prepared (errno {exc.errno}); "
+            "nothing was changed"
+        ) from exc
+    temporary = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            temporary.unlink()
+        raise LifecycleError(f"writing {path} failed (errno {exc.errno}); nothing was changed") from exc
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
