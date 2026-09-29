@@ -457,5 +457,43 @@ def read_cache(entry: ProviderEntry, home: pathlib.Path | None = None) -> contra
         return None
 
 
+def write_cache(
+    entry: ProviderEntry, status: contract.ProviderStatus, home: pathlib.Path | None = None
+) -> None:
+    """Persist a fresh answer for up to its own TTL. Best effort, never fatal.
+
+    Written to a temporary file in the same directory and renamed, so a refresh
+    that is interrupted mid-write leaves the previous entry intact rather than a
+    half-written one. The cache is Horonom-owned state, so the directory is
+    0700 and the file 0600: it is not secret by contract, but it is not the
+    user's to have to reason about either.
+    """
+    ttl = min(status.cache_ttl_seconds, contract.MAX_CACHE_TTL_SECONDS)
+    if ttl <= 0:
+        return
+    directory = cache_dir(home)
+    try:
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        payload = {
+            "cache_version": 1,
+            "expires_at": time.time() + ttl,
+            "source": source_fingerprint(entry.argv),
+            "wire": status.to_wire(),
+        }
+        handle, temporary = tempfile.mkstemp(dir=directory, prefix=f".{status.provider}-")
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                json.dump(payload, stream)
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, directory / f"{status.provider}.json")
+        except BaseException:
+            os.unlink(temporary)
+            raise
+    except (OSError, TypeError, ValueError):
+        # A cache is an optimisation. Failing to write one must not change what
+        # the user sees this refresh or any other.
+        return
+
+
 if __name__ == "__main__":
     sys.exit(main())
