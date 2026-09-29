@@ -569,3 +569,77 @@ def read_registry(home: pathlib.Path | None = None) -> RegistryDocument:
     except compositor.RegistryError as exc:
         return RegistryDocument(path=target, raw=raw, present=True, data=parsed, problem=str(exc))
     return RegistryDocument(path=target, raw=raw, present=True, data=parsed, problem=None)
+
+
+def empty_registry() -> dict:
+    """The document a first install starts from.
+
+    Carries no timestamp, and neither does anything else written into the
+    registry. That is what makes repeated enabling idempotent structurally rather
+    than by everyone remembering to compare before writing: the registry is a
+    function of the intended state and nothing else, so an operation that changes
+    nothing produces a byte-identical document. Times are recorded in the
+    receipt, which is only written when something actually changed.
+    """
+    return {"registry_version": compositor.REGISTRY_VERSION, "providers": []}
+
+
+def _upstream_of(registry: RegistryDocument) -> str | None:
+    upstream = (registry.data or {}).get("upstream")
+    return upstream.get("command") if isinstance(upstream, dict) else None
+
+
+def _lifecycle_of(registry: RegistryDocument) -> dict:
+    block = (registry.data or {}).get("lifecycle")
+    return block if isinstance(block, dict) else {}
+
+
+def _provider_ids(registry: RegistryDocument) -> tuple[str, ...]:
+    entries = (registry.data or {}).get("providers", [])
+    if not isinstance(entries, list):
+        return ()
+    return tuple(
+        entry["provider"]
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("provider"), str)
+    )
+
+
+def _registry_with(
+    registry: RegistryDocument,
+    registration: ProviderRegistration,
+    *,
+    upstream: str | None,
+    settings_path: pathlib.Path,
+    created: object,
+) -> dict:
+    """The registry document after this provider is registered.
+
+    An existing entry for the same provider is replaced in place rather than
+    removed and appended, so re-enabling a provider that is already registered
+    does not reorder the document. Ordering does not affect what gets rendered --
+    the contract owns that -- but a write that reorders is still a write, and
+    this one has no reason to be.
+    """
+    base = dict(registry.data) if (registry.usable and registry.data) else empty_registry()
+    base["registry_version"] = compositor.REGISTRY_VERSION
+    entries = [dict(entry) if isinstance(entry, dict) else entry for entry in base.get("providers", [])]
+    replacement = registration.to_entry()
+    for index, existing in enumerate(entries):
+        if isinstance(existing, dict) and existing.get("provider") == registration.provider:
+            entries[index] = replacement
+            break
+    else:
+        entries.append(replacement)
+    base["providers"] = entries
+    if upstream is None:
+        base.pop("upstream", None)
+    else:
+        base["upstream"] = {"command": upstream}
+    base["lifecycle"] = {
+        "settings_path": str(settings_path),
+        "created_status_line": created,
+        "installed_command": compositor_command(),
+        "marker_version": MARKER_VERSION,
+    }
+    return base
