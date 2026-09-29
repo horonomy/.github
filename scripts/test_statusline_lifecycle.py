@@ -18,7 +18,6 @@ that a careless re-serialisation would mangle.
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import io
 import json
 import os
@@ -148,9 +147,6 @@ class LifecycleCase(unittest.TestCase):
             operation="uninstall",
         )
         return lifecycle.apply(plan)
-
-    def fingerprint(self) -> str:
-        return hashlib.sha256(self.settings.read_bytes()).hexdigest()
 
 
 class ParseSettingsTest(unittest.TestCase):
