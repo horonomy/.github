@@ -238,3 +238,16 @@ SCOPE_GLYPHS = {
     "session": "\U0001f4ac",  # SPEECH BALLOON
     "project": "\U0001f4c1",  # FILE FOLDER
 }
+
+# Every glyph above has a text equivalent that carries the same meaning, so a
+# glyph is never the only carrier of meaning. These are deliberately words
+# rather than sigils: a reader who has never seen this statusline before can
+# decode `WARN` and cannot decode `!`.
+STATE_TEXT = {
+    "ok": "OK",
+    "attention": "ATTENTION",
+    "warn": "WARN",
+    "critical": "CRITICAL",
+    "neutral": "NEUTRAL",
+    "unknown": "UNKNOWN",
+}
