@@ -384,3 +384,73 @@ def require_label(value: object, field: str = "label") -> str:
                 "labels are prose, and the host owns iconography and separators"
             )
     return value
+
+
+# Credential prefixes that identify a secret on sight. Not exhaustive by
+# design — the character allowlist above is the structural defence and this
+# is the second layer, aimed at the shapes that would otherwise slip through
+# it because they are pure alphanumerics.
+_SECRET_PREFIXES = (
+    "sk-",
+    "sk_live_",
+    "sk_test_",
+    "rk_live_",
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "github_pat_",
+    "glpat-",
+    "xoxb-",
+    "xoxp-",
+    "xoxa-",
+    "xapp-",
+    "AKIA",
+    "ASIA",
+    "AIza",
+    "ya29.",
+    "dop_v1_",
+    "hf_",
+    "npm_",
+    "eyJ",
+    "-----BEGIN",
+)
+
+# A credential word immediately followed by an assignment or a value.
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(api[_-]?key|apikey|access[_-]?key|secret|token|password|passwd|"
+    r"credential|authorization|bearer|private[_-]?key)\b\s*[:=]?\s*\S",
+)
+
+# A long run from the base64/hex/token alphabet mixing character classes.
+# Human prose does not contain one; an opaque credential almost always does.
+_HIGH_ENTROPY_RE = re.compile(r"[A-Za-z0-9_+/=-]{20,}")
+
+
+def _looks_high_entropy(run: str) -> bool:
+    """Whether a token-alphabet run mixes classes like a credential does."""
+    return (
+        any(c.islower() for c in run)
+        and any(c.isupper() for c in run)
+        and any(c.isdigit() for c in run)
+    )
+
+
+def assert_no_secret_shape(value: str, field: str) -> str:
+    """Raise `PrivacyViolation` if `value` looks like or names a credential.
+
+    Deliberately reports only the field name. The offending value is never
+    included in the message, not even truncated or hashed: an error string
+    ends up in logs and in a `doctor` transcript, which is exactly where a
+    credential fragment must not appear.
+    """
+    for prefix in _SECRET_PREFIXES:
+        if prefix in value:
+            raise PrivacyViolation(f"{field} contains a credential-shaped prefix")
+    if _SECRET_ASSIGNMENT_RE.search(value):
+        raise PrivacyViolation(f"{field} names a credential")
+    for run in _HIGH_ENTROPY_RE.findall(value):
+        if _looks_high_entropy(run):
+            raise PrivacyViolation(f"{field} contains a high-entropy secret-shaped run")
+    return value
