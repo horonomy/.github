@@ -122,15 +122,21 @@ needed a real trigger rather than a plausible-looking one:
   every lifecycle step, because that contract is explicit that a test which
   "reads back clean" but breaks the tool doesn't count.
 
-The suite has been run against 15 deliberately broken variants of the
+The suite has been run against 17 deliberately broken variants of the
 implementation (that contract's mutation table plus whole-document
 replacement, template re-derivation, stale restore over drift, index-based
 removal, a missing read-back, and a diagnostic that prints the configured
-command). All 15 were killed, each by the test that names the property. Two
+command). All 17 were killed, each by the test that names the property. Two
 findings from that run were defects in the *tests*, not the implementation, and
 were fixed: the read-back assertion was passing because a different check in
 the same function raised, and the diagnostic's privacy assertion only ran
 against a slot we already owned.
+
+Two of those behaviours take two variants each rather than one, because taking
+the slot and releasing it build their document at separate sites, and taking it
+from a user differs from taking it from a previous install of ourselves. A guard
+demonstrated on one of those branches is not demonstrated on the other, and the
+count is per site for that reason rather than per rule.
 
 One mutation was withdrawn rather than deleted: a plan that reproduces the
 provider command it is registering survived, and should — see the asymmetry
