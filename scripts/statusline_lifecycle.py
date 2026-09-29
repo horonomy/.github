@@ -1335,7 +1335,7 @@ def doctor(
 
     try:
         document = read_settings(path)
-    except (SettingsParseError, LifecycleError) as exc:
+    except LifecycleError as exc:
         report["settings"] = {"exists": path.exists(), "readable": False, "problem": str(exc)}
         report["slot"] = {"owner": Ownership.UNSUPPORTED_SHAPE.value, "horonom_owned": False}
         report["drift"] = {"detected": True, "reason": str(exc)}
@@ -1501,7 +1501,7 @@ def _run_plan(plan: Plan, options: argparse.Namespace, stream) -> int:
         return _emit(plan, None, options.json, stream)
     try:
         result = apply(plan)
-    except (ConcurrentModificationError, VerificationError, LifecycleError) as exc:
+    except LifecycleError as exc:
         print(f"{plan.operation} failed: {exc}", file=stream)
         return EXIT_FAILED
     return _emit(plan, result, options.json, stream)
@@ -1611,7 +1611,7 @@ def main(argv: list[str] | None = None, stdout: object = None) -> int:
                 scope=options.scope,
                 timeout_ms=options.timeout_ms,
             )
-        except (LifecycleError, contract.ContractViolation, ValueError) as exc:
+        except (LifecycleError, ValueError) as exc:
             print(f"enable refused: {exc}", file=stream)
             return EXIT_REFUSED
         plan = plan_enable(document, registry, registration, adopt=options.adopt)
