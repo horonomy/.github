@@ -18,6 +18,11 @@ Normative reference implementation and its test suite:
 That module is the host side. A product implements the *provider* side in its
 own language — see [Implementing a provider](#implementing-a-provider).
 
+What the host then *does* with those documents — the single configured command,
+the user's original statusline as an upstream provider, the deadlines, the
+iconography and the degradation ladder — is
+[`statusline-host-compositor.md`](./statusline-host-compositor.md).
+
 ## Why a wire contract and not a library
 
 The three first providers are Fornax (Rust), Libra (Rust) and Circinus
