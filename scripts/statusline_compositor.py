@@ -85,6 +85,12 @@ MAX_ARGV_LENGTH = 16
 # already written, not waiting for anything to finish.
 KILL_GRACE_SECONDS = 0.1
 
+# Output caps. A provider that streams megabytes is a defect; truncating its
+# stdout before parsing keeps that defect from becoming a memory problem in the
+# host's render path.
+MAX_PROVIDER_OUTPUT_BYTES = 64 * 1024
+MAX_UPSTREAM_OUTPUT_BYTES = 256 * 1024
+
 
 if __name__ == "__main__":
     sys.exit(main())
