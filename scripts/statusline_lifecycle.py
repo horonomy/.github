@@ -232,3 +232,55 @@ class SettingsDocument:
     @property
     def status_line(self) -> object:
         return self.data.get(STATUS_LINE_KEY)
+
+
+def parse_settings(raw: bytes) -> dict:
+    """The settings value, or a refusal.
+
+    An absent or whitespace-only file is an empty configuration, which is an
+    ordinary starting state. Anything else that does not yield a JSON object is
+    refused: this is
+    `MALFORMED_OR_UNSUPPORTED_CONFIG_FAILS_WITH_ZERO_MUTATION`, and the
+    behaviour it exists to forbid is the one where a parse error becomes `{}`
+    and the next write erases everything.
+    """
+    if not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        # Reports the position, not the surrounding text: a syntax error near a
+        # credential would otherwise quote it back into the terminal.
+        raise SettingsParseError(
+            f"settings file is not valid JSON (line {exc.lineno}, column {exc.colno})"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise SettingsParseError("settings file must contain a JSON object at the top level")
+    return parsed
+
+
+def read_settings(path: pathlib.Path) -> SettingsDocument:
+    """Read and parse the settings file, or refuse.
+
+    The single place a settings file enters this module, so that every operation
+    starts from bytes, a fingerprint of those bytes, and the file's existing
+    mode -- there is no path by which a later step can read the file again and
+    silently disagree with the plan built from this one.
+    """
+    try:
+        raw = path.read_bytes()
+        mode = path.stat().st_mode & 0o777
+    except FileNotFoundError:
+        raw, mode = b"", None
+    except OSError as exc:
+        # The errno, not the message: on several platforms an EACCES message
+        # names every parent directory, and those are the user's paths.
+        raise LifecycleError(f"settings file at {path} could not be read (errno {exc.errno})") from exc
+    return SettingsDocument(
+        path=path,
+        raw=raw,
+        data=parse_settings(raw),
+        indent=detect_indent(raw),
+        trailing_newline=raw.endswith(b"\n"),
+        mode=mode,
+    )
