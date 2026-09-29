@@ -109,10 +109,10 @@ class LifecycleCase(unittest.TestCase):
     def write(self, data: dict, *, indent: int | None = 2) -> None:
         self.settings.write_bytes(lifecycle.serialize(data, indent=indent))
 
-    def read(self) -> dict:
+    def _read(self) -> dict:
         return json.loads(self.settings.read_text())
 
-    def registry(self) -> dict | None:
+    def _registry(self) -> dict | None:
         return lifecycle.read_registry(self.home).data
 
     def documents(self) -> tuple[lifecycle.SettingsDocument, lifecycle.RegistryDocument]:
@@ -138,7 +138,7 @@ class LifecycleCase(unittest.TestCase):
     def remove(self, *providers: str, operation: str = "disable") -> lifecycle.ApplyResult:
         return lifecycle.apply(self.plan_remove(*providers, operation=operation))
 
-    def uninstall(self) -> lifecycle.ApplyResult:
+    def _uninstall(self) -> lifecycle.ApplyResult:
         document, registry = self.documents()
         plan = lifecycle.plan_remove(
             document,
@@ -343,9 +343,9 @@ class EnablePreservationTest(LifecycleCase):
     """What enabling a provider must leave exactly as it found it."""
 
     def test_every_key_this_module_does_not_own_survives_enabling(self) -> None:
-        before = self.read()
+        before = self._read()
         self.enable("fornax")
-        after = self.read()
+        after = self._read()
         # PREEXISTING_UNOWNED_CONFIG_IS_PRESERVED -- compared structurally across
         # the whole document, so a nested value silently dropped or retyped fails
         # here rather than passing a spot check on the keys someone thought of.
@@ -354,7 +354,7 @@ class EnablePreservationTest(LifecycleCase):
 
     def test_fields_this_versions_schema_has_never_seen_survive(self) -> None:
         self.enable("fornax")
-        after = self.read()
+        after = self._read()
         # UNKNOWN_FUTURE_FIELDS_ARE_PRESERVED -- checked at both levels, because
         # the dangerous one is inside `statusLine`: that object is the one this
         # module rewrites, so a reduce-to-known-fields bug would only show there.
@@ -364,12 +364,12 @@ class EnablePreservationTest(LifecycleCase):
         self.assertEqual(after["statusLine"]["refreshInterval"], 3)
 
     def test_another_products_entries_survive_marked_or_not(self) -> None:
-        before = self.read()["hooks"]
+        before = self._read()["hooks"]
         self.enable("fornax")
         # OTHER_PRODUCT_CONFIG_IS_PRESERVED -- the marked Circinus hook and the
         # unmarked third-party one next to it both survive, which is what makes
         # this an ownership test rather than a marker-matching test.
-        self.assertEqual(self.read()["hooks"], before)
+        self.assertEqual(self._read()["hooks"], before)
         serialised = self.settings.read_text()
         self.assertIn("_circinus", serialised)
         self.assertIn("/usr/local/bin/vendor-hook", serialised)
@@ -380,15 +380,15 @@ class EnablePreservationTest(LifecycleCase):
         # module has no reason to read it and no path that writes it; the assertion
         # exists so that stays true.
         self.assertEqual(
-            self.read()["managedSettingsSource"],
+            self._read()["managedSettingsSource"],
             "/Library/Application Support/ClaudeCode/managed-settings.json",
         )
 
     def test_the_users_command_becomes_the_registered_upstream(self) -> None:
-        original = self.read()["statusLine"]["command"]
+        original = self._read()["statusLine"]["command"]
         self.enable("fornax")
-        self.assertEqual(self.registry()["upstream"], {"command": original})
-        self.assertTrue(lifecycle.refers_to_compositor(self.read()["statusLine"]["command"]))
+        self.assertEqual(self._registry()["upstream"], {"command": original})
+        self.assertTrue(lifecycle.refers_to_compositor(self._read()["statusLine"]["command"]))
         self.assertIs(
             lifecycle.classify(lifecycle.read_settings(self.settings)),
             lifecycle.Ownership.HORONOM_OWNED,
@@ -413,12 +413,12 @@ class EnablePreservationTest(LifecycleCase):
             }
         )
         self.enable("fornax")
-        status_line = self.read()["statusLine"]
+        status_line = self._read()["statusLine"]
         self.assertEqual(status_line["padding"], 1)
         self.assertEqual(status_line["refreshInterval"], 3)
         self.assertEqual(status_line["futureUnknownKey"], "keep-me")
         self.assertEqual(status_line["type"], "command")
-        self.assertEqual(self.registry()["upstream"]["command"], "/my/custom/statusline")
+        self.assertEqual(self._registry()["upstream"]["command"], "/my/custom/statusline")
         self.assertEqual(
             status_line[lifecycle.MARKER_KEY],
             {"owner": lifecycle.MARKER_OWNER, "version": lifecycle.MARKER_VERSION},
@@ -441,7 +441,7 @@ class EnablePreservationTest(LifecycleCase):
         self.write(data)
         self.enable("fornax")
         self.enable("circinus")
-        self.uninstall()
+        self._uninstall()
 
         self.assertEqual(script.read_bytes(), before)
         self.assertEqual(script.stat().st_mtime_ns, stamp.st_mtime_ns)
@@ -516,11 +516,11 @@ class IdempotenceTest(LifecycleCase):
         self.enable("fornax")
         self.enable("circinus")
         self.enable("libra")
-        order = [entry["provider"] for entry in self.registry()["providers"]]
+        order = [entry["provider"] for entry in self._registry()["providers"]]
 
         self.enable("circinus", timeout_ms=400)
 
-        entries = self.registry()["providers"]
+        entries = self._registry()["providers"]
         # The middle entry is replaced in place. A remove-then-append would pass a
         # "no duplicates" check and still rewrite the document for no reason.
         self.assertEqual([entry["provider"] for entry in entries], order)
@@ -532,8 +532,8 @@ class IdempotenceTest(LifecycleCase):
         self.enable("circinus")
         self.enable("libra")
         forwards = self.settings.read_bytes()
-        forwards_upstream = self.registry()["upstream"]
-        forwards_providers = {entry["provider"] for entry in self.registry()["providers"]}
+        forwards_upstream = self._registry()["upstream"]
+        forwards_providers = {entry["provider"] for entry in self._registry()["providers"]}
 
         shutil.rmtree(self.home)
         self.write(self.original)
@@ -545,9 +545,9 @@ class IdempotenceTest(LifecycleCase):
         # registry's own ordering is allowed to differ -- rendering order is the
         # contract's `order_hint`, not the order entries happen to sit in.
         self.assertEqual(self.settings.read_bytes(), forwards)
-        self.assertEqual(self.registry()["upstream"], forwards_upstream)
+        self.assertEqual(self._registry()["upstream"], forwards_upstream)
         self.assertEqual(
-            {entry["provider"] for entry in self.registry()["providers"]}, forwards_providers
+            {entry["provider"] for entry in self._registry()["providers"]}, forwards_providers
         )
 
 
@@ -555,7 +555,7 @@ class PostInstallUserChangeTest(LifecycleCase):
     """A user who edits their configuration after installing must not lose the edit."""
 
     def edit_after_install(self) -> None:
-        data = self.read()
+        data = self._read()
         data["statusLine"]["padding"] = 4
         data["theme"] = "light-daltonized"
         data["aNewKeyTheUserAdded"] = ["after", "installing"]
@@ -566,7 +566,7 @@ class PostInstallUserChangeTest(LifecycleCase):
         self.edit_after_install()
         self.enable("fornax")
 
-        after = self.read()
+        after = self._read()
         # POST_INSTALL_USER_CHANGES_SURVIVE_REPAIR -- the edit inside `statusLine`
         # is the one that matters, since that is the object a repair rewrites.
         self.assertEqual(after["statusLine"]["padding"], 4)
@@ -587,7 +587,7 @@ class PostInstallUserChangeTest(LifecycleCase):
 
         link = self.root / "compositor-as-it-used-to-be.py"
         link.symlink_to(lifecycle.compositor_path())
-        stale = self.read()
+        stale = self._read()
         stale["statusLine"]["command"] = f"/usr/bin/env python3 {link}"
         self.write(stale)
         self.assertIs(
@@ -597,7 +597,7 @@ class PostInstallUserChangeTest(LifecycleCase):
 
         self.enable("circinus")
 
-        after = self.read()
+        after = self._read()
         # POST_INSTALL_USER_CHANGES_SURVIVE_UPGRADE
         self.assertEqual(after["statusLine"]["padding"], 4)
         self.assertEqual(after["theme"], "light-daltonized")
@@ -605,7 +605,7 @@ class PostInstallUserChangeTest(LifecycleCase):
         self.assertEqual(after["statusLine"]["command"], lifecycle.compositor_command())
         # And the original command recorded before the upgrade is still recorded.
         self.assertEqual(
-            self.registry()["upstream"]["command"],
+            self._registry()["upstream"]["command"],
             self.original["statusLine"]["command"],
         )
 
@@ -625,9 +625,9 @@ class DisableTest(LifecycleCase):
         self.assertFalse(result.settings_written)
         self.assertEqual(self.settings.read_bytes(), settings_before)
         self.assertEqual(
-            [entry["provider"] for entry in self.registry()["providers"]], ["fornax", "libra"]
+            [entry["provider"] for entry in self._registry()["providers"]], ["fornax", "libra"]
         )
-        self.assertEqual(self.registry()["upstream"]["command"], self.original["statusLine"]["command"])
+        self.assertEqual(self._registry()["upstream"]["command"], self.original["statusLine"]["command"])
 
     def test_disabling_a_provider_that_is_not_registered_is_a_reported_no_op(self) -> None:
         self.enable("fornax")
@@ -651,15 +651,15 @@ class DisableTest(LifecycleCase):
 
 class RestorationTest(LifecycleCase):
     def test_removing_the_last_provider_restores_only_what_it_took(self) -> None:
-        before = self.read()
+        before = self._read()
         self.enable("fornax")
         self.enable("circinus")
-        self.uninstall()
+        self._uninstall()
 
         # REMOVE_TOUCHES_ONLY_PRODUCT_OWNED_STATE -- the whole document compared
         # structurally, which is the `A+B → A` case of the invariant with nothing
         # left over: no marker, no compositor command, no leftover keys.
-        self.assertEqual(self.read(), before)
+        self.assertEqual(self._read(), before)
         self.assertIs(
             lifecycle.classify(lifecycle.read_settings(self.settings)),
             lifecycle.Ownership.USER_OWNED,
@@ -673,14 +673,14 @@ class RestorationTest(LifecycleCase):
         copy of `statusLine` would look correct everywhere except exactly here.
         """
         self.enable("fornax")
-        data = self.read()
+        data = self._read()
         data["statusLine"]["padding"] = 4
         data["statusLine"]["aNewKeyTheUserAdded"] = True
         self.write(data)
 
-        self.uninstall()
+        self._uninstall()
 
-        after = self.read()
+        after = self._read()
         self.assertEqual(after["statusLine"]["command"], self.original["statusLine"]["command"])
         self.assertEqual(after["statusLine"]["padding"], 4)
         self.assertTrue(after["statusLine"]["aNewKeyTheUserAdded"])
@@ -697,7 +697,7 @@ class RestorationTest(LifecycleCase):
         change.
         """
         self.enable("fornax")
-        drifted = self.read()
+        drifted = self._read()
         drifted["statusLine"]["command"] = "/Users/founder/.claude/a different statusline.sh"
         self.write(drifted)
         self.assertIs(
@@ -708,7 +708,7 @@ class RestorationTest(LifecycleCase):
         plan = self.plan_remove("fornax", operation="uninstall")
         lifecycle.apply(plan)
 
-        after = self.read()
+        after = self._read()
         # STALE_RECEIPT_CANNOT_OVERWRITE_CURRENT_CONFIG
         self.assertEqual(after["statusLine"]["command"], "/Users/founder/.claude/a different statusline.sh")
         self.assertNotIn(lifecycle.MARKER_KEY, after["statusLine"])
@@ -721,16 +721,16 @@ class RestorationTest(LifecycleCase):
     def test_removal_never_deletes_the_file_it_shares_with_the_host(self) -> None:
         self.settings.unlink()
         self.enable("fornax")
-        self.assertEqual(list(self.read()), [lifecycle.STATUS_LINE_KEY])
+        self.assertEqual(list(self._read()), [lifecycle.STATUS_LINE_KEY])
 
-        result = self.uninstall()
+        result = self._uninstall()
 
         # SHARED_CONFIG_IS_NEVER_DELETED_BY_DEFAULT -- this module created both the
         # file and the only entry in it, and still does not remove the file. Claude
         # Code reads it for everything else it does, and a missing file is a
         # different thing to the tool than an empty one.
         self.assertTrue(self.settings.exists())
-        self.assertEqual(self.read(), {})
+        self.assertEqual(self._read(), {})
         self.assertNotIn(self.settings, result.plan.state_to_remove)
         # Our own state, which we do exclusively own, is gone.
         self.assertFalse(lifecycle.read_registry(self.home).present)
@@ -744,8 +744,8 @@ class RestorationTest(LifecycleCase):
         plan = self.plan_remove("fornax", operation="uninstall")
         lifecycle.apply(plan)
 
-        self.assertNotIn(lifecycle.STATUS_LINE_KEY, self.read())
-        self.assertEqual(self.read(), data)
+        self.assertNotIn(lifecycle.STATUS_LINE_KEY, self._read())
+        self.assertEqual(self._read(), data)
         self.assertIn(
             "statusLine is removed entirely; it held nothing but this integration", plan.notes
         )
@@ -771,7 +771,7 @@ class RestorationTest(LifecycleCase):
         plan = self.plan_remove("fornax", operation="uninstall")
         lifecycle.apply(plan)
 
-        after = self.read()
+        after = self._read()
         self.assertEqual(after["statusLine"], {"type": "command", "padding": 2, "refreshInterval": 5})
         self.assertNotIn("command", after["statusLine"])
         self.assertTrue(any("no original command was recorded" in note for note in plan.notes))
@@ -858,7 +858,7 @@ class FailSafeTest(LifecycleCase):
 
         self.enable("fornax", adopt=True)
 
-        after = self.read()
+        after = self._read()
         self.assertIs(
             lifecycle.classify(lifecycle.read_settings(self.settings)),
             lifecycle.Ownership.HORONOM_OWNED,
@@ -866,8 +866,8 @@ class FailSafeTest(LifecycleCase):
         self.assertEqual(after["statusLine"]["padding"], 1)
         # Adoption records ownership. It does not invent an original command, and
         # the registry says so rather than leaving the field absent and ambiguous.
-        self.assertNotIn("upstream", self.registry())
-        self.assertIsNone(self.registry()["lifecycle"]["created_status_line"])
+        self.assertNotIn("upstream", self._registry())
+        self.assertIsNone(self._registry()["lifecycle"]["created_status_line"])
 
 
 class MalformedConfigTest(LifecycleCase):
@@ -915,7 +915,7 @@ class ConcurrentChangeTest(LifecycleCase):
     def test_a_settings_edit_between_plan_and_apply_aborts_the_write(self) -> None:
         plan = self.plan_enable("fornax")
 
-        concurrent = self.read()
+        concurrent = self._read()
         concurrent["theme"] = "changed in another terminal"
         self.write(concurrent)
         before = self.settings.read_bytes()
@@ -927,8 +927,8 @@ class ConcurrentChangeTest(LifecycleCase):
         # there, which is the part that matters: detecting the race and then
         # writing anyway would be the same bug with a log line.
         self.assertEqual(self.settings.read_bytes(), before)
-        self.assertEqual(self.read()["theme"], "changed in another terminal")
-        self.assertNotIn(lifecycle.MARKER_KEY, self.read()["statusLine"])
+        self.assertEqual(self._read()["theme"], "changed in another terminal")
+        self.assertNotIn(lifecycle.MARKER_KEY, self._read()["statusLine"])
 
     def test_a_registry_edit_between_plan_and_apply_aborts_the_write(self) -> None:
         """The registry is fingerprinted too, and this is why.
@@ -948,7 +948,7 @@ class ConcurrentChangeTest(LifecycleCase):
 
         self.assertEqual(lifecycle.read_registry(self.home).path.read_bytes(), before)
         self.assertEqual(
-            [entry["provider"] for entry in self.registry()["providers"]], ["fornax", "circinus"]
+            [entry["provider"] for entry in self._registry()["providers"]], ["fornax", "circinus"]
         )
 
 
@@ -973,7 +973,7 @@ class AtomicWriteTest(LifecycleCase):
             return real_replace(src, dst, *args, **kwargs)
 
         with unittest.mock.patch.object(os, "replace", spy):
-            self.uninstall()
+            self._uninstall()
 
         # FAILED_MUTATION_IS_ATOMIC -- one publication, and the old content was
         # still intact right up to it. The temp file is also asserted to be a
@@ -989,7 +989,7 @@ class AtomicWriteTest(LifecycleCase):
 
         with unittest.mock.patch.object(os, "replace", fail):
             with self.assertRaises(lifecycle.LifecycleError):
-                self.uninstall()
+                self._uninstall()
 
         self.assertEqual(self.settings.read_bytes(), before)
         self.assertEqual(sorted(path.name for path in self.settings.parent.iterdir()), ["settings.json"])
@@ -1104,7 +1104,7 @@ class HostUsabilityTest(LifecycleCase):
 
     def render(self) -> str:
         """Run whatever is configured, exactly as the host would."""
-        command = self.read()[lifecycle.STATUS_LINE_KEY]["command"]
+        command = self._read()[lifecycle.STATUS_LINE_KEY]["command"]
         completed = subprocess.run(
             command,
             shell=True,
@@ -1151,8 +1151,8 @@ class HostUsabilityTest(LifecycleCase):
         self.assertIn("SHADOW", after_disable)
         self.assertNotIn("VERIFIED", after_disable)
 
-        self.uninstall()
-        self.assertEqual(self.read()[lifecycle.STATUS_LINE_KEY]["command"], str(self.upstream))
+        self._uninstall()
+        self.assertEqual(self._read()[lifecycle.STATUS_LINE_KEY]["command"], str(self.upstream))
         self.assertEqual(self.render(), "MY OWN LINE")
 
     def test_a_failing_provider_cannot_suppress_the_users_own_line(self) -> None:
@@ -1173,19 +1173,19 @@ class HostUsabilityTest(LifecycleCase):
         awkward.mkdir()
         script = self.script("my statusline dir/print args.sh", '#!/bin/sh\ncat >/dev/null\nprintf "%s" "$1"\n')
         configured = f'{shlex.quote(str(script))} "a quoted argument"'
-        data = self.read()
+        data = self._read()
         data[lifecycle.STATUS_LINE_KEY]["command"] = configured
         self.write(data)
         self.assertEqual(self.render(), "a quoted argument")
 
         fornax = self.provider_script("fornax-provider.sh", "fornax", "VERIFIED")
         self.enable("fornax", argv=(str(fornax),), timeout_ms=2000)
-        self.assertEqual(self.registry()["upstream"]["command"], configured)
+        self.assertEqual(self._registry()["upstream"]["command"], configured)
         rendered = self.render()
         self.assertTrue(rendered.startswith("a quoted argument"), rendered)
 
-        self.uninstall()
-        after = self.read()[lifecycle.STATUS_LINE_KEY]["command"]
+        self._uninstall()
+        after = self._read()[lifecycle.STATUS_LINE_KEY]["command"]
         self.assertEqual(after, configured)
         self.assertEqual(self.render(), "a quoted argument")
 
@@ -1228,7 +1228,7 @@ class DoctorTest(LifecycleCase):
                 if stage == "one provider":
                     self.enable("fornax")
                 if stage == "drifted":
-                    data = self.read()
+                    data = self._read()
                     data[lifecycle.STATUS_LINE_KEY]["command"] = "/somewhere/else.sh"
                     self.write(data)
                 before = self.settings.read_bytes()
@@ -1270,7 +1270,7 @@ class DoctorTest(LifecycleCase):
 
     def test_it_reports_drift_and_proposes_a_step_without_taking_one(self) -> None:
         self.enable("fornax")
-        data = self.read()
+        data = self._read()
         data[lifecycle.STATUS_LINE_KEY]["command"] = "/Users/founder/.claude/i-changed-my-mind.sh"
         self.write(data)
         before = self.settings.read_bytes()
@@ -1288,7 +1288,7 @@ class DoctorTest(LifecycleCase):
 
     def test_it_reports_providers_registered_while_the_slot_is_not_ours(self) -> None:
         self.enable("fornax")
-        data = self.read()
+        data = self._read()
         del data[lifecycle.STATUS_LINE_KEY][lifecycle.MARKER_KEY]
         data[lifecycle.STATUS_LINE_KEY]["command"] = str(self.root / "theirs.sh")
         self.write(data)
@@ -1428,7 +1428,7 @@ class CommandLineTest(LifecycleCase):
                 self.assertEqual(code, lifecycle.EXIT_OK, output)
                 self.assertTrue(output.strip())
 
-        self.assertEqual(self.read(), self.original)
+        self.assertEqual(self._read(), self.original)
         self.assertFalse(lifecycle.read_registry(self.home).present)
 
     def test_doctor_exits_non_zero_when_it_has_found_drift(self) -> None:
@@ -1436,7 +1436,7 @@ class CommandLineTest(LifecycleCase):
         self.cli("enable", "--provider", "fornax", "--scope", "host", "--command", "/bin/echo")
         self.assertEqual(self.cli("doctor")[0], lifecycle.EXIT_OK)
 
-        data = self.read()
+        data = self._read()
         data[lifecycle.STATUS_LINE_KEY]["command"] = "/somewhere/else.sh"
         self.write(data)
         code, output = self.cli("doctor")
