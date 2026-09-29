@@ -177,5 +177,17 @@ def _require_argv(value: object, provider: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _require_scope(value: object, provider: str) -> contract.Scope:
+    """Parse a declared scope strictly.
+
+    No lenient fallback: host-wide state rendered as session-scoped tells the
+    user something false about which of their sessions a provider speaks for.
+    """
+    try:
+        return contract.Scope(value)
+    except ValueError as exc:
+        raise RegistryError(f"provider {provider!r}: {value!r} is not a known scope") from exc
+
+
 if __name__ == "__main__":
     sys.exit(main())
