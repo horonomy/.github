@@ -57,3 +57,57 @@ class PresentationMode(enum.Enum):
     @property
     def uses_glyphs(self) -> bool:
         return self is not PresentationMode.PLAIN
+
+
+_ZWJ = "‍"
+_VARIATION_SELECTORS = frozenset(chr(cp) for cp in range(0xFE00, 0xFE10))
+_EMOJI_MODIFIERS = frozenset(chr(cp) for cp in range(0x1F3FB, 0x1F400))
+_KEYCAP_ENCLOSER = "⃣"
+_REGIONAL_INDICATORS = frozenset(chr(cp) for cp in range(0x1F1E6, 0x1F200))
+_TAG_CHARACTERS = frozenset(chr(cp) for cp in range(0xE0020, 0xE0080))
+_COMBINING_CATEGORIES = frozenset({"Mn", "Me", "Mc"})
+
+
+def _continues_cluster(char: str, cluster: str) -> bool:
+    """Whether `char` extends the cluster already accumulated in `cluster`."""
+    previous = cluster[-1]
+    if previous == _ZWJ:
+        # A ZWJ always joins whatever follows it, whatever that is.
+        return True
+    if char == _ZWJ:
+        return True
+    if unicodedata.category(char) in _COMBINING_CATEGORIES:
+        return True
+    if char in _VARIATION_SELECTORS or char in _EMOJI_MODIFIERS:
+        return True
+    if char == _KEYCAP_ENCLOSER or char in _TAG_CHARACTERS:
+        return True
+    if char in _REGIONAL_INDICATORS:
+        # Regional indicators pair up: two make one flag, a third starts a new
+        # flag rather than extending the first.
+        return previous in _REGIONAL_INDICATORS and len(
+            [c for c in cluster if c in _REGIONAL_INDICATORS]
+        ) % 2 == 1
+    return False
+
+
+def grapheme_clusters(text: str) -> list[str]:
+    """Split `text` into units that must never be broken apart.
+
+    A deliberate subset of UAX #29, not an implementation of it: this covers
+    combining marks, variation-selector sequences, ZWJ sequences, skin-tone
+    modifiers, keycaps, regional-indicator pairs and flag tag sequences, which
+    is the whole of what actually reaches a statusline. Provider labels are
+    ASCII by contract, so the only non-trivial clusters here are glyphs this
+    module itself chose.
+
+    Erring toward *over*-clustering is safe — it can only make truncation more
+    cautious. Under-clustering is the bug, because it emits half an emoji.
+    """
+    clusters: list[str] = []
+    for char in text:
+        if clusters and _continues_cluster(char, clusters[-1]):
+            clusters[-1] += char
+        else:
+            clusters.append(char)
+    return clusters
