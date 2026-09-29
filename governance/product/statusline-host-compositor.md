@@ -109,3 +109,19 @@ fingerprint of the resolved argv.
 
 When the deadline is exceeded, the upstream text is preserved first and the
 providers that did not answer in time become explicit not-available statuses.
+
+## Failure is reported, never hidden
+
+A provider that times out, exits non-zero, prints nothing, prints unparseable
+JSON, or emits a document the contract refuses becomes a host-synthesised status
+saying so, with a bounded reason code. It never becomes silence and never
+becomes a healthy zero. The three distinctions the contract draws are enforced
+here at the point they would otherwise be lost:
+
+- `UNKNOWN` is not `HEALTHY`.
+- `UNAVAILABLE` is not `ZERO`.
+- `PROBE_FAILED` is not `NOTHING_HAPPENED`.
+
+Because the host validates every document it parses, a provider bug degrades to
+that provider rendering as unknown rather than to a corrupted line or a leaked
+value. That is a backstop for the provider's own tests, not a replacement.
