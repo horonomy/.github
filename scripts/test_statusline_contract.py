@@ -557,6 +557,78 @@ class SegmentTest(unittest.TestCase):
             segment.label = "Unverified"  # type: ignore[misc]
 
 
+class SegmentDurationTest(unittest.TestCase):
+    """A span carries seconds plus a noun, and the host formats it.
+
+    The defect being closed is Libra's, and it is the same shape as the count
+    rule's: the founder's wrapper rendered `P90≤5d4h` because the product had
+    nowhere to put a duration except a label it had formatted itself.
+    """
+
+    def _with(self, **overrides: object) -> sc.Segment:
+        fields: dict = {
+            "key": "remaining",
+            "state": sc.SegmentState.NEUTRAL,
+            "label": "Remaining work",
+        }
+        fields.update(overrides)
+        return sc.Segment(**fields)  # type: ignore[arg-type]
+
+    def test_a_duration_with_its_noun_is_accepted(self) -> None:
+        segment = self._with(duration_seconds=447120, duration_label="P90")
+        self.assertEqual((segment.duration_seconds, segment.duration_label), (447120, "P90"))
+
+    def test_a_duration_without_a_noun_is_refused(self) -> None:
+        # The load-bearing direction: a bare `5d4h` could be elapsed,
+        # remaining, a budget or a timeout, and the reader cannot tell which.
+        with self.assertRaises(sc.ContractViolation) as caught:
+            self._with(duration_seconds=447120)
+        self.assertIn("duration_label", str(caught.exception))
+
+    def test_a_noun_with_no_duration_is_accepted(self) -> None:
+        # Mirrors `count_label`, which is likewise permitted alone. Harmless
+        # rather than meaningful: nothing renders it, so it cannot mislead.
+        self.assertEqual(self._with(duration_label="P90").duration_seconds, None)
+
+    def test_a_negative_duration_is_refused(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            self._with(duration_seconds=-1, duration_label="P90")
+
+    def test_a_duration_past_the_bound_is_refused(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            self._with(duration_seconds=sc.MAX_DURATION_SECONDS + 1, duration_label="P90")
+
+    def test_the_bound_itself_is_accepted(self) -> None:
+        # So the rejection above is the bound biting rather than any duration
+        # of that magnitude being refused.
+        self.assertEqual(
+            self._with(
+                duration_seconds=sc.MAX_DURATION_SECONDS, duration_label="P90"
+            ).duration_seconds,
+            sc.MAX_DURATION_SECONDS,
+        )
+
+    def test_a_boolean_duration_is_refused(self) -> None:
+        # `True` is an `int` in Python, so this is a real way a wrong value
+        # reaches the field rather than a hypothetical one.
+        with self.assertRaises(sc.ContractViolation):
+            self._with(duration_seconds=True, duration_label="P90")
+
+    def test_a_float_duration_is_refused(self) -> None:
+        # The daemon's own estimate is a float; whoever converts it must round,
+        # and the contract is the place that forces the decision to be made.
+        with self.assertRaises(sc.ContractViolation):
+            self._with(duration_seconds=447120.5, duration_label="P90")
+
+    def test_a_secret_shaped_noun_cannot_enter_a_segment(self) -> None:
+        with self.assertRaises(sc.PrivacyViolation):
+            self._with(duration_seconds=60, duration_label="aB3dE5fG7hJ9kL1mN3pQ5")
+
+    def test_a_path_shaped_noun_cannot_enter_a_segment(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            self._with(duration_seconds=60, duration_label="/var/lib/libra")
+
+
 def _segment(**overrides: object) -> sc.Segment:
     """A valid minimal segment, with fields overridden per test."""
     fields: dict = {
