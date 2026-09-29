@@ -516,5 +516,49 @@ class TestSelfReferenceDetection(unittest.TestCase):
         self.assertEqual(command, "/bin/echo 'a  b'")
 
 
+class TestBoundedExecution(FixtureCase):
+    def test_a_clean_child_returns_its_code_and_output(self):
+        path = self.script("clean", "printf 'hello'\n")
+        self.assertEqual(
+            compositor._run_bounded((path,), b"", GENEROUS_MS, shell=False), (0, b"hello")
+        )
+
+    def test_a_non_zero_child_returns_its_code_and_output(self):
+        path = self.script("noisy", "printf 'partial'\nexit 7\n")
+        self.assertEqual(
+            compositor._run_bounded((path,), b"", GENEROUS_MS, shell=False), (7, b"partial")
+        )
+
+    def test_a_timed_out_child_is_distinguishable_from_a_non_zero_exit(self):
+        # None, not a code: a kill and a clean failure mean different things and
+        # earn different not-available reasons.
+        path = self.script("sleeper", f"sleep {LEAK_SLEEP}\n", warm=False)
+        code, _ = compositor._run_bounded((path,), b"", IMPATIENT_MS, shell=False)
+        self.assertIsNone(code)
+
+    def test_stdin_reaches_the_child_byte_for_byte(self):
+        path = self.script("echoing", "cat\n")
+        payload = b'{"a": "\xc3\xa9  b", "n": 1}\n\x00tail'
+        self.assertEqual(
+            compositor._run_bounded((path,), payload, GENEROUS_MS, shell=False)[1], payload
+        )
+
+    def test_the_time_bound_is_real(self):
+        path = self.script("sleeper2", f"sleep {LEAK_SLEEP}\n", warm=False)
+        started = time.monotonic()
+        compositor._run_bounded((path,), b"", IMPATIENT_MS, shell=False)
+        self.assertLess(time.monotonic() - started, 3.0)
+
+    def test_shell_mode_runs_the_command_string_through_a_shell(self):
+        self.assertEqual(
+            compositor._run_bounded("printf 'a b' | tr ' ' '-'", b"", GENEROUS_MS, shell=True),
+            (0, b"a-b"),
+        )
+
+    def test_a_missing_executable_raises_rather_than_returning_a_code(self):
+        with self.assertRaises(FileNotFoundError):
+            compositor._run_bounded(("/no/such/binary",), b"", GENEROUS_MS, shell=False)
+
+
 if __name__ == "__main__":
     unittest.main()
