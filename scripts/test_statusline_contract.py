@@ -888,5 +888,132 @@ class WireStrictnessTest(unittest.TestCase):
             )
 
 
+class NotAvailableConstructorTest(unittest.TestCase):
+    def _built(self, availability: sc.Availability) -> sc.ProviderStatus:
+        return sc.not_available(
+            "circinus",
+            "1.2.0",
+            sc.Scope.HOST,
+            availability,
+            "daemon_not_running",
+            "daemon not running",
+        )
+
+    def test_every_not_available_state_can_be_built(self) -> None:
+        for availability in sc.Availability:
+            if availability.has_live_readings:
+                continue
+            with self.subTest(availability=availability):
+                status = self._built(availability)
+                self.assertIs(status.availability, availability)
+
+    def test_a_not_available_status_is_never_silent(self) -> None:
+        # An empty segment list renders as nothing, which reads as all-clear.
+        for availability in sc.Availability:
+            if availability.has_live_readings:
+                continue
+            with self.subTest(availability=availability):
+                self.assertEqual(len(self._built(availability).segments), 1)
+
+    def test_a_not_available_status_never_claims_health(self) -> None:
+        for availability in sc.Availability:
+            if availability.has_live_readings:
+                continue
+            with self.subTest(availability=availability):
+                state = self._built(availability).segments[0].state
+                self.assertIsNot(state, sc.SegmentState.OK)
+
+    def test_a_probe_failure_is_actionable_not_merely_neutral(self) -> None:
+        # PROBE_FAILED != NOTHING_HAPPENED: an error the user may need to act
+        # on must not render with the same weight as "not installed".
+        self.assertIs(
+            self._built(sc.Availability.ERROR).segments[0].state, sc.SegmentState.WARN
+        )
+        self.assertIs(
+            self._built(sc.Availability.UNSUPPORTED).segments[0].state,
+            sc.SegmentState.NEUTRAL,
+        )
+
+    def test_available_cannot_be_built_this_way(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            self._built(sc.Availability.AVAILABLE)
+
+    def test_a_non_availability_is_refused(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            self._built("unavailable")  # type: ignore[arg-type]
+
+    def test_a_raw_error_string_cannot_become_the_reason(self) -> None:
+        # The case this constructor exists to prevent: an exception message
+        # carrying a path, reaching the user's terminal.
+        with self.assertRaises(sc.ContractViolation):
+            sc.not_available(
+                "circinus",
+                "1.2.0",
+                sc.Scope.HOST,
+                sc.Availability.ERROR,
+                "probe_failed",
+                "connect failed: /tmp/circinus.sock",
+            )
+
+    def test_every_not_available_state_has_a_segment_state_mapping(self) -> None:
+        expected = {a for a in sc.Availability if not a.has_live_readings}
+        self.assertEqual(set(sc._NOT_AVAILABLE_STATE), expected)
+
+
+class OrderingTest(unittest.TestCase):
+    def _at(self, provider: str, order_hint: int) -> sc.ProviderStatus:
+        return _status(provider=provider, order_hint=order_hint)
+
+    def test_providers_order_by_hint_then_id(self) -> None:
+        ordered = sc.order_providers(
+            [self._at("libra", 30), self._at("circinus", 30), self._at("fornax", 20)]
+        )
+        self.assertEqual([s.provider for s in ordered], ["fornax", "circinus", "libra"])
+
+    def test_ordering_is_stable_across_repeated_renders(self) -> None:
+        statuses = [self._at("libra", 30), self._at("circinus", 30)]
+        first = [s.provider for s in sc.order_providers(statuses)]
+        for _ in range(5):
+            self.assertEqual([s.provider for s in sc.order_providers(statuses)], first)
+
+    def test_input_order_cannot_change_the_output_order(self) -> None:
+        a, b, c = self._at("libra", 30), self._at("circinus", 30), self._at("fornax", 20)
+        self.assertEqual(
+            [s.provider for s in sc.order_providers([a, b, c])],
+            [s.provider for s in sc.order_providers([c, b, a])],
+        )
+
+    def test_a_duplicate_provider_is_refused_not_deduplicated(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.order_providers([self._at("libra", 10), self._at("libra", 20)])
+
+    def test_a_bare_status_is_not_mistaken_for_a_collection(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.order_providers(self._at("libra", 10))
+
+    def test_a_non_status_value_is_refused(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.order_providers([{"provider": "libra"}])
+
+    def test_an_empty_registry_orders_to_nothing(self) -> None:
+        self.assertEqual(sc.order_providers([]), ())
+
+    def test_segments_order_by_hint_then_key(self) -> None:
+        status = _status(
+            segments=(
+                _segment(key="zz", order_hint=0),
+                _segment(key="aa", order_hint=5),
+                _segment(key="bb", order_hint=0),
+            )
+        )
+        self.assertEqual(
+            [s.key for s in sc.order_segments(status)], ["bb", "zz", "aa"]
+        )
+
+    def test_segment_ordering_takes_a_status_not_a_list(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.order_segments([_segment()])
+
+
 if __name__ == "__main__":
     unittest.main()
