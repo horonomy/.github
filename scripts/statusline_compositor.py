@@ -616,5 +616,57 @@ def collect(
     return upstream_text, tuple(statuses)
 
 
+def main(argv: list[str] | None = None, stdin: object = None, stdout: object = None) -> int:
+    """Render the statusline: the user's line, then the Horonom block.
+
+    Exits 0 in every case a user can cause. A statusline command that exits
+    non-zero gives the host nothing useful to do and risks turning a bad
+    registry into log noise on every refresh, so problems go to stderr, where
+    the diagnostic surface can find them, and the line still renders.
+    """
+    del argv  # The host passes no arguments; accepted for testability only.
+    reader = stdin if stdin is not None else sys.stdin.buffer
+    writer = stdout if stdout is not None else sys.stdout
+    payload = reader.read() or b""
+
+    if depth() >= MAX_DEPTH:
+        # Already inside a compositor. Printing nothing is correct: whatever
+        # invoked us is going to print the line, and printing a second copy of
+        # everything is how a recursion becomes visible instead of just deep.
+        print("horonom-statusline: refusing to recurse", file=sys.stderr)
+        return 0
+
+    try:
+        registry = load_registry()
+    except RegistryError as exc:
+        # Our own state is broken and we cannot learn what their original
+        # command was, so there is nothing to preserve. Say so on the line
+        # rather than printing an empty statusline: a blank line reads as "no
+        # status", which is indistinguishable from working correctly.
+        print(f"horonom-statusline: {exc}", file=sys.stderr)
+        print(
+            f"{render.state_marker('unknown', render.PresentationMode.PLAIN)} "
+            "Horonom statusline registry unreadable",
+            file=writer,
+        )
+        return 0
+
+    if registry.upstream_command and names_this_command(registry.upstream_command):
+        print("horonom-statusline: upstream names this command; not running it", file=sys.stderr)
+        registry = dataclasses.replace(registry, upstream_command=None)
+
+    upstream_text, statuses = collect(registry, payload)
+    print(
+        render.compose(
+            upstream_text,
+            statuses,
+            mode=registry.mode,
+            width_budget=registry.width_budget,
+        ),
+        file=writer,
+    )
+    return 0
+
+
 if __name__ == "__main__":
     sys.exit(main())
