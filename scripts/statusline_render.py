@@ -718,3 +718,58 @@ def _fit_minimal(statuses: tuple, mode: PresentationMode, budget: int) -> str:
     if not label:
         return ""
     return f"{head}{label}{suffix}"
+
+
+def compose(
+    upstream_text: str | None,
+    statuses: object,
+    *,
+    mode: PresentationMode = PresentationMode.BALANCED,
+    width_budget: int | None = None,
+) -> str:
+    """Build the final statusline from the user's own output plus provider state.
+
+    `upstream_text` is whatever the user's pre-existing statusline command
+    printed. It is passed through **verbatim** — never shortened, reordered,
+    parsed or annotated — and `width_budget` therefore applies only to the
+    Horonom block. That asymmetry is the point rather than an oversight: the
+    user's line is theirs, this code cannot know which part of it matters, and
+    the one budget we are entitled to spend is our own. A caller that wants a
+    hard total must set a budget it can afford after the upstream text.
+
+    No upstream text is a valid state — a user with no previous statusline gets
+    the Horonom block alone. So is no provider state: an empty `statuses`
+    returns the upstream text untouched, byte for byte.
+
+    Degradation, in order, and only when a budget is set: try each allowed mode
+    and take the first that measures within budget; then shed the least
+    important provider groups, saying how many segments went; then fall back to
+    the single worst state with its label truncated grapheme-safely. If even
+    that cannot be said honestly, the upstream text is returned alone — the
+    user's own line is the last thing to go, never the first.
+    """
+    ordered = statusline_contract.order_providers(statuses)
+    upstream = upstream_text or ""
+    if not ordered:
+        return upstream
+
+    candidates = [(candidate, _render_groups(ordered, candidate)) for candidate in _mode_candidates(mode)]
+    chosen_mode, block = candidates[0]
+    if width_budget is not None:
+        for candidate, text in candidates:
+            if display_width(text) <= width_budget:
+                chosen_mode, block = candidate, text
+                break
+        else:
+            chosen_mode, _ = min(candidates, key=lambda pair: display_width(pair[1]))
+            dropped = _fit_by_dropping(ordered, chosen_mode, width_budget)
+            block = (
+                dropped if dropped is not None
+                else _fit_minimal(ordered, chosen_mode, width_budget)
+            )
+
+    if not block:
+        return upstream
+    if not upstream:
+        return block
+    return f"{upstream}{UPSTREAM_SEPARATORS[chosen_mode]}{block}"
