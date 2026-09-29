@@ -1190,5 +1190,132 @@ class CrossModuleTest(LifecycleCase):
         self.assertEqual([entry.provider for entry in parsed.providers], ["fornax"])
 
 
+class DoctorTest(LifecycleCase):
+    def test_the_diagnostic_mutates_nothing_on_any_path(self) -> None:
+        for stage in ("nothing installed", "one provider", "drifted"):
+            with self.subTest(stage=stage):
+                if stage == "one provider":
+                    self.enable("fornax")
+                if stage == "drifted":
+                    data = self.read()
+                    data[lifecycle.STATUS_LINE_KEY]["command"] = "/somewhere/else.sh"
+                    self.write(data)
+                before = self.settings.read_bytes()
+                registry_before = (
+                    lifecycle.read_registry(self.home).path.read_bytes()
+                    if lifecycle.read_registry(self.home).present
+                    else None
+                )
+
+                lifecycle.doctor(self.settings, self.home)
+
+                self.assertEqual(self.settings.read_bytes(), before)
+                registry = lifecycle.read_registry(self.home)
+                self.assertEqual(registry.path.read_bytes() if registry.present else None, registry_before)
+
+    def test_running_it_before_anything_is_installed_creates_no_state(self) -> None:
+        lifecycle.doctor(self.settings, self.home)
+        # A diagnostic that has to create its own state directory to run is one
+        # nobody can run to find out whether the product is installed.
+        self.assertFalse(self.home.exists())
+
+    def test_it_answers_every_question_a_user_actually_has(self) -> None:
+        self.enable("fornax")
+        report = lifecycle.doctor(self.settings, self.home)
+
+        self.assertTrue(report["host"]["supported"])
+        self.assertEqual(report["host"]["capability"], "statusLine")
+        self.assertEqual(report["slot"]["owner"], lifecycle.Ownership.HORONOM_OWNED.value)
+        self.assertTrue(report["slot"]["horonom_owned"])
+        self.assertTrue(report["slot"]["command"]["is_compositor"])
+        self.assertTrue(report["upstream"]["recorded"])
+        self.assertEqual(report["upstream"]["name"], "statusline-dogfood.sh")
+        self.assertEqual([entry["provider"] for entry in report["providers"]], ["fornax"])
+        self.assertFalse(report["drift"]["detected"])
+        # HORO-1000's "would this mutate anything" question, answered before the
+        # user has to run something to find out.
+        self.assertFalse(report["mutation_outlook"]["enabling_another_provider_changes_settings"])
+        self.assertTrue(report["mutation_outlook"]["disabling_one_provider_changes_settings"])
+
+    def test_it_reports_drift_and_proposes_a_step_without_taking_one(self) -> None:
+        self.enable("fornax")
+        data = self.read()
+        data[lifecycle.STATUS_LINE_KEY]["command"] = "/Users/founder/.claude/i-changed-my-mind.sh"
+        self.write(data)
+        before = self.settings.read_bytes()
+
+        report = lifecycle.doctor(self.settings, self.home)
+
+        self.assertTrue(report["drift"]["detected"])
+        self.assertEqual(report["slot"]["owner"], lifecycle.Ownership.DRIFTED.value)
+        self.assertTrue(report["remediation"])
+        self.assertTrue(report["mutation_outlook"]["enabling_another_provider_changes_settings"])
+        # Reported, not corrected. Silently retaking the slot is the behaviour a
+        # user who deliberately changed their statusline would experience as the
+        # tool fighting them.
+        self.assertEqual(self.settings.read_bytes(), before)
+
+    def test_it_reports_providers_registered_while_the_slot_is_not_ours(self) -> None:
+        self.enable("fornax")
+        data = self.read()
+        del data[lifecycle.STATUS_LINE_KEY][lifecycle.MARKER_KEY]
+        data[lifecycle.STATUS_LINE_KEY]["command"] = str(self.root / "theirs.sh")
+        self.write(data)
+
+        report = lifecycle.doctor(self.settings, self.home)
+
+        self.assertEqual(report["slot"]["owner"], lifecycle.Ownership.USER_OWNED.value)
+        self.assertEqual(
+            report["drift"]["reason"],
+            "providers are registered but the compositor does not own the statusline",
+        )
+
+    def test_it_never_reproduces_a_value_from_the_settings_file(self) -> None:
+        secret = "sk-" + "ant" + "-not-a-real-key-" + "0" * 24
+        data = rich_settings()
+        data["env"]["ANTHROPIC_API_KEY"] = secret
+        data["statusLine"]["command"] = "/Users/founder/.claude/private/secret-statusline.sh"
+        self.write(data)
+        self.enable("fornax", argv=("/Users/founder/private/bin/fornax", "statusline"))
+
+        rendered = json.dumps(lifecycle.doctor(self.settings, self.home))
+
+        self.assertNotIn(secret, rendered)
+        self.assertNotIn("sk-", rendered)
+        self.assertNotIn("ANTHROPIC_API_KEY", rendered)
+        # Full paths from the user's configuration do not appear either -- only the
+        # basename, which is what answers "what owns my statusline".
+        self.assertNotIn("/Users/founder", rendered)
+        self.assertIn("secret-statusline.sh", rendered)
+        self.assertIn("fornax", rendered)
+        # Unrelated configuration is counted, never listed.
+        self.assertEqual(lifecycle.doctor(self.settings, self.home)["settings"]["unrelated_key_count"], 9)
+
+    def test_probing_reports_availability_and_still_changes_no_configuration(self) -> None:
+        provider = self.root / "provider.sh"
+        status = contract.ProviderStatus(
+            provider="fornax",
+            provider_version="1.0.0",
+            scope=contract.Scope.HOST,
+            availability=contract.Availability.UNAVAILABLE,
+        )
+        provider.write_text(
+            f"#!/bin/sh\nprintf '%s' {shlex.quote(json.dumps(status.to_wire()))}\n"
+        )
+        provider.chmod(0o755)
+        subprocess.run([str(provider)], capture_output=True, timeout=30, check=False)
+
+        self.enable("fornax", argv=(str(provider),), timeout_ms=2000)
+        before = self.settings.read_bytes()
+
+        report = lifecycle.doctor(self.settings, self.home, probe=True)
+
+        # UNAVAILABLE is reported as itself. A diagnostic that showed a healthy
+        # zero here would be the exact confusion the contract forbids.
+        self.assertEqual(report["providers"][0]["availability"], "unavailable")
+        self.assertEqual(report["providers"][0]["command_name"], "provider.sh")
+        self.assertEqual(self.settings.read_bytes(), before)
+
+
 if __name__ == "__main__":
     unittest.main()
