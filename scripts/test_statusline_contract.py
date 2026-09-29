@@ -716,5 +716,177 @@ def _payload(**overrides: object) -> dict:
     return payload
 
 
+class WireParsingTest(unittest.TestCase):
+    def test_a_minimal_payload_parses(self) -> None:
+        status = sc.provider_status_from_wire(_payload())
+        self.assertEqual(status.provider, "fornax")
+        self.assertIs(status.scope, sc.Scope.HOST)
+        self.assertIs(status.availability, sc.Availability.AVAILABLE)
+        self.assertIs(status.segments[0].state, sc.SegmentState.OK)
+
+    def test_a_non_object_payload_is_refused(self) -> None:
+        for payload in ("fornax: ok", ["fornax"], 1, None):
+            with self.subTest(payload=payload):
+                with self.assertRaises(sc.ContractViolation):
+                    sc.provider_status_from_wire(payload)
+
+    def test_segments_must_be_a_list(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.provider_status_from_wire(_payload(segments={"key": "x"}))
+
+    def test_a_non_object_segment_is_refused(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.provider_status_from_wire(_payload(segments=["ok"]))
+
+    def test_a_payload_survives_a_round_trip(self) -> None:
+        rich = _payload(
+            observed_at="2026-09-29T08:00:00Z",
+            cache_ttl_seconds=5,
+            order_hint=20,
+            fallback_text="fornax unverified (evidence gap, 2h)",
+            segments=[
+                {
+                    "key": "latest_finding",
+                    "state": "attention",
+                    "label": "Unverified",
+                    "reason_code": "evidence_gap",
+                    "reason_label": "evidence gap",
+                    "confidence": "medium",
+                    "confidence_of": "verification",
+                    "age_seconds": 7200,
+                    "count": 113,
+                    "total": 705,
+                    "count_label": "findings",
+                    "hypothetical": True,
+                    "explain_key": "fornax.latest_finding",
+                    "order_hint": 3,
+                }
+            ],
+        )
+        self.assertEqual(sc.provider_status_from_wire(rich).to_wire(), rich)
+
+    def test_the_round_trip_fixture_exercises_every_segment_field(self) -> None:
+        # Guards the test above from silently stopping at the fields that
+        # existed when it was written.
+        covered = set(_payload()["segments"][0]) | {
+            "reason_code",
+            "reason_label",
+            "confidence",
+            "confidence_of",
+            "age_seconds",
+            "count",
+            "total",
+            "count_label",
+            "hypothetical",
+            "explain_key",
+            "order_hint",
+        }
+        declared = {f.name for f in dataclasses.fields(sc.Segment)}
+        self.assertEqual(declared - covered, set())
+
+
+class WireForwardCompatibilityTest(unittest.TestCase):
+    def test_an_unknown_top_level_field_is_ignored_not_carried(self) -> None:
+        status = sc.provider_status_from_wire(_payload(future_provider_key="keep?"))
+        self.assertNotIn("future_provider_key", status.to_wire())
+
+    def test_an_unknown_segment_field_is_ignored_not_carried(self) -> None:
+        payload = _payload()
+        payload["segments"][0]["future_segment_key"] = "keep?"
+        status = sc.provider_status_from_wire(payload)
+        self.assertNotIn("future_segment_key", status.to_wire()["segments"][0])
+
+    def test_an_unrecognised_availability_degrades_to_unknown(self) -> None:
+        payload = _payload(availability="quantum_pending")
+        payload["segments"] = [{"key": "k", "state": "neutral", "label": "Pending"}]
+        status = sc.provider_status_from_wire(payload)
+        self.assertIs(status.availability, sc.Availability.UNKNOWN)
+
+    def test_an_unrecognised_segment_state_degrades_to_unknown(self) -> None:
+        payload = _payload()
+        payload["segments"][0]["state"] = "glowing"
+        status = sc.provider_status_from_wire(payload)
+        self.assertIs(status.segments[0].state, sc.SegmentState.UNKNOWN)
+
+    def test_an_unrecognised_availability_cannot_smuggle_an_ok_segment(self) -> None:
+        # Degrading availability to unknown must not leave an `ok` segment
+        # standing: the host would render a health claim it cannot support.
+        with self.assertRaises(sc.ContractViolation):
+            sc.provider_status_from_wire(_payload(availability="quantum_pending"))
+
+    def test_an_unrecognised_confidence_subject_degrades_to_unspecified(self) -> None:
+        payload = _payload()
+        payload["segments"][0].update(
+            {"confidence": "high", "confidence_of": "vibes"}
+        )
+        status = sc.provider_status_from_wire(payload)
+        self.assertIs(status.segments[0].confidence_of, sc.ConfidenceSubject.UNSPECIFIED)
+
+    def test_an_unrecognised_confidence_level_is_refused(self) -> None:
+        # There is no unknown confidence level, and guessing between low and
+        # high is not a degradation, it is a fabrication.
+        payload = _payload()
+        payload["segments"][0].update({"confidence": "certain", "confidence_of": "verification"})
+        with self.assertRaises(sc.ContractViolation):
+            sc.provider_status_from_wire(payload)
+
+
+class WireStrictnessTest(unittest.TestCase):
+    def test_an_unrecognised_scope_is_refused_not_guessed(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.provider_status_from_wire(_payload(scope="galaxy"))
+
+    def test_a_missing_scope_is_refused(self) -> None:
+        payload = _payload()
+        del payload["scope"]
+        with self.assertRaises(sc.ContractViolation):
+            sc.provider_status_from_wire(payload)
+
+    def test_host_wide_state_cannot_arrive_scoped_to_a_session(self) -> None:
+        # The specific failure the strict rule exists to prevent: no fallback
+        # may land on a real scope.
+        for bad in ("galaxy", "", "HOST", None, 1):
+            with self.subTest(scope=bad):
+                with self.assertRaises(sc.ContractViolation):
+                    sc.provider_status_from_wire(_payload(scope=bad))
+
+    def test_a_future_contract_version_is_refused(self) -> None:
+        with self.assertRaises(sc.UnsupportedContractVersion):
+            sc.provider_status_from_wire(
+                _payload(contract_version=sc.CONTRACT_VERSION + 1)
+            )
+
+    def test_a_missing_contract_version_is_refused(self) -> None:
+        payload = _payload()
+        del payload["contract_version"]
+        with self.assertRaises(sc.UnsupportedContractVersion):
+            sc.provider_status_from_wire(payload)
+
+    def test_an_unsupported_version_is_still_a_contract_violation(self) -> None:
+        # Callers that only catch ContractViolation must not miss this.
+        with self.assertRaises(sc.ContractViolation):
+            sc.provider_status_from_wire(_payload(contract_version="1"))
+
+    def test_a_missing_provider_id_is_refused(self) -> None:
+        payload = _payload()
+        del payload["provider"]
+        with self.assertRaises(sc.ContractViolation):
+            sc.provider_status_from_wire(payload)
+
+    def test_a_parsed_payload_is_still_privacy_checked(self) -> None:
+        # Parsing is not a bypass around the label rules: a provider cannot
+        # reach the renderer with a path just because it arrived over the wire.
+        payload = _payload()
+        payload["segments"][0]["label"] = "see /var/log/fornax.log"
+        with self.assertRaises(sc.ContractViolation):
+            sc.provider_status_from_wire(payload)
+
+    def test_a_parsed_payload_is_still_bounds_checked(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.provider_status_from_wire(
+                _payload(cache_ttl_seconds=sc.MAX_CACHE_TTL_SECONDS + 1)
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
