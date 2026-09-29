@@ -591,10 +591,17 @@ def _mode_candidates(mode: PresentationMode) -> tuple[PresentationMode, ...]:
 def _hidden_marker(count: int) -> str:
     """How the line admits that it is not showing everything.
 
-    A budget that silently swallows a provider is indistinguishable from a
-    provider that reported nothing, and those mean opposite things.
+    Counts *segments*, uniformly, at every rung of the degradation ladder: a
+    budget that silently swallows state is indistinguishable from a provider
+    that reported nothing, and those mean opposite things. The marker is
+    load-bearing enough that a rung which cannot fit it drops the Horonom block
+    entirely rather than capping the line quietly.
     """
     return f"[+{count} more]"
+
+
+def _segment_count(statuses: tuple) -> int:
+    return sum(len(getattr(s, "segments", ()) or ()) for s in statuses)
 
 
 def _render_groups(statuses: "tuple", mode: PresentationMode, hidden: int = 0) -> str:
