@@ -870,6 +870,47 @@ def _segment_to_wire(segment: Segment) -> dict:
     return payload
 
 
+def order_providers(statuses: object) -> tuple[ProviderStatus, ...]:
+    """Order providers for rendering: `order_hint` first, then provider id.
+
+    The statusline is re-rendered on a timer, so a non-deterministic order is
+    a visible defect — segments would appear to shuffle while nothing changed.
+    Sorting is total (the tie-break is the provider id, which is unique here),
+    and `sorted` is stable, so equal keys keep their input order.
+
+    A duplicate provider id is refused rather than deduplicated: two answers
+    from one provider means the registry is wrong, and silently picking one
+    would hide that while rendering a possibly stale reading.
+    """
+    if isinstance(statuses, (str, bytes)) or not hasattr(statuses, "__iter__"):
+        raise ContractViolation("order_providers() takes an iterable of ProviderStatus")
+    ordered = tuple(statuses)
+    for status in ordered:
+        if not isinstance(status, ProviderStatus):
+            raise ContractViolation("order_providers() takes ProviderStatus values")
+    seen: set[str] = set()
+    for status in ordered:
+        if status.provider in seen:
+            raise ContractViolation(
+                f"provider {status.provider!r} answered more than once; the "
+                "registry has a duplicate entry"
+            )
+        seen.add(status.provider)
+    return tuple(sorted(ordered, key=lambda s: (s.order_hint, s.provider)))
+
+
+def order_segments(status: ProviderStatus) -> tuple[Segment, ...]:
+    """Order one provider's segments by `order_hint`, then key.
+
+    Same determinism requirement as `order_providers`, one level down. Segment
+    keys are already unique within a provider, so this needs no duplicate
+    check of its own.
+    """
+    if not isinstance(status, ProviderStatus):
+        raise ContractViolation("order_segments() takes a ProviderStatus")
+    return tuple(sorted(status.segments, key=lambda s: (s.order_hint, s.key)))
+
+
 def _parse_enum_strict(enum_cls: type, value: object, field: str):
     """Parse an enum value, refusing anything unrecognised.
 
