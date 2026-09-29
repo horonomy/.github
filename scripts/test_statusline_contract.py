@@ -292,6 +292,45 @@ class LabelAllowlistTest(unittest.TestCase):
             sc.require_label(None)
 
 
+class LabelWidthTest(unittest.TestCase):
+    # A character bound is only a column bound if one character is one column.
+    WIDE = (
+        "Ｖerified",  # fullwidth latin, two columns per character
+        "検証済み",  # CJK, two columns per character
+    )
+    HOMOGLYPH = (
+        "верified",  # Cyrillic ве
+        "Verified٣",  # Arabic-Indic digit three
+    )
+
+    def test_a_double_width_label_is_refused(self) -> None:
+        for label in self.WIDE:
+            with self.subTest(label=label):
+                with self.assertRaises(sc.ContractViolation):
+                    sc.require_label(label)
+
+    def test_a_homoglyph_label_is_refused(self) -> None:
+        for label in self.HOMOGLYPH:
+            with self.subTest(label=label):
+                with self.assertRaises(sc.ContractViolation):
+                    sc.require_label(label)
+
+    def test_the_character_bound_is_therefore_a_column_bound(self) -> None:
+        # Every accepted character is one ASCII column wide, except the three
+        # allowlisted symbols, which are single-column in a latin locale.
+        allowed_symbols = set("—≤≥")
+        for label in LabelAllowlistTest.LEGITIMATE:
+            with self.subTest(label=label):
+                for char in label:
+                    if char not in allowed_symbols:
+                        self.assertTrue(char.isascii())
+
+    def test_legitimate_labels_are_unaffected(self) -> None:
+        for label in LabelAllowlistTest.LEGITIMATE:
+            with self.subTest(label=label):
+                self.assertEqual(sc.require_label(label), label)
+
+
 class SecretShapeTest(unittest.TestCase):
     # Assembled at runtime rather than written as literals so this test file
     # cannot trip a secret scanner or push-protection rule.
