@@ -1223,3 +1223,170 @@ def plan_remove(
         state_to_remove=state_to_remove,
         notes=tuple(notes),
     )
+
+
+def _command_summary(status_line: object) -> dict:
+    """Identify the configured command without reproducing it.
+
+    The basename is reported and the full command is not. A user asking "what
+    owns my statusline" is answered by `statusline-dogfood.sh`; the directory it
+    sits in adds nothing they do not already know, and this output is exactly the
+    kind of thing that gets pasted into an issue.
+    """
+    command = status_line.get("command") if isinstance(status_line, dict) else None
+    if not isinstance(command, str) or not command.strip():
+        return {"configured": False, "name": None, "is_compositor": False}
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    return {
+        "configured": True,
+        "name": pathlib.Path(tokens[0]).name if tokens else None,
+        "is_compositor": refers_to_compositor(command),
+    }
+
+
+def _drift(ownership: Ownership, registry: RegistryDocument) -> tuple[bool, str | None]:
+    """Whether the world has moved away from the state this lifecycle last left.
+
+    Reported, never corrected. Detecting drift and quietly re-taking the slot
+    would make an upgrade indistinguishable from an install, which is the one
+    behaviour a user who deliberately changed their statusline would experience
+    as the tool fighting them.
+    """
+    if ownership is Ownership.DRIFTED:
+        return True, "the statusLine carries a Horonom marker but runs a different command"
+    if ownership is Ownership.ADOPTABLE:
+        return True, "the statusLine runs the compositor but carries no ownership marker"
+    if ownership is Ownership.UNSUPPORTED_SHAPE:
+        return True, "the statusLine is a shape this version does not understand"
+    if registry.present and not registry.usable:
+        return True, f"the provider registry is unusable ({registry.problem})"
+    if ownership is Ownership.HORONOM_OWNED and not registry.present:
+        return True, "the compositor owns the statusline but no provider registry is present"
+    if ownership is not Ownership.HORONOM_OWNED and _provider_ids(registry):
+        return True, "providers are registered but the compositor does not own the statusline"
+    return False, None
+
+
+def _doctor_providers(registry: RegistryDocument, home: pathlib.Path | None, probe: bool) -> list[dict]:
+    """One report line per registered provider, optionally by actually asking it.
+
+    Probing runs each provider exactly as the statusline would, which means it
+    may answer from -- and refresh -- Horonom's own provider cache. It never
+    touches host configuration, and it reports availability rather than the
+    rendered text, because a diagnostic that showed the line would invite reading
+    presentation problems as provider problems.
+    """
+    if not registry.usable or not registry.data:
+        return []
+    parsed = compositor.parse_registry(registry.data)
+    reports = []
+    for entry in parsed.providers:
+        report = {
+            "provider": entry.provider,
+            "scope": entry.scope.value,
+            "timeout_ms": entry.timeout_ms,
+            "command_name": pathlib.Path(entry.argv[0]).name,
+        }
+        if probe:
+            status = compositor.run_provider(entry, entry.timeout_ms, home)
+            report["availability"] = status.availability.value
+            report["segments"] = len(status.segments)
+        reports.append(report)
+    return reports
+
+
+def doctor(
+    settings_path: str | os.PathLike | None = None,
+    home: pathlib.Path | None = None,
+    *,
+    probe: bool = False,
+) -> dict:
+    """A read-only account of who owns the statusline and what would change it.
+
+    Answers the questions a user actually has when the statusline is not what
+    they expect, and mutates nothing on any path. What it deliberately does not
+    do is print their configuration: unrelated keys are counted, the configured
+    command is named but not reproduced, and no value from the settings file
+    reaches the output. That file holds credentials in its `env` block on this
+    very workstation.
+
+    Claude Code's support for a single `statusLine.command` is reported as the
+    premise it is, not as something discovered at runtime -- this module only
+    ever writes into a Claude Code settings file, so there is nothing to detect.
+    """
+    path = pathlib.Path(settings_path or DEFAULT_SETTINGS_PATH).expanduser()
+    registry = read_registry(home)
+    report: dict = {
+        "host": {
+            "tool": "claude-code",
+            "capability": "statusLine",
+            "supported": True,
+            "settings_path": str(path),
+            "scope": settings_scope(path),
+        },
+        "registry_path": str(registry.path),
+    }
+
+    try:
+        document = read_settings(path)
+    except (SettingsParseError, LifecycleError) as exc:
+        report["settings"] = {"exists": path.exists(), "readable": False, "problem": str(exc)}
+        report["slot"] = {"owner": Ownership.UNSUPPORTED_SHAPE.value, "horonom_owned": False}
+        report["drift"] = {"detected": True, "reason": str(exc)}
+        report["providers"] = _doctor_providers(registry, home, probe)
+        report["remediation"] = [
+            f"repair {path} by hand; no lifecycle operation will write to it until it parses"
+        ]
+        return report
+
+    ownership = classify(document)
+    owned = ownership is Ownership.HORONOM_OWNED
+    detected, reason = _drift(ownership, registry)
+    report["settings"] = {
+        "exists": document.existed,
+        "readable": True,
+        "problem": None,
+        "unrelated_key_count": len([key for key in document.data if key != STATUS_LINE_KEY]),
+    }
+    report["slot"] = {
+        "owner": ownership.value,
+        "horonom_owned": owned,
+        "command": _command_summary(document.status_line),
+    }
+    report["upstream"] = {
+        "recorded": _upstream_of(registry) is not None,
+        "name": pathlib.Path(shlex.split(_upstream_of(registry))[0]).name
+        if _upstream_of(registry)
+        else None,
+        "created_status_line": _lifecycle_of(registry).get("created_status_line"),
+    }
+    report["providers"] = _doctor_providers(registry, home, probe)
+    report["drift"] = {"detected": detected, "reason": reason}
+    report["mutation_outlook"] = {
+        "enabling_another_provider_changes_settings": not owned,
+        "disabling_one_provider_changes_settings": owned and len(_provider_ids(registry)) == 1,
+    }
+    report["remediation"] = list(_remediation(ownership, registry, owned))
+    return report
+
+
+def _remediation(ownership: Ownership, registry: RegistryDocument, owned: bool) -> tuple[str, ...]:
+    """What to do next, where there is something to do and it is safe to say so."""
+    if ownership is Ownership.UNSUPPORTED_SHAPE:
+        return (f"inspect {STATUS_LINE_KEY} in the settings file by hand",)
+    if ownership is Ownership.DRIFTED:
+        return (
+            "the statusline was changed outside this lifecycle; `enable --adopt` takes it back "
+            "and abandons the recorded original, `uninstall` removes the stale marker and leaves "
+            "the current command alone",
+        )
+    if ownership is Ownership.ADOPTABLE:
+        return ("`enable --adopt` records ownership of the configuration already in place",)
+    if registry.present and not registry.usable:
+        return (f"repair or remove {registry.path} by hand",)
+    if owned and not _provider_ids(registry):
+        return ("no providers are registered, so the statusline renders only the original line",)
+    return ()
