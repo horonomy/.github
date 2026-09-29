@@ -289,5 +289,39 @@ class TestTruncateToWidth(unittest.TestCase):
     def test_the_marker_is_ascii_so_it_survives_a_terminal_that_cannot_render_glyphs(self):
         self.assertTrue(render.ELLIPSIS.isascii())
 
+
+class TestEmojiPresentationSafety(unittest.TestCase):
+    """The mechanical regression guard for the live Libra glyph defect."""
+
+    def test_the_two_glyphs_libra_rendered_broken_are_refused(self):
+        for codepoint in (0x2696, 0x1F6E1):  # SCALES, SHIELD — emitted bare
+            with self.subTest(codepoint=hex(codepoint)):
+                self.assertFalse(render.is_emoji_presentation_safe(chr(codepoint)))
+
+    def test_adding_the_variation_selector_makes_those_glyphs_safe(self):
+        for codepoint in (0x2696, 0x1F6E1):
+            with self.subTest(codepoint=hex(codepoint)):
+                self.assertTrue(render.is_emoji_presentation_safe(chr(codepoint) + "️"))
+
+    def test_the_glyph_libra_rendered_correctly_is_accepted(self):
+        # U+1F9ED COMPASS worked in the same broken line, which is why the bug
+        # looked arbitrary rather than systematic.
+        self.assertTrue(render.is_emoji_presentation_safe("\U0001f9ed"))
+
+    def test_a_narrow_symbol_without_a_selector_is_refused(self):
+        self.assertFalse(render.is_emoji_presentation_safe("●"))  # BLACK CIRCLE
+
+    def test_an_empty_glyph_is_refused(self):
+        self.assertFalse(render.is_emoji_presentation_safe(""))
+
+    def test_the_rule_matches_east_asian_width_for_bare_codepoints(self):
+        for codepoint in (0x2705, 0x1F7E0, 0x1F6D1, 0x26AA, 0x2754, 0x1F4BB):
+            char = chr(codepoint)
+            with self.subTest(codepoint=hex(codepoint)):
+                self.assertEqual(
+                    render.is_emoji_presentation_safe(char),
+                    unicodedata.east_asian_width(char) in ("W", "F"),
+                )
+
 if __name__ == "__main__":
     unittest.main()
