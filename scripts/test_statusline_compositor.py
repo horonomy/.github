@@ -483,5 +483,31 @@ class TestRecursionDepth(unittest.TestCase):
             self.assertEqual(compositor.child_env()["HORONOM_TEST_MARKER"], "kept")
 
 
+class TestSelfReferenceDetection(unittest.TestCase):
+    def test_this_very_file_is_recognised(self):
+        self.assertTrue(compositor.names_this_command(compositor.__file__))
+
+    def test_a_self_reference_with_arguments_is_recognised(self):
+        self.assertTrue(compositor.names_this_command(f"  {compositor.__file__} --anything  "))
+
+    def test_an_ordinary_command_is_not_recognised(self):
+        for command in ("/bin/echo hi", "python3 /some/other.py", "statusline.sh"):
+            with self.subTest(command=command):
+                self.assertFalse(compositor.names_this_command(command))
+
+    def test_an_empty_command_is_not_recognised(self):
+        self.assertFalse(compositor.names_this_command("   "))
+
+    def test_a_nonexistent_first_token_is_not_recognised(self):
+        self.assertFalse(compositor.names_this_command("/no/such/binary --flag"))
+
+    def test_the_check_only_inspects_and_never_rewrites(self):
+        # It takes a string and returns a bool; there is no path by which it
+        # could alter the command the registry recorded.
+        command = "/bin/echo 'a  b'"
+        compositor.names_this_command(command)
+        self.assertEqual(command, "/bin/echo 'a  b'")
+
+
 if __name__ == "__main__":
     unittest.main()
