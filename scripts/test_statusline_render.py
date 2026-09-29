@@ -828,5 +828,53 @@ class TestModeLadder(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.assertEqual(candidates, render.MODE_LADDER[render.MODE_LADDER.index(mode):])
 
+
+class TestComposeUpstreamPreservation(unittest.TestCase):
+    """The non-negotiable half: the user's own line is never touched."""
+
+    def test_no_providers_returns_the_upstream_text_byte_for_byte(self):
+        self.assertEqual(render.compose(UPSTREAM, ()), UPSTREAM)
+
+    def test_no_upstream_and_no_providers_is_empty(self):
+        self.assertEqual(render.compose(None, ()), "")
+        self.assertEqual(render.compose("", ()), "")
+
+    def test_no_upstream_is_a_valid_state_and_renders_the_block_alone(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                block = render.compose(None, (fornax_status(),), mode=mode)
+                self.assertIn("Fornax", block)
+                self.assertFalse(block.startswith(render.UPSTREAM_SEPARATORS[mode]))
+
+    def test_the_upstream_text_is_always_a_verbatim_prefix(self):
+        weird = "  spaced  \tand\ttabbed  [$] 100%  "
+        for mode in MODES:
+            for budget in (None, 300, 120, 60, 30, 10, 1, 0):
+                with self.subTest(mode=mode, budget=budget):
+                    out = render.compose(
+                        weird,
+                        (fornax_status(), circinus_status(), libra_status()),
+                        mode=mode,
+                        width_budget=budget,
+                    )
+                    self.assertTrue(out.startswith(weird))
+
+    def test_the_upstream_text_is_never_counted_against_the_budget(self):
+        # The budget is ours to spend; the user's line is not ours to shorten.
+        long_upstream = "x" * 500
+        out = render.compose(long_upstream, (fornax_status(),), width_budget=200)
+        self.assertTrue(out.startswith(long_upstream))
+        self.assertIn("Fornax", out)
+
+    def test_a_provider_block_that_cannot_fit_leaves_the_upstream_line_alone(self):
+        out = render.compose(UPSTREAM, (fornax_status(),), width_budget=1)
+        self.assertEqual(out, UPSTREAM)
+
+    def test_the_upstream_text_is_divided_by_the_strongest_separator(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                out = render.compose(UPSTREAM, (fornax_status(),), mode=mode)
+                self.assertTrue(out.startswith(UPSTREAM + render.UPSTREAM_SEPARATORS[mode]))
+
 if __name__ == "__main__":
     unittest.main()
