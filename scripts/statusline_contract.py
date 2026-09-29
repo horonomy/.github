@@ -129,3 +129,57 @@ class SegmentState(enum.Enum):
         colour or sort them as if they were good news.
         """
         return self not in (SegmentState.NEUTRAL, SegmentState.UNKNOWN)
+
+
+class Confidence(enum.Enum):
+    """How much a producer trusts a value it computed without confirmation.
+
+    Matches Libra's `Confidence` domain type (low < medium < high). This is
+    *not* a risk, severity or impact scale, and the contract keeps it useless
+    on its own: a confidence is only renderable together with a
+    `ConfidenceSubject` saying what it is a confidence *in*.
+    """
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+    @property
+    def rank(self) -> int:
+        """Ordinal position, so a renderer can sort or threshold."""
+        return _CONFIDENCE_RANK[self]
+
+
+_CONFIDENCE_RANK = {
+    Confidence.LOW: 0,
+    Confidence.MEDIUM: 1,
+    Confidence.HIGH: 2,
+}
+
+
+class ConfidenceSubject(enum.Enum):
+    """What a `Confidence` value is a confidence *in*.
+
+    Exists because a bare `high` next to a task id reads as "high risk" or
+    "high priority" at a glance. Carrying the subject as its own enum lets
+    the shared renderer always print a disambiguating noun, and keeps the
+    choice of noun out of each product's formatting code.
+    """
+
+    PREFLIGHT_ESTIMATE = "preflight_estimate"
+    VERIFICATION = "verification"
+    POLICY_DECISION = "policy_decision"
+    UNSPECIFIED = "unspecified"
+
+    @property
+    def label(self) -> str:
+        """The short human noun a renderer prints next to the confidence."""
+        return _CONFIDENCE_SUBJECT_LABEL[self]
+
+
+_CONFIDENCE_SUBJECT_LABEL = {
+    ConfidenceSubject.PREFLIGHT_ESTIMATE: "preflight confidence",
+    ConfidenceSubject.VERIFICATION: "verification confidence",
+    ConfidenceSubject.POLICY_DECISION: "decision confidence",
+    ConfidenceSubject.UNSPECIFIED: "confidence",
+}
