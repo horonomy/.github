@@ -52,6 +52,87 @@ def status(**overrides) -> contract.ProviderStatus:
 
 # The three real first providers, with the state values each product actually
 # has. These are the fixtures the readability requirements were written against.
+def fornax_status(**overrides) -> contract.ProviderStatus:
+    fields = {
+        "provider": "fornax",
+        "provider_version": "0.4.1",
+        "scope": contract.Scope.PROJECT,
+        "availability": contract.Availability.AVAILABLE,
+        "order_hint": 100,
+        "segments": (
+            segment(
+                key="latest_verdict",
+                state=contract.SegmentState.OK,
+                label="Verified",
+                count=3,
+                total=3,
+                count_label="claims",
+                age_seconds=125,
+                explain_key="fornax.latest_verdict",
+            ),
+        ),
+    }
+    fields.update(overrides)
+    return contract.ProviderStatus(**fields)
+
+
+def circinus_status(**overrides) -> contract.ProviderStatus:
+    fields = {
+        "provider": "circinus",
+        "provider_version": "1.2.0",
+        "scope": contract.Scope.HOST,
+        "availability": contract.Availability.AVAILABLE,
+        "order_hint": 200,
+        "segments": (
+            segment(
+                key="would_block",
+                state=contract.SegmentState.WARN,
+                label="Shadow mode",
+                hypothetical=True,
+                count=2,
+                total=14,
+                count_label="tool calls",
+                explain_key="circinus.would_block",
+            ),
+        ),
+    }
+    fields.update(overrides)
+    return contract.ProviderStatus(**fields)
+
+
+def libra_status(**overrides) -> contract.ProviderStatus:
+    fields = {
+        "provider": "libra-governor",
+        "provider_version": "0.9.0",
+        "scope": contract.Scope.SESSION,
+        "availability": contract.Availability.AVAILABLE,
+        "order_hint": 300,
+        "segments": (
+            # The escalation carries the lower order_hint because a person being
+            # waited on outranks an estimate about work not yet attempted.
+            segment(
+                key="preflight",
+                state=contract.SegmentState.OK,
+                label="Preflight",
+                confidence=contract.Confidence.HIGH,
+                confidence_of=contract.ConfidenceSubject.PREFLIGHT_ESTIMATE,
+                explain_key="libra.preflight",
+                order_hint=10,
+            ),
+            segment(
+                key="approval",
+                state=contract.SegmentState.CRITICAL,
+                label="Awaiting your approval",
+                reason_code="escalated_to_human",
+                order_hint=0,
+            ),
+        ),
+    }
+    fields.update(overrides)
+    return contract.ProviderStatus(**fields)
+
+
+UPSTREAM = "~/proj  main*  claude-opus-5  $0.42"
 
 if __name__ == "__main__":
     unittest.main()
