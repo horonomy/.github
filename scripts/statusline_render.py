@@ -153,3 +153,39 @@ def cluster_width(cluster: str) -> int:
 def display_width(text: str) -> int:
     """Terminal columns `text` may occupy, by the conservative rule above."""
     return sum(cluster_width(cluster) for cluster in grapheme_clusters(text))
+
+
+ELLIPSIS = "..."
+
+
+def truncate_to_width(text: str, budget: int, *, ellipsis: str = ELLIPSIS) -> str:
+    """Shorten `text` to at most `budget` columns without splitting a cluster.
+
+    The ellipsis is ASCII rather than U+2026 on purpose: it is the one piece of
+    punctuation guaranteed to survive a terminal that cannot render the glyphs
+    this function exists to protect.
+
+    Returns `""` when the budget cannot even hold the ellipsis, because a bare
+    `...` conveys nothing and a partial cluster conveys mojibake. The caller's
+    degradation ladder is the right place to recover from that, not here.
+    """
+    if budget <= 0:
+        return ""
+    if display_width(text) <= budget:
+        return text
+    marker_width = display_width(ellipsis)
+    if marker_width >= budget:
+        return ""
+    kept: list[str] = []
+    used = 0
+    for cluster in grapheme_clusters(text):
+        width = cluster_width(cluster)
+        if used + width > budget - marker_width:
+            break
+        kept.append(cluster)
+        used += width
+    if not kept:
+        # Even one cluster did not fit. A lone "..." is the same nothing as an
+        # empty string but costs three columns to say it.
+        return ""
+    return "".join(kept).rstrip() + ellipsis
