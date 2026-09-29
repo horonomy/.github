@@ -80,6 +80,11 @@ MAX_UPSTREAM_TIMEOUT_MS = 5000
 MAX_PROVIDERS = 8
 MAX_ARGV_LENGTH = 16
 
+# How long a killed child's process group is given to release our stdout pipe.
+# Short by design: at this point we are only trying to collect output that was
+# already written, not waiting for anything to finish.
+KILL_GRACE_SECONDS = 0.1
+
 
 if __name__ == "__main__":
     sys.exit(main())
