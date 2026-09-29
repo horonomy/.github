@@ -611,12 +611,15 @@ class TestSourceFingerprint(unittest.TestCase):
         # which is what the cache needs, since the argv it fingerprints on a later
         # refresh is rebuilt from the registry and is never the same object.
         #
-        # Both references are load-bearing. Built inline, the first tuple is freed
-        # before the second is allocated, CPython hands out the same address
-        # again, and an implementation keyed on `id()` passes -- which is how this
-        # assertion was first written and what a mutation probe caught.
+        # Both references are load-bearing, and the second tuple must be built at
+        # run time. Two inline literals are folded into one constant by the
+        # compiler; and even written as an inline expression, the first tuple is
+        # freed before the second is allocated, CPython hands out the same address
+        # again, and an implementation keyed on `id()` passes. Both of those wrong
+        # spellings were caught by a mutation probe, so `assertIsNot` stays as the
+        # guard that this one has not quietly become a third.
         first = ("/usr/bin/fornax", "statusline")
-        second = ("/usr/bin/" + "fornax", "status" + "line")
+        second = tuple(list(first))
         self.assertIsNot(first, second)
         self.assertEqual(
             compositor.source_fingerprint(first), compositor.source_fingerprint(second)
