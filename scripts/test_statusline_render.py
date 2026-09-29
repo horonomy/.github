@@ -591,5 +591,104 @@ class TestSeparatorHierarchy(unittest.TestCase):
             self.assertIn(mode, render.SEGMENT_SEPARATORS)
             self.assertIn(mode, render.UPSTREAM_SEPARATORS)
 
+
+class TestRenderSegment(unittest.TestCase):
+    def test_the_label_is_always_present(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertIn("Example state", render.render_segment(segment(), mode))
+
+    def test_a_segment_with_no_optional_fields_has_no_empty_parentheses(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertNotIn("()", render.render_segment(segment(), mode))
+
+    def test_a_hypothetical_segment_always_says_it_was_not_enforced(self):
+        # Shadow-mode would-block must never read as an executed block.
+        rendered = {
+            mode: render.render_segment(
+                segment(state=contract.SegmentState.WARN, label="Shadow mode", hypothetical=True),
+                mode,
+            )
+            for mode in MODES
+        }
+        for mode, text in rendered.items():
+            with self.subTest(mode=mode):
+                self.assertIn(f"[{render.HYPOTHETICAL_TEXT}]", text)
+
+    def test_the_not_enforced_marker_is_welded_to_the_label(self):
+        text = render.render_segment(
+            segment(
+                state=contract.SegmentState.WARN,
+                label="Shadow mode",
+                hypothetical=True,
+                count=2,
+                total=14,
+                count_label="tool calls",
+            ),
+            render.PresentationMode.BALANCED,
+        )
+        self.assertLess(text.index(render.HYPOTHETICAL_TEXT), text.index("tool calls"))
+
+    def test_a_count_keeps_its_noun(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertIn(
+                    "claims", render.render_segment(fornax_status().segments[0], mode)
+                )
+
+    def test_a_count_without_a_label_is_not_rendered_as_a_bare_number(self):
+        # The contract refuses this combination, so this only guards a stub.
+        stub = segment(count=None, count_label=None)
+        self.assertNotIn("None", render.render_segment(stub, render.PresentationMode.BALANCED))
+
+    def test_a_reason_is_kept_in_compact_mode_only_for_an_exception(self):
+        calm = segment(state=contract.SegmentState.OK, reason_code="all_good")
+        loud = segment(state=contract.SegmentState.CRITICAL, reason_code="escalated_to_human")
+        self.assertNotIn("all good", render.render_segment(calm, render.PresentationMode.COMPACT))
+        self.assertIn(
+            "escalated to human", render.render_segment(loud, render.PresentationMode.COMPACT)
+        )
+
+    def test_a_reason_is_kept_in_balanced_mode_for_any_state(self):
+        calm = segment(state=contract.SegmentState.OK, reason_code="all_good")
+        self.assertIn("all good", render.render_segment(calm, render.PresentationMode.BALANCED))
+
+    def test_plain_mode_output_is_ascii_for_every_product_fixture(self):
+        for status_ in (fornax_status(), circinus_status(), libra_status()):
+            for seg in status_.segments:
+                with self.subTest(provider=status_.provider, key=seg.key):
+                    self.assertTrue(
+                        render.render_segment(seg, render.PresentationMode.PLAIN).isascii()
+                    )
+
+    def test_a_wire_string_state_is_accepted_as_well_as_an_enum(self):
+        class Stub:
+            key = "k"
+            state = "warn"
+            label = "Stub"
+            reason_code = None
+            reason_label = None
+            confidence = None
+            confidence_of = None
+            age_seconds = None
+            count = None
+            total = None
+            count_label = None
+            hypothetical = False
+
+        self.assertIn(
+            render.STATE_TEXT["warn"], render.render_segment(Stub(), render.PresentationMode.PLAIN)
+        )
+
+    def test_every_rendering_carries_at_least_one_readable_word(self):
+        # Glyphs reinforce meaning; they are never the only carrier of it.
+        for status_ in (fornax_status(), circinus_status(), libra_status()):
+            for seg in status_.segments:
+                for mode in MODES:
+                    with self.subTest(key=seg.key, mode=mode):
+                        text = render.render_segment(seg, mode)
+                        self.assertRegex(text, r"[A-Za-z]{3,}")
+
 if __name__ == "__main__":
     unittest.main()
