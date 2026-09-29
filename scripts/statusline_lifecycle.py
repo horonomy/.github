@@ -643,3 +643,193 @@ def _registry_with(
         "marker_version": MARKER_VERSION,
     }
     return base
+
+
+def _enable_refusal(
+    ownership: Ownership, registry: RegistryDocument, adopt: bool
+) -> tuple[str | None, tuple[str, ...]]:
+    """Why enabling must not proceed, or `(None, ())` if it may.
+
+    Every refusal here exists because proceeding would lose something we cannot
+    get back: either the user's own statusline, or the only record of what their
+    statusline used to be. `--adopt` is the user saying they accept that loss;
+    it is deliberately one flag with one meaning, because a user who has to
+    choose between three flags to get past a refusal has not understood any of
+    them.
+    """
+    if ownership is Ownership.UNSUPPORTED_SHAPE:
+        return (
+            "the configured statusLine is a shape this version does not understand, "
+            "so routing it through the compositor could silently disable it",
+            (
+                f"inspect {STATUS_LINE_KEY} in the settings file by hand",
+                "upgrade Horonom if this shape is newer than this version",
+            ),
+        )
+    if ownership is Ownership.DRIFTED:
+        return (
+            "CONFIG_DRIFT: the statusLine carries a Horonom ownership marker but its "
+            "command is not the compositor, so it was changed outside this lifecycle",
+            (
+                "run `doctor` to see the observed state",
+                "re-run with --adopt to take the slot and abandon the recorded original",
+            ),
+        )
+    if ownership is Ownership.ADOPTABLE and not adopt:
+        return (
+            "the configured command is the Horonom compositor but carries no ownership "
+            "marker, so this install cannot prove the configuration is its own",
+            ("re-run with --adopt if this configuration is yours",),
+        )
+    if ownership is Ownership.HORONOM_OWNED and not registry.present and not adopt:
+        return (
+            "the compositor owns the statusline but its registry is missing, and the "
+            "registry holds the only record of the original statusline command",
+            (
+                "restore the registry from wherever it went",
+                "re-run with --adopt to continue without a recorded original",
+            ),
+        )
+    if registry.present and not registry.usable and not adopt:
+        return (
+            f"the provider registry is unusable ({registry.problem}), and overwriting it "
+            "would discard both the other registered providers and the recorded original",
+            (
+                f"repair or delete {registry.path.name} by hand",
+                "re-run with --adopt to start a fresh registry",
+            ),
+        )
+    return (None, ())
+
+
+def _preservation_changes(document: SettingsDocument, others: tuple[str, ...]) -> list[Change]:
+    """Disclosure of what this operation is deliberately leaving alone.
+
+    Key *names* are listed; values never are. This file routinely holds
+    credentials in its `env` block, and a plan output is exactly the kind of
+    thing a user pastes into a bug report.
+    """
+    changes: list[Change] = []
+    unrelated = [key for key in document.data if key != STATUS_LINE_KEY]
+    if unrelated:
+        changes.append(
+            Change(
+                ChangeKind.PRESERVED_USER,
+                "settings",
+                f"{len(unrelated)} unrelated top-level key(s) unchanged: {', '.join(unrelated)}",
+            )
+        )
+    status_line = document.status_line
+    if isinstance(status_line, dict):
+        kept = [key for key in status_line if key not in ("command", MARKER_KEY)]
+        if kept:
+            changes.append(
+                Change(
+                    ChangeKind.PRESERVED_USER,
+                    STATUS_LINE_KEY,
+                    f"{len(kept)} existing statusLine key(s) unchanged: {', '.join(kept)}",
+                )
+            )
+    if others:
+        changes.append(
+            Change(
+                ChangeKind.PRESERVED_OTHER_PRODUCT,
+                "registry.providers",
+                f"{len(others)} other provider(s) left registered: {', '.join(others)}",
+            )
+        )
+    return changes
+
+
+def plan_enable(
+    document: SettingsDocument,
+    registry: RegistryDocument,
+    registration: ProviderRegistration,
+    *,
+    adopt: bool = False,
+) -> Plan:
+    """What enabling this provider would change, without changing anything.
+
+    The returned plan is the only thing `apply` will act on, and it carries the
+    fingerprint of the settings file it was formed against so that applying a
+    plan to state that has since moved on is a refusal rather than a clobber.
+    """
+    ownership = classify(document)
+    refusal, remediation = _enable_refusal(ownership, registry, adopt)
+    if refusal is not None:
+        return Plan(
+            operation="enable",
+            settings_path=document.path,
+            ownership=ownership,
+            changes=(Change(ChangeKind.BLOCKED_UNKNOWN, STATUS_LINE_KEY, refusal),),
+            fingerprint=document.fingerprint,
+            refusal=refusal,
+            remediation=remediation,
+        )
+
+    before = document.status_line if isinstance(document.status_line, dict) else None
+    changes: list[Change] = []
+    if before is None:
+        status_line = {"type": SUPPORTED_STATUS_LINE_TYPE}
+        upstream: str | None = None
+        created: object = True
+        changes.append(
+            Change(ChangeKind.ADD, STATUS_LINE_KEY, "created; no statusline was configured")
+        )
+    else:
+        status_line = dict(before)
+        # Only a proven prior install may hand down a recorded original. An
+        # adopted configuration's registry might name a command that stopped
+        # being the user's statusline long ago, and restoring that later would
+        # write a stale command into their config -- which is the very thing
+        # this lifecycle exists to prevent.
+        proven = ownership is Ownership.HORONOM_OWNED and registry.usable
+        if ownership is Ownership.USER_OWNED:
+            upstream = before["command"]
+            created = False
+            changes.append(
+                Change(
+                    ChangeKind.UPDATE,
+                    f"{STATUS_LINE_KEY}.command",
+                    "routed through the compositor; the existing command is registered as the "
+                    "upstream provider, run first, and its output kept at the front of the line",
+                )
+            )
+        else:
+            upstream = _upstream_of(registry) if proven else None
+            created = _lifecycle_of(registry).get("created_status_line") if proven else None
+
+    status_line["command"] = compositor_command()
+    status_line[MARKER_KEY] = {"owner": MARKER_OWNER, "version": MARKER_VERSION}
+    settings_after = dict(document.data)
+    settings_after[STATUS_LINE_KEY] = status_line
+
+    registry_after = _registry_with(
+        registry,
+        registration,
+        upstream=upstream,
+        settings_path=document.path,
+        created=created,
+    )
+    already = registration.provider in _provider_ids(registry)
+    changes.append(
+        Change(
+            ChangeKind.UPDATE if already else ChangeKind.ADD,
+            f"registry.providers[{registration.provider}]",
+            f"{registration.scope}-scoped provider running {shlex.join(registration.argv)}",
+        )
+    )
+    others = tuple(
+        provider for provider in _provider_ids(registry) if provider != registration.provider
+    )
+    changes.extend(_preservation_changes(document, others))
+
+    return Plan(
+        operation="enable",
+        settings_path=document.path,
+        ownership=ownership,
+        changes=tuple(changes),
+        fingerprint=document.fingerprint,
+        settings_after=None if settings_after == document.data else settings_after,
+        registry_after=None if registry_after == registry.data else registry_after,
+    )
