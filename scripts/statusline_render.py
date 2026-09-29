@@ -501,3 +501,20 @@ def provider_display_name(provider_id: str) -> str:
     """
     words = provider_id.replace("-", " ").replace("_", " ").split()
     return " ".join(word[:1].upper() + word[1:] for word in words) or provider_id
+
+
+def scope_marker(scope: str, mode: PresentationMode) -> str:
+    """The marker identifying what a provider's state is scoped to.
+
+    Always rendered, for every provider and every scope. Two columns is a cheap
+    price for removing the ambiguity, and the failure it prevents is concrete:
+    host-wide enforcement state read as if it applied only to this session is a
+    user believing their other sessions are unguarded, or guarded, incorrectly.
+
+    An unrecognised scope renders as its bracketed literal rather than being
+    dropped. The contract refuses unknown scopes on parse, so this only fires
+    for a hand-built value, and inventing a glyph for it would be a guess.
+    """
+    if mode.uses_glyphs and scope in SCOPE_GLYPHS:
+        return SCOPE_GLYPHS[scope]
+    return SCOPE_TEXT.get(scope, f"[{scope}]")
