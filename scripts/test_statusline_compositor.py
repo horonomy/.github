@@ -252,5 +252,20 @@ class TestProviderArgvValidation(unittest.TestCase):
         )
 
 
+class TestScopeValidation(unittest.TestCase):
+    def test_every_contract_scope_is_accepted(self):
+        for scope in contract.Scope:
+            with self.subTest(scope=scope):
+                self.assertIs(compositor._require_scope(scope.value, "p"), scope)
+
+    def test_an_unknown_scope_is_refused_rather_than_defaulted(self):
+        # Rendering host-wide state as session-scoped would tell the user
+        # something false about which session a provider speaks for.
+        for value in ("global", "", None, "HOST", 1):
+            with self.subTest(value=value):
+                with self.assertRaises(compositor.RegistryError):
+                    compositor._require_scope(value, "p")
+
+
 if __name__ == "__main__":
     unittest.main()
