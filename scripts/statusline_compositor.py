@@ -301,5 +301,52 @@ def child_env() -> dict:
     return env
 
 
+def _run_bounded(
+    command: str | tuple[str, ...], payload: bytes, timeout_ms: int, *, shell: bool
+) -> tuple[int | None, bytes]:
+    """Run a child under a hard time bound and return `(returncode, stdout)`.
+
+    Deliberately not `subprocess.run`, for one reason: on timeout it kills only
+    the direct child. A provider implemented as a shell script that forks a
+    worker leaves that worker orphaned, and this command runs on every
+    statusline refresh — a few times a minute, for as long as the session lasts
+    — so a per-refresh leak accumulates into a real process count on the user's
+    machine. Each child therefore gets its own session and the timeout kills the
+    whole process group.
+
+    The wait after the kill is itself bounded. An orphan holding the write end of
+    our stdout pipe can delay EOF for as long as it likes, and blocking there
+    would hand a misbehaving provider the ability to stall the host's render.
+
+    `returncode` is `None` when the child was killed for exceeding its bound, so
+    a timeout is distinguishable from a clean non-zero exit. Partial stdout is
+    returned either way: output already produced is still output.
+    """
+    child = subprocess.Popen(
+        command,
+        # Only ever true for the user's own configured command; see run_upstream
+        # for why passing that string to a shell unmodified is the safe option.
+        shell=shell,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        env=child_env(),
+        start_new_session=True,
+    )
+    try:
+        produced, _ = child.communicate(input=payload, timeout=timeout_ms / 1000)
+        return child.returncode, produced or b""
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+        except OSError:
+            child.kill()
+        try:
+            produced, _ = child.communicate(timeout=KILL_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            produced = b""
+        return None, produced or b""
+
+
 if __name__ == "__main__":
     sys.exit(main())
