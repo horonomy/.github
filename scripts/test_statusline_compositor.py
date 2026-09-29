@@ -81,5 +81,13 @@ def provider_document(provider: str, command: list[str], **overrides) -> dict:
     return payload
 
 
+def without_state_home(**environment) -> unittest.mock.patch:
+    """Patch the environment so the default state home is what gets resolved."""
+    patcher = unittest.mock.patch.dict(os.environ, environment)
+    patcher.start()
+    os.environ.pop(compositor.STATE_HOME_ENV, None)
+    return patcher
+
+
 if __name__ == "__main__":
     unittest.main()
