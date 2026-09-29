@@ -681,3 +681,40 @@ def _fit_by_dropping(statuses: tuple, mode: PresentationMode, budget: int) -> st
 # riddle, so the ladder gives up and hands the whole line back to the user
 # instead.
 MIN_LABEL_COLUMNS = 6
+
+
+def _fit_minimal(statuses: tuple, mode: PresentationMode, budget: int) -> str:
+    """The narrowest honest rung: the single worst state, and what it hides.
+
+    Reduces to one marker plus one truncated label plus the hidden-segment
+    marker. Truncation is applied *only* to the provider's own prose, never to a
+    host-owned token, which is why `[NOT ENFORCED]` and `[+3 more]` cannot be
+    mangled here — a hypothetical segment that cannot render its marker in full
+    is not shown at this rung at all.
+
+    Returns `""` when the result would be unreadable or would have to hide
+    things without saying so. The caller then emits the upstream line alone.
+    """
+    candidates = [
+        (provider_severity(status), -index, status, segment)
+        for index, status in enumerate(statuses)
+        for segment in (getattr(status, "segments", ()) or ())
+        if STATE_SEVERITY.get(_enum_value(segment.state)) is not None
+    ]
+    if not candidates:
+        return ""
+    _, _, _, worst = max(
+        candidates,
+        key=lambda item: (STATE_SEVERITY[_enum_value(item[3].state)], item[0], item[1]),
+    )
+
+    hidden = _segment_count(statuses) - 1
+    suffix = f"{SEGMENT_SEPARATORS[mode]}{_hidden_marker(hidden)}" if hidden else ""
+    head = f"{state_marker(_enum_value(worst.state), mode)} "
+    label_budget = budget - display_width(suffix) - display_width(head)
+    if label_budget < MIN_LABEL_COLUMNS:
+        return ""
+    label = truncate_to_width(worst.label, label_budget)
+    if not label:
+        return ""
+    return f"{head}{label}{suffix}"
