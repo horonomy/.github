@@ -191,5 +191,105 @@ class OwnershipTest(unittest.TestCase):
                     self.assertFalse(owner.is_writable_by_lifecycle)
 
 
+class TokenValidatorTest(unittest.TestCase):
+    def test_accepts_a_plain_lowercase_token(self) -> None:
+        self.assertEqual(sc.require_token("evidence_gap", "reason_code"), "evidence_gap")
+
+    def test_rejects_a_path_shaped_token(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.require_token("/etc/passwd", "reason_code")
+
+    def test_rejects_uppercase_and_spaces(self) -> None:
+        for bad in ("Evidence_Gap", "evidence gap", "evidence:gap", ""):
+            with self.subTest(bad=bad):
+                with self.assertRaises(sc.ContractViolation):
+                    sc.require_token(bad, "reason_code")
+
+    def test_provider_id_allows_hyphens_but_not_separators(self) -> None:
+        self.assertEqual(sc.require_provider_id("libra-governor"), "libra-governor")
+        with self.assertRaises(sc.ContractViolation):
+            sc.require_provider_id("libra/governor")
+
+    def test_explain_key_is_bounded_to_four_dotted_parts(self) -> None:
+        self.assertEqual(
+            sc.require_explain_key("fornax.latest_finding"), "fornax.latest_finding"
+        )
+        with self.assertRaises(sc.ContractViolation):
+            sc.require_explain_key("a.b.c.d.e")
+
+
+class LabelAllowlistTest(unittest.TestCase):
+    LEGITIMATE = (
+        "Unverified",
+        "escalated — awaiting approval",
+        "P90 ≤ 12m",
+        "would block (113 of 705)",
+        "shadow mode",
+        "no findings yet",
+        "stale, restart required",
+        "97% verified",
+    )
+
+    def test_accepts_the_labels_the_products_actually_need(self) -> None:
+        for label in self.LEGITIMATE:
+            with self.subTest(label=label):
+                self.assertEqual(sc.require_label(label), label)
+
+    def test_rejects_an_absolute_path(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.require_label("/home/someone/.claude/statusline.sh")
+
+    def test_rejects_a_home_relative_path(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.require_label("~/.claude/settings.json")
+
+    def test_rejects_a_windows_path(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.require_label("C:\\Users\\someone\\config")
+
+    def test_rejects_a_url(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.require_label("https://example.invalid/status")
+
+    def test_rejects_a_key_equals_value_pair(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.require_label("api_key=redacted")
+
+    def test_rejects_a_shell_expansion(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.require_label("$HOME is set")
+
+    def test_rejects_an_embedded_emoji(self) -> None:
+        # The host owns iconography; a provider glyph would break consistency.
+        for glyph in ("\N{SHIELD}", "\N{SCALES}", "\N{COMPASS}"):
+            with self.subTest(glyph=glyph):
+                with self.assertRaises(sc.ContractViolation):
+                    sc.require_label(f"{glyph} fornax")
+
+    def test_rejects_a_newline_so_a_provider_cannot_add_a_line(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.require_label("first line\nsecond line")
+
+    def test_rejects_a_control_character(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.require_label("verified\x1b[31m")
+
+    def test_rejects_an_overlong_label(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.require_label("v" * (sc.MAX_LABEL_CHARS + 1))
+
+    def test_accepts_a_label_exactly_at_the_bound(self) -> None:
+        label = "v" * sc.MAX_LABEL_CHARS
+        self.assertEqual(sc.require_label(label), label)
+
+    def test_rejects_an_empty_label(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.require_label("")
+
+    def test_rejects_a_non_string(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.require_label(None)
+
+
 if __name__ == "__main__":
     unittest.main()
