@@ -523,6 +523,18 @@ def render_segment(segment: object, mode: PresentationMode) -> str:
     details: list[str] = []
     if segment.count is not None and segment.count_label:
         details.append(format_count(segment.count, segment.total, segment.count_label, mode))
+    # Beside the count rather than beside the age: both are quantities the
+    # segment is reporting, whereas the age qualifies the whole reading and so
+    # stays last.
+    #
+    # `getattr` rather than attribute access, unlike the fields above it, because
+    # this function's contract is "anything with the same attributes" and these
+    # two arrived after that promise was made — a segment object from an older
+    # copy of the contract must still render, minus the field it cannot supply.
+    duration = getattr(segment, "duration_seconds", None)
+    duration_label = getattr(segment, "duration_label", None)
+    if duration is not None and duration_label:
+        details.append(format_duration(duration, duration_label))
     confidence = _enum_value(segment.confidence)
     if confidence is not None:
         details.append(format_confidence(confidence, _enum_value(segment.confidence_of), mode))
