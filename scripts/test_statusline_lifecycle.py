@@ -1312,6 +1312,13 @@ class DoctorTest(LifecycleCase):
         data["statusLine"]["command"] = "/Users/founder/.claude/private/secret-statusline.sh"
         self.write(data)
 
+        # Before anything is enabled, so that the command being summarised is the
+        # user's own. Diagnosing someone else's statusline is exactly when this is
+        # run, and it is the case where the slot holds a path we did not choose.
+        untouched = json.dumps(lifecycle.doctor(self.settings, self.home))
+        self.assertNotIn("/Users/founder", untouched)
+        self.assertIn("secret-statusline.sh", untouched)
+
         self.enable("fornax", argv=("/Users/founder/private/bin/fornax", "statusline"))
 
         rendered = json.dumps(lifecycle.doctor(self.settings, self.home))
