@@ -593,6 +593,8 @@ class Segment:
     count: int | None = None
     total: int | None = None
     count_label: str | None = None
+    duration_seconds: int | None = None
+    duration_label: str | None = None
     hypothetical: bool = False
     explain_key: str | None = None
     order_hint: int = 0
@@ -608,6 +610,7 @@ class Segment:
             require_safe_label(self.reason_label, "segment.reason_label")
         self._validate_confidence()
         self._validate_counts()
+        self._validate_duration()
         if self.age_seconds is not None:
             require_bounded_int(self.age_seconds, "segment.age_seconds", MAX_AGE_SECONDS)
         if not isinstance(self.hypothetical, bool):
@@ -647,6 +650,31 @@ class Segment:
                 raise ContractViolation("segment.count must not exceed segment.total")
         if self.count_label is not None:
             require_safe_label(self.count_label, "segment.count_label")
+
+    def _validate_duration(self) -> None:
+        """A span needs to say what span it is, for the same reason a count does.
+
+        `P90 5d4h` is readable; a bare `5d4h` beside a task id is not — it could
+        be elapsed, remaining, a budget or a timeout. So the noun is mandatory,
+        mirroring `count`/`count_label` exactly rather than inventing a second
+        rule for the same defect.
+
+        The host owns the *formatting* (`statusline_render.format_duration`); the
+        provider supplies seconds and the noun. A product that formatted its own
+        `5d4h` would be one more place for two products to disagree about what a
+        day is, which is the drift this contract exists to prevent.
+        """
+        if self.duration_seconds is not None:
+            require_bounded_int(
+                self.duration_seconds, "segment.duration_seconds", MAX_DURATION_SECONDS
+            )
+            if self.duration_label is None:
+                raise ContractViolation(
+                    "segment.duration_seconds requires segment.duration_label; an "
+                    "unlabelled span could be elapsed, remaining or a budget"
+                )
+        if self.duration_label is not None:
+            require_safe_label(self.duration_label, "segment.duration_label")
 
 
 # A provider's own version token, for capability negotiation and for a
@@ -884,11 +912,17 @@ def _segment_to_wire(segment: Segment) -> dict:
         "state": segment.state.value,
         "label": segment.label,
     }
-    for name in ("reason_code", "reason_label", "count_label", "explain_key"):
+    for name in (
+        "reason_code",
+        "reason_label",
+        "count_label",
+        "duration_label",
+        "explain_key",
+    ):
         value = getattr(segment, name)
         if value is not None:
             payload[name] = value
-    for name in ("age_seconds", "count", "total"):
+    for name in ("age_seconds", "count", "total", "duration_seconds"):
         value = getattr(segment, name)
         if value is not None:
             payload[name] = value
@@ -1010,6 +1044,8 @@ def _segment_from_wire(payload: object, index: int) -> Segment:
         count=payload.get("count"),
         total=payload.get("total"),
         count_label=payload.get("count_label"),
+        duration_seconds=payload.get("duration_seconds"),
+        duration_label=payload.get("duration_label"),
         hypothetical=bool(payload.get("hypothetical", False)),
         explain_key=payload.get("explain_key"),
         order_hint=payload.get("order_hint", 0),

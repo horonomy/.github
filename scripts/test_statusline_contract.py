@@ -814,8 +814,15 @@ class WireParsingTest(unittest.TestCase):
         with self.assertRaises(sc.ContractViolation):
             sc.provider_status_from_wire(_payload(segments=["ok"]))
 
-    def test_a_payload_survives_a_round_trip(self) -> None:
-        rich = _payload(
+    def _rich(self) -> dict:
+        """A payload setting every optional field, for the two tests below.
+
+        One fixture rather than two, so the completeness guard reads the same
+        object the round-trip asserts on. It used to check a hand-maintained
+        list of names instead, which could pass while the round-trip itself
+        omitted a field.
+        """
+        return _payload(
             observed_at="2026-09-29T08:00:00Z",
             cache_ttl_seconds=5,
             order_hint=20,
@@ -833,30 +840,23 @@ class WireParsingTest(unittest.TestCase):
                     "count": 113,
                     "total": 705,
                     "count_label": "findings",
+                    "duration_seconds": 447120,
+                    "duration_label": "P90",
                     "hypothetical": True,
                     "explain_key": "fornax.latest_finding",
                     "order_hint": 3,
                 }
             ],
         )
+
+    def test_a_payload_survives_a_round_trip(self) -> None:
+        rich = self._rich()
         self.assertEqual(sc.provider_status_from_wire(rich).to_wire(), rich)
 
     def test_the_round_trip_fixture_exercises_every_segment_field(self) -> None:
         # Guards the test above from silently stopping at the fields that
         # existed when it was written.
-        covered = set(_payload()["segments"][0]) | {
-            "reason_code",
-            "reason_label",
-            "confidence",
-            "confidence_of",
-            "age_seconds",
-            "count",
-            "total",
-            "count_label",
-            "hypothetical",
-            "explain_key",
-            "order_hint",
-        }
+        covered = set(self._rich()["segments"][0])
         declared = {f.name for f in dataclasses.fields(sc.Segment)}
         self.assertEqual(declared - covered, set())
 
