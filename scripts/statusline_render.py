@@ -111,3 +111,44 @@ def grapheme_clusters(text: str) -> list[str]:
         else:
             clusters.append(char)
     return clusters
+
+
+_WIDE_EAST_ASIAN_WIDTHS = frozenset({"W", "F"})
+_ZERO_WIDTH = _VARIATION_SELECTORS | _TAG_CHARACTERS | {_ZWJ}
+
+
+def _codepoint_width(char: str) -> int:
+    if char in _ZERO_WIDTH or unicodedata.category(char) in _COMBINING_CATEGORIES:
+        return 0
+    if unicodedata.east_asian_width(char) in _WIDE_EAST_ASIAN_WIDTHS:
+        return 2
+    return 1
+
+
+def cluster_width(cluster: str) -> int:
+    """Terminal columns one cluster may occupy, rounded *up*.
+
+    Deliberately conservative, because the two errors are not symmetric: an
+    over-estimate wastes a column, while an under-estimate wraps the line and
+    corrupts the whole statusline including the user's own output.
+
+    Two consequences worth knowing:
+
+    - A ZWJ sequence is charged for each of its visible components. Terminals
+      disagree about whether `<family emoji>` is 2 columns or 6; charging 6
+      means we are never the reason the line wrapped.
+    - A variation-selector-16 sequence is charged 2 even when its base
+      codepoint is narrow, because U+FE0F *requests* emoji presentation and
+      that is what makes a 1-column base render in 2 columns.
+    """
+    if not cluster:
+        return 0
+    total = sum(_codepoint_width(char) for char in cluster)
+    if "️" in cluster:
+        total = max(total, 2)
+    return max(total, 1)
+
+
+def display_width(text: str) -> int:
+    """Terminal columns `text` may occupy, by the conservative rule above."""
+    return sum(cluster_width(cluster) for cluster in grapheme_clusters(text))
