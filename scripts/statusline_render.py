@@ -251,3 +251,12 @@ STATE_TEXT = {
     "neutral": "NEUTRAL",
     "unknown": "UNKNOWN",
 }
+
+# `[host]` / `[session]` / `[project]` are fixed by the provider contract, not
+# chosen here — see governance/product/statusline-provider-contract.md, "Scope
+# is explicit". Changing them is a contract change.
+SCOPE_TEXT = {
+    "host": "[host]",
+    "session": "[session]",
+    "project": "[project]",
+}
