@@ -94,6 +94,10 @@ cannot reach the renderer:
 - `probe_failed != nothing_happened`. `error` renders at `warn` weight;
   `unsupported` and `unavailable` render as `neutral`. They are not
   interchangeable.
+- The same provider cannot carry a `confidence`. A confidence is a claim about
+  a result it computed, so `unavailable` plus `high` is incoherent in the most
+  misleading direction available. `age_seconds` *is* still allowed, because
+  "last read two hours ago, unavailable now" is true and useful.
 - A bare `count` is refused without its `count_label` — an unlabelled number is
   exactly the opaque abbreviation this contract replaces.
 - `confidence` and `confidence_of` must be set together. A bare
@@ -115,8 +119,16 @@ always available.
 ## Privacy allowlist
 
 Provider output is allowlisted, not filtered. A label must be short prose:
-letters, digits, spaces, and a small set of punctuation (`. , ' - — ( ) % + ?
-! ≤ ≥`). Everything else is refused.
+**ASCII** letters and digits, spaces, and a small set of punctuation (`. , ' -
+— ( ) % + ? ! ≤ ≥`). Everything else is refused.
+
+Alphanumerics are ASCII-only for two reasons, and the second is the
+load-bearing one. It removes a homoglyph channel — Cyrillic `а` is
+alphanumeric. And it keeps the length bound honest: fullwidth and CJK
+characters are alphanumeric too and occupy two terminal columns each, so
+without the restriction a 48-character label could be 96 columns and break the
+shared line. Widening this is a deliberate contract change that has to arrive
+with column-aware bounds.
 
 That charset is the structural defence, and it is load-bearing rather than
 cosmetic. A value that cannot contain `/`, `\`, `:`, `=`, `@`, `~`, `$` or a
