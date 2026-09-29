@@ -184,7 +184,7 @@ class ChangeKind(enum.Enum):
 _INDENT_PATTERN = re.compile(rb'\n([ \t]+)"')
 
 
-def detect_indent(raw: bytes) -> int | str:
+def detect_indent(raw: bytes) -> int | str | None:
     """The indentation the document already uses, for `json.dump` to reuse.
 
     Re-serialising with our own preferred formatting would rewrite every line of
@@ -192,12 +192,16 @@ def detect_indent(raw: bytes) -> int | str:
     one line into hundreds and makes the honest claim "we changed one key"
     impossible to see. Tabs are returned as a string because that is the form
     `json.dump` wants for them.
+
+    `None` means the document is on one line. It is returned only for a file that
+    has content and no indented key, so an empty or missing file still gets
+    readable output rather than a minified one.
     """
     match = _INDENT_PATTERN.search(raw)
-    if match is None:
-        return DEFAULT_INDENT
-    indent = match.group(1)
-    return "\t" * len(indent) if indent.startswith(b"\t") else len(indent)
+    if match is not None:
+        indent = match.group(1)
+        return "\t" * len(indent) if indent.startswith(b"\t") else len(indent)
+    return None if raw.strip() else DEFAULT_INDENT
 
 
 @dataclasses.dataclass(frozen=True)
@@ -856,7 +860,9 @@ def plan_enable(
     )
 
 
-def serialize(data: dict, *, indent: int | str = DEFAULT_INDENT, trailing_newline: bool = True) -> bytes:
+def serialize(
+    data: dict, *, indent: int | str | None = DEFAULT_INDENT, trailing_newline: bool = True
+) -> bytes:
     """Render a settings document back to bytes as close to how it arrived as JSON allows.
 
     `ensure_ascii=False` matters more than it looks: escaping non-ASCII would
@@ -866,7 +872,13 @@ def serialize(data: dict, *, indent: int | str = DEFAULT_INDENT, trailing_newlin
     newline come from the file we read for the same reason -- a mutation that
     reformats the parts it does not own is still a mutation of them.
     """
-    text = json.dumps(data, indent=indent, ensure_ascii=False)
+    if indent is None:
+        # A one-line document stays one line. The compact separators match what a
+        # generator like JSON.stringify emits, so the common machine-written file
+        # round-trips byte for byte instead of being quietly reflowed by us.
+        text = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
+    else:
+        text = json.dumps(data, indent=indent, ensure_ascii=False)
     return (text + "\n" if trailing_newline else text).encode("utf-8")
 
 
