@@ -54,5 +54,19 @@ LEAK_SLEEP = "27"
 WARM_LIMIT_SECONDS = 10.0
 
 
+def wire(**overrides) -> dict:
+    """A minimal valid provider answer, as a provider would print it."""
+    payload = {
+        "contract_version": 1,
+        "provider": "fornax",
+        "provider_version": "0.4.1",
+        "scope": "project",
+        "availability": "available",
+        "segments": [{"key": "latest_verdict", "state": "ok", "label": "Verified"}],
+    }
+    payload.update(overrides)
+    return payload
+
+
 if __name__ == "__main__":
     unittest.main()
