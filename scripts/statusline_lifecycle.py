@@ -1575,23 +1575,33 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _run_report(options: argparse.Namespace, path: pathlib.Path, stream: object) -> int:
+    """The two read-only commands, which answer without reading a plan at all.
+
+    Kept apart from the mutating commands because the whole point of `doctor`
+    and `list` is that they cannot reach a write, and a shared prologue is how
+    that stops being obvious.
+    """
+    report = doctor(path, probe=getattr(options, "probe", False))
+    if options.command == "list":
+        # `.get`, because an unparseable settings file yields a report with no
+        # `upstream` section at all -- and that is precisely the state a user
+        # runs this command to understand, so it must not be the state that
+        # raises.
+        report = {key: report.get(key) for key in ("slot", "upstream", "providers", "drift")}
+        print(json.dumps(report, indent=2) if options.json else _describe_list(report), file=stream)
+        return EXIT_OK
+    print(json.dumps(report, indent=2) if options.json else _describe_doctor(report), file=stream)
+    return EXIT_REFUSED if report["drift"]["detected"] else EXIT_OK
+
+
 def main(argv: list[str] | None = None, stdout: object = None) -> int:
     options = build_parser().parse_args(argv)
     stream = stdout if stdout is not None else sys.stdout
     path = _settings_path(options.settings)
 
     if options.command in ("doctor", "list"):
-        report = doctor(path, probe=getattr(options, "probe", False))
-        if options.command == "list":
-            # `.get`, because an unparseable settings file yields a report with no
-            # `upstream` section at all -- and that is precisely the state a user
-            # runs this command to understand, so it must not be the state that
-            # raises.
-            report = {key: report.get(key) for key in ("slot", "upstream", "providers", "drift")}
-            print(json.dumps(report, indent=2) if options.json else _describe_list(report), file=stream)
-            return EXIT_OK
-        print(json.dumps(report, indent=2) if options.json else _describe_doctor(report), file=stream)
-        return EXIT_REFUSED if report["drift"]["detected"] else EXIT_OK
+        return _run_report(options, path, stream)
 
     try:
         document = read_settings(path)
