@@ -96,7 +96,12 @@ see [`engineering/security.md`](./engineering/security.md).
   HORO-1376/HORO-1463), and the statusline provider wire contract by which
   products contribute live status without owning the user's statusline
   ([`product/statusline-provider-contract.md`](./product/statusline-provider-contract.md);
-  reference implementation at `scripts/statusline_contract.py`, HORO-1564).
+  reference implementation at `scripts/statusline_contract.py`, HORO-1564), and
+  the host half of that contract — the single command that multiplexes the
+  user's own statusline and every registered provider into one bounded line
+  ([`product/statusline-host-compositor.md`](./product/statusline-host-compositor.md);
+  implementation at `scripts/statusline_compositor.py` and
+  `scripts/statusline_render.py`, HORO-1565).
 - [`releases/`](./releases/) — release and public-surface invariants, plus
   the [Public Release Surface Contract](./releases/public-release-contract.md)
   (7-state model, per-surface derivation rules; implementation at
