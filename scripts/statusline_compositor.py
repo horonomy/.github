@@ -148,5 +148,15 @@ def cache_dir(home: pathlib.Path | None = None) -> pathlib.Path:
     return (home or state_home()) / CACHE_DIRNAME
 
 
+def _bounded_ms(payload: dict, key: str, default: int, maximum: int) -> int:
+    """Read a millisecond budget, clamped rather than trusted."""
+    value = payload.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RegistryError(f"{key} must be an integer number of milliseconds")
+    if value < 1:
+        raise RegistryError(f"{key} must be at least 1ms")
+    return min(value, maximum)
+
+
 if __name__ == "__main__":
     sys.exit(main())
