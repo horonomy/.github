@@ -22,11 +22,15 @@ import hashlib
 import json
 import os
 import pathlib
+import shlex
 import shutil
+import subprocess
 import tempfile
 import unittest
 import unittest.mock
 
+import statusline_compositor as compositor
+import statusline_contract as contract
 import statusline_lifecycle as lifecycle
 
 
@@ -1010,6 +1014,180 @@ class AtomicWriteTest(LifecycleCase):
         )
         with self.assertRaises(lifecycle.VerificationError):
             lifecycle._verify(tampered)
+
+
+class HostUsabilityTest(LifecycleCase):
+    """The statusline must actually render after every lifecycle step.
+
+    Every other test in this file reads the configuration back. None of them
+    prove the host tool can still use it, and the contract is explicit that "a
+    preservation test that 'reads back clean' but breaks the tool doesn't count".
+    So these run the configured command the way Claude Code does -- through a
+    shell, with a Claude-shaped JSON payload on stdin -- and read the line.
+    """
+
+    PAYLOAD = json.dumps(
+        {
+            "hook_event_name": "Status",
+            "session_id": "00000000-0000-0000-0000-000000000000",
+            "cwd": "/work/repo",
+            "model": {"id": "claude-opus-4", "display_name": "Opus"},
+            "workspace": {"current_dir": "/work/repo", "project_dir": "/work/repo"},
+        }
+    ).encode("utf-8")
+
+    def script(self, name: str, body: str) -> pathlib.Path:
+        """Write an executable script and pay its first-execution cost up front.
+
+        A freshly written executable costs a large one-time evaluation on macOS,
+        easily more than a provider's whole timeout budget. Warming it here means a
+        timeout later is a real finding rather than the operating system doing
+        first-run bookkeeping.
+        """
+        path = self.root / name
+        path.write_text(body)
+        path.chmod(0o755)
+        subprocess.run([str(path)], capture_output=True, input=b"{}", timeout=30, check=False)
+        return path
+
+    def provider_script(self, name: str, provider: str, label: str) -> pathlib.Path:
+        """A provider that emits one valid wire document and nothing else.
+
+        The document is built here with the real contract types, so a provider
+        fixture cannot drift into shapes the contract would reject -- which would
+        make this test pass for the wrong reason.
+        """
+        status = contract.ProviderStatus(
+            provider=provider,
+            provider_version="1.0.0",
+            scope=contract.Scope.HOST,
+            availability=contract.Availability.AVAILABLE,
+            segments=(
+                contract.Segment(
+                    key="state", state=contract.SegmentState.OK, label=label
+                ),
+            ),
+        )
+        payload = json.dumps(status.to_wire())
+        return self.script(name, f"#!/bin/sh\ncat >/dev/null\nprintf '%s' {shlex.quote(payload)}\n")
+
+    def render(self) -> str:
+        """Run whatever is configured, exactly as the host would."""
+        command = self.read()[lifecycle.STATUS_LINE_KEY]["command"]
+        completed = subprocess.run(
+            command,
+            shell=True,
+            input=self.PAYLOAD,
+            capture_output=True,
+            timeout=60,
+            env=os.environ | {compositor.STATE_HOME_ENV: str(self.home)},
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode("utf-8", "replace"))
+        return completed.stdout.decode("utf-8")
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.upstream = self.script(
+            "statusline-dogfood.sh", '#!/bin/sh\ncat >/dev/null\nprintf "MY OWN LINE"\n'
+        )
+        data = rich_settings()
+        data[lifecycle.STATUS_LINE_KEY]["command"] = str(self.upstream)
+        self.write(data)
+
+    def test_the_line_renders_at_every_step_of_the_full_lifecycle(self) -> None:
+        self.assertEqual(self.render(), "MY OWN LINE")
+
+        fornax = self.provider_script("fornax-provider.sh", "fornax", "VERIFIED")
+        self.enable("fornax", argv=(str(fornax),), timeout_ms=2000)
+        with_one = self.render()
+        # HOST_TOOL_REMAINS_USABLE_AFTER_EACH_LIFECYCLE_STEP, and the ordering rule
+        # the compositor owes the user: their own output stays at the front.
+        self.assertTrue(with_one.startswith("MY OWN LINE"), with_one)
+        self.assertIn("VERIFIED", with_one)
+
+        circinus = self.provider_script("circinus-provider.sh", "circinus", "SHADOW")
+        self.enable("circinus", argv=(str(circinus),), timeout_ms=2000)
+        with_two = self.render()
+        self.assertTrue(with_two.startswith("MY OWN LINE"), with_two)
+        self.assertIn("VERIFIED", with_two)
+        self.assertIn("SHADOW", with_two)
+
+        self.remove("fornax")
+        after_disable = self.render()
+        # Disabling one product leaves the other and the user's own line intact.
+        self.assertTrue(after_disable.startswith("MY OWN LINE"), after_disable)
+        self.assertIn("SHADOW", after_disable)
+        self.assertNotIn("VERIFIED", after_disable)
+
+        self.uninstall()
+        self.assertEqual(self.read()[lifecycle.STATUS_LINE_KEY]["command"], str(self.upstream))
+        self.assertEqual(self.render(), "MY OWN LINE")
+
+    def test_a_failing_provider_cannot_suppress_the_users_own_line(self) -> None:
+        broken = self.script("broken-provider.sh", "#!/bin/sh\nprintf 'not json' \nexit 3\n")
+        self.enable("broken", argv=(str(broken),), timeout_ms=2000)
+        rendered = self.render()
+        self.assertTrue(rendered.startswith("MY OWN LINE"), rendered)
+
+    def test_a_command_with_spaces_and_quoting_survives_the_round_trip(self) -> None:
+        """The case that breaks any implementation that reassembles the command.
+
+        The path has a space in it and the configured command carries a quoted
+        argument. This module never parses the command to store it and never
+        rebuilds it to restore it, and this is the fixture that would catch it if
+        it started.
+        """
+        awkward = self.root / "my statusline dir"
+        awkward.mkdir()
+        script = self.script("my statusline dir/print args.sh", '#!/bin/sh\ncat >/dev/null\nprintf "%s" "$1"\n')
+        configured = f'{shlex.quote(str(script))} "a quoted argument"'
+        data = self.read()
+        data[lifecycle.STATUS_LINE_KEY]["command"] = configured
+        self.write(data)
+        self.assertEqual(self.render(), "a quoted argument")
+
+        fornax = self.provider_script("fornax-provider.sh", "fornax", "VERIFIED")
+        self.enable("fornax", argv=(str(fornax),), timeout_ms=2000)
+        self.assertEqual(self.registry()["upstream"]["command"], configured)
+        rendered = self.render()
+        self.assertTrue(rendered.startswith("a quoted argument"), rendered)
+
+        self.uninstall()
+        after = self.read()[lifecycle.STATUS_LINE_KEY]["command"]
+        self.assertEqual(after, configured)
+        self.assertEqual(self.render(), "a quoted argument")
+
+
+class CrossModuleTest(LifecycleCase):
+    def test_every_registry_this_module_writes_is_one_the_compositor_accepts(self) -> None:
+        """The two modules must not be able to drift apart.
+
+        A registry this module can write and the compositor cannot read is a
+        statusline that renders nothing, and neither module's own tests would
+        notice. `apply` re-validates through the compositor's parser for the same
+        reason; this checks the states that parser sees along the way.
+        """
+        for step in ("enable fornax", "enable circinus", "disable fornax"):
+            with self.subTest(step=step):
+                if step.startswith("enable"):
+                    self.enable(step.split()[1])
+                else:
+                    self.remove(step.split()[1])
+                registry = lifecycle.read_registry(self.home)
+                self.assertTrue(registry.usable, registry.problem)
+                parsed = compositor.parse_registry(registry.data)
+                self.assertEqual(parsed.upstream_command, self.original["statusLine"]["command"])
+
+    def test_the_lifecycle_block_is_ignored_by_the_compositor(self) -> None:
+        # The lifecycle's own bookkeeping lives in the same file the compositor
+        # reads. It is forward-compatible by construction because that parser drops
+        # top-level keys it does not know, and this is the assertion that says so.
+        self.enable("fornax")
+        registry = lifecycle.read_registry(self.home)
+        self.assertIn("lifecycle", registry.data)
+        parsed = compositor.parse_registry(registry.data)
+        self.assertEqual([entry.provider for entry in parsed.providers], ["fornax"])
 
 
 if __name__ == "__main__":
