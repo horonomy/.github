@@ -671,12 +671,20 @@ def main(argv: list[str] | None = None, stdin: object = None, stdout: object = N
         registry = dataclasses.replace(registry, upstream_command=None)
 
     upstream_text, statuses = collect(registry, payload)
-    line = render.compose(
-        upstream_text,
-        statuses,
-        mode=registry.mode,
-        width_budget=registry.width_budget,
-    )
+    try:
+        line = render.compose(
+            upstream_text,
+            statuses,
+            mode=registry.mode,
+            width_budget=registry.width_budget,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # The broadest catch in this module, and deliberately so: the first
+        # invariant is that no failure of ours suppresses the user's line, and a
+        # defect in our own rendering is still a failure of ours. They lose our
+        # block, which is ours to lose, and keep their line, which is not.
+        print(f"horonom-statusline: render failed ({type(exc).__name__})", file=sys.stderr)
+        line = upstream_text
     print(line, file=writer)
     return 0
 
