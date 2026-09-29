@@ -400,3 +400,10 @@ def format_reason(reason_code: str | None, reason_label: str | None) -> str:
     if reason_code:
         return reason_code.replace("_", " ").replace("-", " ")
     return ""
+
+
+# Uppercase, unabbreviated, and never dropped by any degradation step. Circinus
+# shadow mode reports what a policy *would* have done; if that ever reads as an
+# executed block the user believes their agent was stopped when it was not, so
+# this marker is treated as load-bearing rather than decorative.
+HYPOTHETICAL_TEXT = "NOT ENFORCED"
