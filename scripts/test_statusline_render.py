@@ -791,5 +791,19 @@ class TestRenderProvider(unittest.TestCase):
                 first = render.render_provider(libra_status(), mode)
                 self.assertEqual(first, render.render_provider(libra_status(), mode))
 
+
+class TestProviderSeverity(unittest.TestCase):
+    def test_the_worst_segment_wins(self):
+        self.assertEqual(render.provider_severity(libra_status()), render.STATE_SEVERITY["critical"])
+
+    def test_a_calm_provider_ranks_lowest(self):
+        self.assertEqual(render.provider_severity(fornax_status()), render.STATE_SEVERITY["ok"])
+
+    def test_a_provider_with_no_segments_ranks_as_unknown_not_ok(self):
+        # "Reported nothing" is something the user needs to see, not the first
+        # thing to hide when the line is tight.
+        empty = status(availability=contract.Availability.UNAVAILABLE, segments=())
+        self.assertEqual(render.provider_severity(empty), render.STATE_SEVERITY["unknown"])
+
 if __name__ == "__main__":
     unittest.main()
