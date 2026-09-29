@@ -488,3 +488,16 @@ def render_segment(segment: object, mode: PresentationMode) -> str:
     if not details:
         return head
     return f"{head} ({DETAIL_SEPARATOR.join(details)})"
+
+
+def provider_display_name(provider_id: str) -> str:
+    """Turn a contract provider id into something a human reads as a product.
+
+    Derived rather than looked up, so a provider the host has never heard of is
+    attributed correctly instead of appearing anonymously beside the ones it
+    knows. The contract restricts provider ids to `[a-z][a-z0-9_-]*`, so this is
+    total: `fornax` becomes `Fornax`, `libra-governor` becomes
+    `Libra Governor`.
+    """
+    words = provider_id.replace("-", " ").replace("_", " ").split()
+    return " ".join(word[:1].upper() + word[1:] for word in words) or provider_id
