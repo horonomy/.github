@@ -110,12 +110,19 @@ class FixtureCase(unittest.TestCase):
         Warmed by running it once, because the first execution of a newly
         written file on this platform can cost hundreds of milliseconds, and a
         test that then measures a timeout would be measuring the wrong thing.
+
+        The warm-up closes the fixture's stdin immediately. Inheriting the
+        runner's stdin would make the warm-up hang for any fixture that reads
+        it -- and hang only where the suite is run with a stdin that stays open,
+        so it would pass locally and time out under a CI runner.
         """
         path = self.bin / name
         path.write_text("#!/bin/sh\n" + body)
         path.chmod(0o755)
         if warm:
-            subprocess.run([str(path)], capture_output=True, timeout=WARM_LIMIT_SECONDS)
+            subprocess.run(
+                [str(path)], input=b"", capture_output=True, timeout=WARM_LIMIT_SECONDS
+            )
         return str(path)
 
     def hanging_script(self, name: str, body: str) -> str:
