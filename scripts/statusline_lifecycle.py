@@ -1144,6 +1144,41 @@ def _released_status_line(
     return after, changes, notes
 
 
+def _giving_the_slot_back(
+    document: SettingsDocument, ownership: Ownership, registry: RegistryDocument
+) -> tuple[dict | None, tuple[pathlib.Path, ...], list[Change], list[str]]:
+    """What the last provider leaving costs, which is the only lossy moment there is.
+
+    Returns the settings document to write, our own state to delete, and the
+    disclosure for both. Separated from planning because this is the one path
+    that writes a command it did not receive from the user in this invocation,
+    so what it may and may not do is worth reading on its own.
+    """
+    changes: list[Change] = []
+    notes: list[str] = []
+    state_to_remove: tuple[pathlib.Path, ...] = ()
+    if registry.present:
+        state_to_remove = (registry.path,)
+        changes.append(
+            Change(ChangeKind.REMOVE, str(registry.path), "the last provider is gone with it")
+        )
+
+    before = document.status_line
+    if not isinstance(before, dict):
+        return None, state_to_remove, changes, notes
+
+    released, release_changes, release_notes = _released_status_line(before, ownership, registry)
+    changes.extend(release_changes)
+    notes.extend(release_notes)
+    settings_after = dict(document.data)
+    if released is None:
+        settings_after.pop(STATUS_LINE_KEY, None)
+    else:
+        settings_after[STATUS_LINE_KEY] = released
+    changes.extend(_preservation_changes(document, (), include_status_line=released is not None))
+    return settings_after, state_to_remove, changes, notes
+
+
 def plan_remove(
     document: SettingsDocument,
     registry: RegistryDocument,
@@ -1203,27 +1238,11 @@ def plan_remove(
             )
     else:
         registry_after = None
-        if registry.present:
-            state_to_remove = (registry.path,)
-            changes.append(
-                Change(ChangeKind.REMOVE, str(registry.path), "the last provider is gone with it")
-            )
-        before = document.status_line
-        if isinstance(before, dict):
-            released, release_changes, release_notes = _released_status_line(
-                before, ownership, registry
-            )
-            changes.extend(release_changes)
-            notes.extend(release_notes)
-            candidate = dict(document.data)
-            if released is None:
-                candidate.pop(STATUS_LINE_KEY, None)
-            else:
-                candidate[STATUS_LINE_KEY] = released
-            settings_after = candidate
-            changes.extend(
-                _preservation_changes(document, (), include_status_line=released is not None)
-            )
+        settings_after, state_to_remove, last_changes, last_notes = _giving_the_slot_back(
+            document, ownership, registry
+        )
+        changes.extend(last_changes)
+        notes.extend(last_notes)
 
     return Plan(
         operation=operation,
