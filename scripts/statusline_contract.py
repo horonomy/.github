@@ -454,3 +454,50 @@ def assert_no_secret_shape(value: str, field: str) -> str:
         if _looks_high_entropy(run):
             raise PrivacyViolation(f"{field} contains a high-entropy secret-shaped run")
     return value
+
+
+# A URL needs `:` and `/`, which the label allowlist already forbids, so what
+# is left to catch is a bare host or domain name — which is how an internal
+# endpoint would actually leak through a label.
+_HOST_SUFFIXES = (
+    "com",
+    "net",
+    "org",
+    "io",
+    "co",
+    "dev",
+    "app",
+    "cloud",
+    "ai",
+    "internal",
+    "intranet",
+    "corp",
+    "local",
+    "localdomain",
+    "lan",
+    "test",
+    "invalid",
+    "onion",
+)
+_HOSTNAME_RE = re.compile(
+    r"(?i)\b(?:localhost\b|[a-z0-9][a-z0-9-]*\.(?:" + "|".join(_HOST_SUFFIXES) + r")\b)"
+)
+
+
+def assert_no_host_shape(value: str, field: str) -> str:
+    """Raise `PrivacyViolation` if `value` contains a host or domain name.
+
+    Catches the residual case the character allowlist cannot: a bare
+    `something.internal` or `localhost` needs no separator to disclose an
+    internal endpoint.
+    """
+    if _HOSTNAME_RE.search(value):
+        raise PrivacyViolation(f"{field} contains a host or domain name")
+    return value
+
+
+def assert_privacy_safe(value: str, field: str) -> str:
+    """Run every privacy check this contract applies to an emitted string."""
+    assert_no_secret_shape(value, field)
+    assert_no_host_shape(value, field)
+    return value
