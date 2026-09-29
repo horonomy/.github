@@ -83,3 +83,58 @@ STATE_FILE_MODE = 0o600
 DEFAULT_INDENT = 2
 
 RECEIPT_FILENAME = "receipt.json"
+
+
+class LifecycleError(Exception):
+    """A lifecycle operation refused to proceed.
+
+    Every subclass below means the same thing about the filesystem: nothing was
+    written. They are distinguished because the *remediation* differs, and a
+    refusal that does not name which conflict blocked it is not much better than
+    no refusal at all.
+    """
+
+
+class SettingsParseError(LifecycleError):
+    """The settings file is not a JSON object we can read.
+
+    Deliberately not recoverable by writing a fresh default. A file that fails
+    to parse is far more likely to be a user's config with a trailing comma than
+    an absent one, and the cost of guessing wrong is their whole configuration.
+    """
+
+
+class UnsupportedShapeError(LifecycleError):
+    """The settings file parsed, but its `statusLine` is a shape we do not know.
+
+    Separate from `SettingsParseError` because the file itself is fine: it is
+    our understanding that is missing, most plausibly because a newer Claude
+    Code grew a `statusLine.type` this module predates. Refusing keeps that
+    newer feature working; claiming the slot anyway would silently disable it.
+    """
+
+
+class OwnershipError(LifecycleError):
+    """We cannot prove we own what we would have to change.
+
+    Covers the unmarked-but-ours case and drift in both directions. This is
+    `LEGACY_OWNERSHIP_UNKNOWN_FAILS_SAFE`: an unprovable claim is never
+    upgraded to a destructive action just because the alternative is stopping.
+    """
+
+
+class ConcurrentModificationError(LifecycleError):
+    """The file changed between being read and being written.
+
+    The plan we were about to apply describes a document that no longer exists,
+    and applying it would silently discard whatever the other writer did.
+    """
+
+
+class VerificationError(LifecycleError):
+    """The write landed but the read-back does not match the plan.
+
+    Raised rather than swallowed because the alternative is reporting success
+    for a state nobody planned. A successful `os.replace` is evidence about the
+    filesystem, not about the content.
+    """
