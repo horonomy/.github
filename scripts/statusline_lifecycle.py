@@ -1390,3 +1390,102 @@ def _remediation(ownership: Ownership, registry: RegistryDocument, owned: bool) 
     if owned and not _provider_ids(registry):
         return ("no providers are registered, so the statusline renders only the original line",)
     return ()
+
+
+EXIT_OK = 0
+EXIT_REFUSED = 1
+EXIT_FAILED = 3
+
+
+def _describe(plan: Plan, result: ApplyResult | None) -> str:
+    """The plan as prose, for a reader who is about to trust it with their config."""
+    lines = [f"{plan.operation}: {plan.settings_path} ({plan.scope} scope)"]
+    lines.append(f"  current owner: {plan.ownership.value}")
+    if plan.refusal is not None:
+        lines.append(f"  REFUSED: {plan.refusal}")
+        lines.extend(f"  next: {step}" for step in plan.remediation)
+        return "\n".join(lines)
+    lines.append(f"  would change anything: {'yes' if plan.mutates else 'no'}")
+    lines.append("  requires administrator authorization: no")
+    for change in plan.changes:
+        lines.append(f"  [{change.kind.value}] {change.target}: {change.detail}")
+    lines.extend(f"  removed: {path}" for path in plan.state_to_remove)
+    lines.extend(f"  note: {note}" for note in plan.notes)
+    if result is not None:
+        lines.append(
+            f"  applied: settings_written={result.settings_written} "
+            f"registry_written={result.registry_written} read_back_verified={result.verified}"
+        )
+    return "\n".join(lines)
+
+
+def _describe_doctor(report: dict) -> str:
+    """The doctor report as prose, in the order a confused user asks the questions."""
+    host, slot = report["host"], report["slot"]
+    lines = [
+        f"host: {host['tool']} {host['capability']} supported={host['supported']}",
+        f"settings: {host['settings_path']} ({host['scope']} scope)",
+    ]
+    settings = report["settings"]
+    if not settings["readable"]:
+        lines.append(f"  unreadable: {settings['problem']}")
+    else:
+        lines.append(f"  unrelated top-level keys, untouched: {settings['unrelated_key_count']}")
+    command = slot.get("command") or {}
+    lines.append(
+        f"statusline owner: {slot['owner']} (command={command.get('name')}, "
+        f"horonom={slot['horonom_owned']})"
+    )
+    upstream = report.get("upstream") or {}
+    lines.append(
+        f"original statusline: recorded={upstream.get('recorded')} name={upstream.get('name')}"
+    )
+    providers = report["providers"]
+    lines.append(f"providers registered: {len(providers)}")
+    for provider in providers:
+        detail = f"  - {provider['provider']} [{provider['scope']}] {provider['command_name']}"
+        if "availability" in provider:
+            detail += f" -> {provider['availability']} ({provider['segments']} segment(s))"
+        lines.append(detail)
+    drift = report["drift"]
+    lines.append(f"drift: {'yes -- ' + drift['reason'] if drift['detected'] else 'none'}")
+    outlook = report.get("mutation_outlook")
+    if outlook:
+        lines.append(
+            "enabling another provider would change settings: "
+            f"{outlook['enabling_another_provider_changes_settings']}"
+        )
+        lines.append(
+            "disabling one provider would change settings: "
+            f"{outlook['disabling_one_provider_changes_settings']}"
+        )
+    lines.extend(f"next: {step}" for step in report["remediation"])
+    return "\n".join(lines)
+
+
+def _settings_path(argument: str | None) -> pathlib.Path:
+    return pathlib.Path(argument or DEFAULT_SETTINGS_PATH).expanduser()
+
+
+def _emit(plan: Plan, result: ApplyResult | None, as_json: bool, stream) -> int:
+    payload = plan.to_json()
+    if result is not None:
+        payload["applied"] = result.to_json()
+    print(json.dumps(payload, indent=2) if as_json else _describe(plan, result), file=stream)
+    return EXIT_REFUSED if plan.refusal is not None else EXIT_OK
+
+
+def _run_plan(plan: Plan, options: argparse.Namespace, stream) -> int:
+    """Apply a plan unless this is a dry run, and report either way.
+
+    A refusal is reported and exits non-zero rather than raising: the caller is a
+    person or a script that needs the reason, and a traceback is not a reason.
+    """
+    if plan.refusal is not None or options.dry_run:
+        return _emit(plan, None, options.json, stream)
+    try:
+        result = apply(plan)
+    except (ConcurrentModificationError, VerificationError, LifecycleError) as exc:
+        print(f"{plan.operation} failed: {exc}", file=stream)
+        return EXIT_FAILED
+    return _emit(plan, result, options.json, stream)
