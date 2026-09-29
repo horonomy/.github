@@ -723,5 +723,105 @@ class TestCache(FixtureCase):
         self.assertIsNone(compositor.read_cache(entry, self.home))
 
 
+class TestRunProvider(FixtureCase):
+    def reasons(self, status: contract.ProviderStatus) -> list:
+        return [segment.reason_code for segment in status.segments]
+
+    def test_a_healthy_provider_is_returned_as_it_answered(self):
+        path = self.answering("good", wire())
+        status = compositor.run_provider(self.entry("fornax", path), GENEROUS_MS, self.home)
+        self.assertIs(status.availability, contract.Availability.AVAILABLE)
+        self.assertEqual(status.segments[0].label, "Verified")
+
+    def test_a_missing_executable_is_reported_as_not_installed(self):
+        status = compositor.run_provider(
+            self.entry("fornax", "/no/such/binary"), GENEROUS_MS, self.home
+        )
+        self.assertIs(status.availability, contract.Availability.UNSUPPORTED)
+        self.assertIn("not_installed", self.reasons(status))
+
+    def test_a_non_zero_exit_is_reported_as_an_error(self):
+        path = self.script("failing", "exit 3\n")
+        status = compositor.run_provider(self.entry("fornax", path), GENEROUS_MS, self.home)
+        self.assertIs(status.availability, contract.Availability.ERROR)
+        self.assertIn("probe_failed", self.reasons(status))
+
+    def test_a_hanging_provider_is_reported_as_a_timeout(self):
+        path = self.script("hanging", f"sleep {LEAK_SLEEP}\n", warm=False)
+        status = compositor.run_provider(self.entry("fornax", path), IMPATIENT_MS, self.home)
+        self.assertIn("probe_timeout", self.reasons(status))
+
+    def test_unreadable_output_is_reported_as_malformed(self):
+        for name, body in (("garbage", "printf 'not json'\n"), ("binary", "printf '\\377\\376'\n")):
+            with self.subTest(name=name):
+                path = self.script(name, body)
+                status = compositor.run_provider(self.entry("fornax", path), GENEROUS_MS, self.home)
+                self.assertIn("malformed_output", self.reasons(status))
+
+    def test_output_that_violates_the_contract_is_reported_as_such(self):
+        path = self.answering("invalid", wire(availability="definitely-fine"))
+        status = compositor.run_provider(self.entry("fornax", path), GENEROUS_MS, self.home)
+        self.assertIn("contract_violation", self.reasons(status))
+
+    def test_a_provider_answering_under_another_id_is_refused(self):
+        # Otherwise a provider could attribute its own state to another product,
+        # or hide its own behind one.
+        path = self.answering("liar", wire(provider="circinus"))
+        status = compositor.run_provider(self.entry("fornax", path), GENEROUS_MS, self.home)
+        self.assertIn("identity_mismatch", self.reasons(status))
+        self.assertEqual(status.provider, "fornax")
+
+    def test_a_refused_answer_is_never_cached(self):
+        path = self.answering("liar2", wire(provider="circinus", cache_ttl_seconds=30))
+        entry = self.entry("fornax", path)
+        compositor.run_provider(entry, GENEROUS_MS, self.home)
+        self.assertIsNone(compositor.read_cache(entry, self.home))
+
+    def test_no_remaining_time_is_reported_rather_than_probed(self):
+        marker = self.home / "was-run"
+        path = self.script("counting", f"touch {marker}\nexit 1\n", warm=False)
+        status = compositor.run_provider(self.entry("fornax", path), 0, self.home)
+        self.assertIn("deadline_exhausted", self.reasons(status))
+        self.assertFalse(marker.exists())
+
+    def test_a_fresh_cache_answers_without_running_the_provider(self):
+        counter = self.home / "calls"
+        path = self.script(
+            "counted",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path)
+        counter.write_text("")
+        for _ in range(3):
+            compositor.run_provider(entry, GENEROUS_MS, self.home)
+        self.assertEqual(counter.read_text(), "x")
+
+    def test_a_failure_never_raises_and_never_returns_none(self):
+        for name, body in (("boom", "exit 9\n"), ("junk", "printf '{'\n")):
+            with self.subTest(name=name):
+                path = self.script(name, body)
+                status = compositor.run_provider(self.entry("fornax", path), GENEROUS_MS, self.home)
+                self.assertIsInstance(status, contract.ProviderStatus)
+
+    def test_a_failure_reason_never_carries_the_exception_text(self):
+        # A subprocess error message routinely contains a path, a command line
+        # or an environment value, and this string is rendered into a terminal.
+        path = self.script("failing2", "exit 3\n")
+        status = compositor.run_provider(self.entry("fornax", path), GENEROUS_MS, self.home)
+        rendered = render.render_provider(status, render.PresentationMode.BALANCED)
+        self.assertNotIn(str(self.home), rendered)
+        self.assertNotIn("Traceback", rendered)
+
+    def test_an_oversized_answer_does_not_become_a_status(self):
+        path = self.script(
+            "flood",
+            f"head -c {compositor.MAX_PROVIDER_OUTPUT_BYTES * 2} /dev/zero | tr '\\0' 'a'\n",
+        )
+        status = compositor.run_provider(self.entry("fornax", path), GENEROUS_MS, self.home)
+        self.assertIn("malformed_output", self.reasons(status))
+
+
 if __name__ == "__main__":
     unittest.main()
