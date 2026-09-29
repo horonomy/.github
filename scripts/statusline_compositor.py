@@ -158,5 +158,24 @@ def _bounded_ms(payload: dict, key: str, default: int, maximum: int) -> int:
     return min(value, maximum)
 
 
+def _require_argv(value: object, provider: str) -> tuple[str, ...]:
+    """Validate a provider's command as an argument vector.
+
+    A list, never a string: providers are Horonom-owned commands, so they are
+    executed directly with no shell between us and them. That removes a whole
+    injection surface, and costs nothing because we are the ones who wrote the
+    entry. The user's own command is the deliberate exception — see
+    `run_upstream`.
+    """
+    if not isinstance(value, list) or not value:
+        raise RegistryError(f"provider {provider!r}: command must be a non-empty list")
+    if len(value) > MAX_ARGV_LENGTH:
+        raise RegistryError(f"provider {provider!r}: command has too many arguments")
+    for part in value:
+        if not isinstance(part, str) or not part:
+            raise RegistryError(f"provider {provider!r}: command entries must be non-empty strings")
+    return tuple(value)
+
+
 if __name__ == "__main__":
     sys.exit(main())
