@@ -205,3 +205,30 @@ write nobody thought to look for.
 
 Rendering also evaluates no policy, enforces or blocks nothing, mutates no
 decision, and starts no daemon. The statusline is not an approval interface.
+
+## The registry document, version 1
+
+Written by the install lifecycle (HORO-1566), read by the compositor. Lives
+under Horonom-owned state, not under the host tool's configuration.
+
+```json
+{
+  "registry_version": 1,
+  "upstream": { "command": "<the user's original command string, verbatim>" },
+  "upstream_timeout_ms": 1500,
+  "providers": [
+    { "provider": "fornax", "command": ["fornax", "statusline", "provider"],
+      "scope": "host", "timeout_ms": 250, "enabled": true }
+  ],
+  "presentation": { "mode": "balanced", "width_budget": 120 },
+  "deadline_ms": 600
+}
+```
+
+Parsing is strict on everything that decides what gets executed or what the
+user's original line was — guessing at an unrecognised shape risks either
+running the wrong thing or losing their line. An unsupported `registry_version`
+is refused outright rather than best-efforted, because a future writer may have
+moved the very field we would be reading. Version is checked by *type* as well
+as value: in Python `True` and `1.0` both compare equal to `1`, so membership
+alone is not a version check.
