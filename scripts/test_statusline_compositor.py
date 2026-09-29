@@ -199,5 +199,29 @@ class TestStatePaths(unittest.TestCase):
         self.assertNotIn("/.claude", str(compositor.state_home()))
 
 
+class TestBoundedMilliseconds(unittest.TestCase):
+    def test_an_absent_value_takes_the_default(self):
+        self.assertEqual(compositor._bounded_ms({}, "t", 250, 2000), 250)
+
+    def test_a_value_over_the_maximum_is_clamped_not_refused(self):
+        self.assertEqual(compositor._bounded_ms({"t": 10**9}, "t", 250, 2000), 2000)
+
+    def test_a_non_integer_is_refused(self):
+        for value in ("250", 250.0, None, [250]):
+            with self.subTest(value=value):
+                with self.assertRaises(compositor.RegistryError):
+                    compositor._bounded_ms({"t": value}, "t", 250, 2000)
+
+    def test_a_boolean_is_refused_despite_being_an_integer(self):
+        with self.assertRaises(compositor.RegistryError):
+            compositor._bounded_ms({"t": True}, "t", 250, 2000)
+
+    def test_zero_and_negative_budgets_are_refused(self):
+        for value in (0, -1):
+            with self.subTest(value=value):
+                with self.assertRaises(compositor.RegistryError):
+                    compositor._bounded_ms({"t": value}, "t", 250, 2000)
+
+
 if __name__ == "__main__":
     unittest.main()
