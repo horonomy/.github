@@ -305,6 +305,15 @@ class ContractViolation(ValueError):
     """
 
 
+class UnsupportedContractVersion(ContractViolation):
+    """A provider declared a contract version this host cannot parse.
+
+    Separate from a shape error because the remedy is different and worth
+    reporting differently: the provider is newer than the host, so the fix is
+    to upgrade the host, not to change the provider.
+    """
+
+
 class PrivacyViolation(ContractViolation):
     """A provider payload carries a value this contract forbids emitting.
 
@@ -694,7 +703,7 @@ class ProviderStatus:
 
     def __post_init__(self) -> None:
         if not is_supported_contract_version(self.contract_version):
-            raise ContractViolation(
+            raise UnsupportedContractVersion(
                 f"contract_version {self.contract_version!r} is not supported by "
                 f"this host (supported: {sorted(SUPPORTED_CONTRACT_VERSIONS)})"
             )
