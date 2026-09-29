@@ -1103,6 +1103,24 @@ class TestNothingLeaksAndNothingLeaksOut(FixtureCase):
         ).stdout
         return sum(1 for line in listing.splitlines() if marker in line)
 
+    def settled(self, marker: str, *, limit: float = 5.0) -> int:
+        """The marker's process count once it has reached zero, else its count.
+
+        Polled rather than sampled after a fixed sleep. A `SIGKILL` to a process
+        group is delivered promptly but the kernel's teardown is not
+        instantaneous, and on a loaded machine a single sample taken just after
+        the kill catches a process that is already dying — a flake that reads as
+        a containment failure. This cannot hide a real leak: a leaked worker
+        sleeps for `LEAK_SLEEP` seconds, far longer than the limit here, so it is
+        still counted.
+        """
+        deadline = time.monotonic() + limit
+        while True:
+            count = self.running(marker)
+            if count == 0 or time.monotonic() >= deadline:
+                return count
+            time.sleep(0.05)
+
     def forking_fixture(self, name: str) -> tuple[str, str]:
         """A provider that forks a worker and then hangs; the worker is the canary.
 
@@ -1125,14 +1143,12 @@ class TestNothingLeaksAndNothingLeaksOut(FixtureCase):
         parent, worker = self.forking_fixture("orphan-probe")
         self.assertEqual(self.running(worker), 0)
         compositor.run_provider(self.entry("fornax", parent), IMPATIENT_MS, self.home)
-        time.sleep(0.5)
-        self.assertEqual(self.running(worker), 0)
+        self.assertEqual(self.settled(worker), 0)
 
     def test_a_timed_out_upstream_leaves_no_process_behind(self):
         parent, worker = self.forking_fixture("orphan-upstream")
         compositor.run_upstream(f"'{parent}'", b"", IMPATIENT_MS)
-        time.sleep(0.5)
-        self.assertEqual(self.running(worker), 0)
+        self.assertEqual(self.settled(worker), 0)
 
     def test_a_forked_worker_would_survive_if_only_the_child_were_killed(self):
         # Guards the guard: the two tests above only mean something if this
