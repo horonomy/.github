@@ -54,6 +54,10 @@ import statusline_render as render
 # Horonom-owned state. Everything this module writes lives under here, and it
 # writes nothing anywhere else — in particular nothing under the host's own
 # configuration directory, which it has no ownership of.
+STATE_HOME_ENV = "HORONOM_STATUSLINE_HOME"
+DEFAULT_STATE_HOME = "~/.horonom/statusline"
+REGISTRY_FILENAME = "registry.json"
+CACHE_DIRNAME = "cache"
 
 
 if __name__ == "__main__":
