@@ -453,5 +453,35 @@ class TestRegistryLoading(FixtureCase):
         self.assertNotIn("Is a directory", message)
 
 
+class TestRecursionDepth(unittest.TestCase):
+    def test_an_absent_marker_is_depth_zero(self):
+        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(compositor.depth(), 0)
+
+    def test_the_marker_is_read_as_an_integer(self):
+        with unittest.mock.patch.dict(os.environ, {compositor.DEPTH_ENV: "3"}):
+            self.assertEqual(compositor.depth(), 3)
+
+    def test_an_unparseable_marker_is_treated_as_already_recursing(self):
+        # The failure being prevented is unbounded recursion, so an
+        # uninterpretable marker resolves towards refusing to descend.
+        for value in ("deep", "", "1.5", "0x1"):
+            with self.subTest(value=value):
+                with unittest.mock.patch.dict(os.environ, {compositor.DEPTH_ENV: value}):
+                    self.assertGreaterEqual(compositor.depth(), compositor.MAX_DEPTH)
+
+    def test_a_negative_marker_cannot_buy_extra_depth(self):
+        with unittest.mock.patch.dict(os.environ, {compositor.DEPTH_ENV: "-5"}):
+            self.assertEqual(compositor.depth(), 0)
+
+    def test_the_child_environment_increments_the_marker(self):
+        with unittest.mock.patch.dict(os.environ, {compositor.DEPTH_ENV: "0"}):
+            self.assertEqual(compositor.child_env()[compositor.DEPTH_ENV], "1")
+
+    def test_the_child_environment_otherwise_inherits_the_parent(self):
+        with unittest.mock.patch.dict(os.environ, {"HORONOM_TEST_MARKER": "kept"}):
+            self.assertEqual(compositor.child_env()["HORONOM_TEST_MARKER"], "kept")
+
+
 if __name__ == "__main__":
     unittest.main()
