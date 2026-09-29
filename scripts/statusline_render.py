@@ -564,3 +564,25 @@ def provider_severity(status: object) -> int:
         STATE_SEVERITY.get(_enum_value(s.state), STATE_SEVERITY[UNKNOWN_STATE])
         for s in segments
     )
+
+
+# Tried in order when a budget is set. Deliberately *measured* rather than
+# assumed to shrink: COMPACT can be wider than BALANCED, because an emphatic
+# state gains its word there, and that is the intended trade — an exception
+# becomes more explicit under pressure, not less. So the ladder picks the first
+# candidate that actually fits instead of trusting the order.
+MODE_LADDER = (PresentationMode.BALANCED, PresentationMode.COMPACT, PresentationMode.PLAIN)
+
+
+def _mode_candidates(mode: PresentationMode) -> tuple[PresentationMode, ...]:
+    """The modes the ladder may try, given what the user asked for.
+
+    Strictly downward: the ladder never hands back something the user declined.
+    A PLAIN request is a statement about what the terminal can render, not about
+    width, so no width pressure may reintroduce a glyph — that would produce
+    exactly the broken output PLAIN exists to avoid. A COMPACT request is not
+    re-expanded to BALANCED either, since the user asked for compactness and
+    running out of room is not a reason to give them more prose.
+    """
+    start = MODE_LADDER.index(mode)
+    return MODE_LADDER[start:]
