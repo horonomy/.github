@@ -408,13 +408,34 @@ def format_reason(reason_code: str | None, reason_label: str | None) -> str:
 # this marker is treated as load-bearing rather than decorative.
 HYPOTHETICAL_TEXT = "NOT ENFORCED"
 
+# Three shared lines' worth of segments need visible structure, so separators
+# form a hierarchy: details are parenthesised and comma-joined inside a segment,
+# segments and provider groups are dot-joined, and the user's own statusline is
+# divided from the Horonom block by the strongest divider of all.
+#
+# Every separator character here is deliberately *absent* from the provider
+# contract's label allowlist (`. , ' - — ( ) % + ? ! ≤ ≥`), so a separator can
+# never be confused with a character a provider put there. Square brackets are
+# reserved for host-owned semantic tokens, which is why `[host]` and
+# `[NOT ENFORCED]` share a shape.
+# A semicolon rather than the more natural comma: comma *is* allowlisted, and a
+# `reason_label` is prose that may well contain one, which would draw a detail
+# boundary the provider never intended.
+DETAIL_SEPARATOR = "; "
+
 # PLAIN drops to ASCII for the same reason it drops glyphs: it exists for
 # terminals whose character handling cannot be trusted, and U+00B7 is one more
 # thing to get wrong for no gain.
-DETAIL_SEPARATORS = {
+SEGMENT_SEPARATORS = {
     PresentationMode.BALANCED: " · ",  # MIDDLE DOT
     PresentationMode.COMPACT: " · ",
     PresentationMode.PLAIN: " | ",
+}
+
+UPSTREAM_SEPARATORS = {
+    PresentationMode.BALANCED: " ┃ ",  # BOX DRAWINGS HEAVY VERTICAL
+    PresentationMode.COMPACT: " ┃ ",
+    PresentationMode.PLAIN: " || ",
 }
 
 
@@ -434,28 +455,31 @@ def render_segment(segment: object, mode: PresentationMode) -> str:
     allowlist; this function adds no field of its own, so it cannot widen that
     surface.
 
-    Clause order is fixed and deliberate: the hypothetical marker sits
-    immediately after the label, ahead of every optional detail, so no
-    degradation step can separate "would block" from "not enforced".
+    The hypothetical marker is placed outside the parenthesised details, welded
+    to the label, so no degradation step and no careless reading can separate
+    "would block" from "not enforced".
     """
     state = _enum_value(segment.state)
-    parts = [f"{state_marker(state, mode)} {segment.label}".strip()]
-
+    head = f"{state_marker(state, mode)} {segment.label}".strip()
     if getattr(segment, "hypothetical", False):
-        parts.append(HYPOTHETICAL_TEXT)
+        head = f"{head} [{HYPOTHETICAL_TEXT}]"
+
+    details: list[str] = []
     if segment.count is not None and segment.count_label:
-        parts.append(format_count(segment.count, segment.total, segment.count_label, mode))
+        details.append(format_count(segment.count, segment.total, segment.count_label, mode))
     confidence = _enum_value(segment.confidence)
     if confidence is not None:
-        parts.append(format_confidence(confidence, _enum_value(segment.confidence_of), mode))
+        details.append(format_confidence(confidence, _enum_value(segment.confidence_of), mode))
 
     reason = format_reason(segment.reason_code, segment.reason_label)
     # COMPACT spends its remaining columns on exceptions only: a reason for an
     # `ok` segment is the least useful thing on the line, and a reason for a
     # `critical` one is the most.
     if reason and (mode is not PresentationMode.COMPACT or state in EMPHATIC_STATES):
-        parts.append(reason)
+        details.append(reason)
     if segment.age_seconds is not None:
-        parts.append(format_age(segment.age_seconds, mode))
+        details.append(format_age(segment.age_seconds, mode))
 
-    return DETAIL_SEPARATORS[mode].join(parts)
+    if not details:
+        return head
+    return f"{head} ({DETAIL_SEPARATOR.join(details)})"
