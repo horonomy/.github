@@ -323,5 +323,63 @@ class TestEmojiPresentationSafety(unittest.TestCase):
                     unicodedata.east_asian_width(char) in ("W", "F"),
                 )
 
+
+class TestGlyphTables(unittest.TestCase):
+    def all_glyphs(self):
+        yield from render.STATE_GLYPHS.items()
+        yield from render.SCOPE_GLYPHS.items()
+
+    def test_every_host_owned_glyph_is_presentation_safe(self):
+        for key, glyph in self.all_glyphs():
+            with self.subTest(key=key):
+                self.assertTrue(render.is_emoji_presentation_safe(glyph))
+
+    def test_every_host_owned_glyph_measures_two_columns(self):
+        for key, glyph in self.all_glyphs():
+            with self.subTest(key=key):
+                self.assertEqual(render.display_width(glyph), 2)
+
+    def test_every_host_owned_glyph_is_a_single_cluster(self):
+        for key, glyph in self.all_glyphs():
+            with self.subTest(key=key):
+                self.assertEqual(len(render.grapheme_clusters(glyph)), 1)
+
+    def test_glyphs_are_distinct_within_each_table(self):
+        for table in (render.STATE_GLYPHS, render.SCOPE_GLYPHS):
+            self.assertEqual(len(set(table.values())), len(table))
+
+    def test_state_glyphs_cover_exactly_the_contract_states(self):
+        self.assertEqual(
+            set(render.STATE_GLYPHS), {member.value for member in contract.SegmentState}
+        )
+
+    def test_scope_glyphs_cover_exactly_the_contract_scopes(self):
+        self.assertEqual(set(render.SCOPE_GLYPHS), {member.value for member in contract.Scope})
+
+    def test_every_glyph_has_a_text_equivalent(self):
+        self.assertEqual(set(render.STATE_GLYPHS), set(render.STATE_TEXT))
+        self.assertEqual(set(render.SCOPE_GLYPHS), set(render.SCOPE_TEXT))
+
+    def test_every_text_equivalent_is_ascii(self):
+        for value in list(render.STATE_TEXT.values()) + list(render.SCOPE_TEXT.values()):
+            with self.subTest(value=value):
+                self.assertTrue(value.isascii())
+
+    def test_scope_text_matches_the_contract_documented_tokens(self):
+        # These three tokens are fixed by the provider contract, not chosen here.
+        self.assertEqual(
+            render.SCOPE_TEXT, {"host": "[host]", "session": "[session]", "project": "[project]"}
+        )
+
+    def test_every_contract_state_has_a_severity(self):
+        self.assertEqual(
+            set(render.STATE_SEVERITY), {member.value for member in contract.SegmentState}
+        )
+
+    def test_not_available_states_do_not_outrank_a_real_problem(self):
+        self.assertLess(render.STATE_SEVERITY["neutral"], render.STATE_SEVERITY["warn"])
+        self.assertLess(render.STATE_SEVERITY["unknown"], render.STATE_SEVERITY["critical"])
+        self.assertEqual(render.STATE_SEVERITY["ok"], render.STATE_SEVERITY["neutral"])
+
 if __name__ == "__main__":
     unittest.main()
