@@ -1271,3 +1271,7 @@ class TestHotPathContainment(FixtureCase):
         started = time.monotonic()
         self.run_main()
         self.assertLess(time.monotonic() - started, 1.0)
+
+
+if __name__ == "__main__":
+    unittest.main()
