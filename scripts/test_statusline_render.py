@@ -248,5 +248,46 @@ class TestDisplayWidth(unittest.TestCase):
             sum(render.cluster_width(c) for c in render.grapheme_clusters(text)),
         )
 
+
+class TestTruncateToWidth(unittest.TestCase):
+    def test_text_within_budget_is_returned_unchanged(self):
+        self.assertEqual(render.truncate_to_width("short", 10), "short")
+
+    def test_text_exactly_at_budget_is_returned_unchanged(self):
+        self.assertEqual(render.truncate_to_width("12345", 5), "12345")
+
+    def test_a_nonpositive_budget_yields_nothing(self):
+        for budget in (0, -1, -100):
+            self.assertEqual(render.truncate_to_width("anything", budget), "")
+
+    def test_a_budget_that_cannot_hold_the_marker_yields_nothing(self):
+        for budget in (1, 2, 3):
+            self.assertEqual(render.truncate_to_width("anything", budget), "")
+
+    def test_the_result_never_exceeds_the_budget(self):
+        text = "Awaiting your approval on a long running task"
+        for budget in range(0, 60):
+            self.assertLessEqual(render.display_width(render.truncate_to_width(text, budget)), budget)
+
+    def test_a_multi_codepoint_cluster_is_never_split(self):
+        text = "\U0001f468‍\U0001f469‍\U0001f467 family"
+        for budget in range(0, 20):
+            result = render.truncate_to_width(text, budget)
+            for cluster in render.grapheme_clusters(result.removesuffix(render.ELLIPSIS)):
+                self.assertIn(cluster, render.grapheme_clusters(text))
+
+    def test_a_single_cluster_too_wide_to_fit_yields_nothing_not_a_lone_marker(self):
+        # A bare "..." is the same nothing as an empty string and costs three
+        # columns to say it.
+        self.assertEqual(render.truncate_to_width("\U0001f468‍\U0001f469‍\U0001f467 x", 7), "")
+
+    def test_trailing_space_is_not_left_before_the_marker(self):
+        for budget in range(4, 14):
+            with self.subTest(budget=budget):
+                self.assertFalse(render.truncate_to_width("aaa bbb ccc", budget).endswith(" ..."))
+
+    def test_the_marker_is_ascii_so_it_survives_a_terminal_that_cannot_render_glyphs(self):
+        self.assertTrue(render.ELLIPSIS.isascii())
+
 if __name__ == "__main__":
     unittest.main()
