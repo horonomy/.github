@@ -380,3 +380,23 @@ def format_confidence(confidence: str, confidence_of: str, mode: PresentationMod
     )
     subject = table.get(confidence_of) or table["unspecified"]
     return f"{subject} {confidence}"
+
+
+def format_reason(reason_code: str | None, reason_label: str | None) -> str:
+    """Render *why* a segment is in its state, preferring the provider's prose.
+
+    A `reason_code` is a machine token (`daemon_not_running`), so underscores
+    become spaces — the token is for matching, not for reading, and the host is
+    the right place to make it readable.
+
+    Returns `""` when the provider supplied neither. That is deliberate: the
+    host does not invent a reason, and it does not infer one from a count. A
+    provider that genuinely does not know says so with an explicit reason code,
+    because "unknown reason" and "no reason clause" are different claims and
+    only the provider can tell them apart.
+    """
+    if reason_label:
+        return reason_label
+    if reason_code:
+        return reason_code.replace("_", " ").replace("-", " ")
+    return ""
