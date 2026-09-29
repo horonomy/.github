@@ -206,5 +206,66 @@ def _parse_provider(payload: object) -> ProviderEntry | None:
     )
 
 
+def parse_registry(payload: object) -> Registry:
+    """Validate the registry document, refusing anything unfamiliar.
+
+    Strict on purpose. This document decides what commands we execute and what
+    the user's original statusline was; guessing at a shape we do not recognise
+    risks either running the wrong thing or losing their line. An unsupported
+    version is refused rather than best-efforted, because a future writer may
+    have moved the very field we would be reading.
+    """
+    if not isinstance(payload, dict):
+        raise RegistryError("registry must be a JSON object")
+    version = payload.get("registry_version")
+    if version not in SUPPORTED_REGISTRY_VERSIONS:
+        raise RegistryError(
+            f"registry_version {version!r} is not supported by this compositor "
+            f"(supported: {sorted(SUPPORTED_REGISTRY_VERSIONS)})"
+        )
+
+    upstream = payload.get("upstream")
+    upstream_command: str | None = None
+    if upstream is not None:
+        if not isinstance(upstream, dict):
+            raise RegistryError("upstream must be an object or absent")
+        command = upstream.get("command")
+        if command is not None and (not isinstance(command, str) or not command.strip()):
+            raise RegistryError("upstream.command must be a non-empty string or absent")
+        upstream_command = command
+
+    entries = payload.get("providers", [])
+    if not isinstance(entries, list):
+        raise RegistryError("providers must be a list")
+    if len(entries) > MAX_PROVIDERS:
+        raise RegistryError(f"at most {MAX_PROVIDERS} providers may be registered")
+    providers = tuple(entry for entry in map(_parse_provider, entries) if entry is not None)
+    identifiers = [entry.provider for entry in providers]
+    if len(identifiers) != len(set(identifiers)):
+        raise RegistryError("provider ids must be unique in the registry")
+
+    presentation = payload.get("presentation", {})
+    if not isinstance(presentation, dict):
+        raise RegistryError("presentation must be an object")
+    width = presentation.get("width_budget")
+    if width is not None and (isinstance(width, bool) or not isinstance(width, int) or width < 1):
+        raise RegistryError("presentation.width_budget must be a positive integer or absent")
+
+    return Registry(
+        upstream_command=upstream_command,
+        upstream_timeout_ms=_bounded_ms(
+            payload, "upstream_timeout_ms", DEFAULT_UPSTREAM_TIMEOUT_MS, MAX_UPSTREAM_TIMEOUT_MS
+        ),
+        providers=providers,
+        # Unlike everything else here, an unrecognised mode falls back instead of
+        # refusing: it decides how the line looks, not what we execute, and
+        # losing the whole statusline over a typo in a cosmetic preference is a
+        # worse outcome than rendering it in the default style.
+        mode=render.PresentationMode.parse(presentation.get("mode")),
+        width_budget=width,
+        deadline_ms=_bounded_ms(payload, "deadline_ms", DEFAULT_DEADLINE_MS, MAX_DEADLINE_MS),
+    )
+
+
 if __name__ == "__main__":
     sys.exit(main())
