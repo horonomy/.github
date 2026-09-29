@@ -587,8 +587,9 @@ def empty_registry() -> dict:
     registry. That is what makes repeated enabling idempotent structurally rather
     than by everyone remembering to compare before writing: the registry is a
     function of the intended state and nothing else, so an operation that changes
-    nothing produces a byte-identical document. Times are recorded in the
-    receipt, which is only written when something actually changed.
+    nothing produces a byte-identical document. Nothing here records *when* an
+    operation ran, because nothing in this lifecycle needs to know: restoration is
+    a delta against the live file, never a replay of a dated snapshot.
     """
     return {"registry_version": compositor.REGISTRY_VERSION, "providers": []}
 
