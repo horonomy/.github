@@ -698,5 +698,23 @@ class FallbackTextTest(unittest.TestCase):
             _status(fallback_text="v" * (sc.MAX_FALLBACK_TEXT_CHARS + 1))
 
 
+def _payload(**overrides: object) -> dict:
+    """A valid minimal wire payload, with fields overridden per test.
+
+    Built as a literal dict rather than from `_status().to_wire()` so a bug in
+    the serialiser cannot make the parser tests pass by agreeing with it.
+    """
+    payload: dict = {
+        "contract_version": sc.CONTRACT_VERSION,
+        "provider": "fornax",
+        "provider_version": "0.0.8",
+        "scope": "host",
+        "availability": "available",
+        "segments": [{"key": "latest_finding", "state": "ok", "label": "Verified"}],
+    }
+    payload.update(overrides)
+    return payload
+
+
 if __name__ == "__main__":
     unittest.main()
