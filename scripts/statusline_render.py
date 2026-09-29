@@ -675,3 +675,9 @@ def _fit_by_dropping(statuses: tuple, mode: PresentationMode, budget: int) -> st
         if display_width(text) <= budget:
             return text
     return None
+
+
+# Below this many columns of prose a label stops being a label and becomes a
+# riddle, so the ladder gives up and hands the whole line back to the user
+# instead.
+MIN_LABEL_COLUMNS = 6
