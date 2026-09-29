@@ -645,5 +645,226 @@ class DisableTest(LifecycleCase):
         self.assertEqual(self.settings.read_bytes(), settings_before)
 
 
+class RestorationTest(LifecycleCase):
+    def test_removing_the_last_provider_restores_only_what_it_took(self) -> None:
+        before = self.read()
+        self.enable("fornax")
+        self.enable("circinus")
+        self.uninstall()
+
+        # REMOVE_TOUCHES_ONLY_PRODUCT_OWNED_STATE -- the whole document compared
+        # structurally, which is the `A+B → A` case of the invariant with nothing
+        # left over: no marker, no compositor command, no leftover keys.
+        self.assertEqual(self.read(), before)
+        self.assertIs(
+            lifecycle.classify(lifecycle.read_settings(self.settings)),
+            lifecycle.Ownership.USER_OWNED,
+        )
+
+    def test_the_lifecycle_invariant_holds_with_a_user_edit_in_the_middle(self) -> None:
+        """`A → A+B → A+B+C → A+C`: only B disappears.
+
+        This is the case a snapshot restore gets wrong. `C` here is deliberately
+        placed *inside* the object being restored, because restoring a remembered
+        copy of `statusLine` would look correct everywhere except exactly here.
+        """
+        self.enable("fornax")
+        data = self.read()
+        data["statusLine"]["padding"] = 4
+        data["statusLine"]["aNewKeyTheUserAdded"] = True
+        self.write(data)
+
+        self.uninstall()
+
+        after = self.read()
+        self.assertEqual(after["statusLine"]["command"], self.original["statusLine"]["command"])
+        self.assertEqual(after["statusLine"]["padding"], 4)
+        self.assertTrue(after["statusLine"]["aNewKeyTheUserAdded"])
+        self.assertNotIn(lifecycle.MARKER_KEY, after["statusLine"])
+        self.assertEqual(unowned(after), unowned(self.original))
+
+    def test_the_recorded_original_never_overwrites_a_command_the_user_chose(self) -> None:
+        """The strongest form of the no-stale-restore rule.
+
+        The recorded upstream command is the only thing this lifecycle remembers
+        about the user's configuration, and it is exactly what a stale-restore bug
+        would write back. Here the user has since chosen a different command, so
+        writing the remembered one back would be a silent revert of a deliberate
+        change.
+        """
+        self.enable("fornax")
+        drifted = self.read()
+        drifted["statusLine"]["command"] = "/Users/founder/.claude/a different statusline.sh"
+        self.write(drifted)
+        self.assertIs(
+            lifecycle.classify(lifecycle.read_settings(self.settings)),
+            lifecycle.Ownership.DRIFTED,
+        )
+
+        plan = self.plan_remove("fornax", operation="uninstall")
+        lifecycle.apply(plan)
+
+        after = self.read()
+        # STALE_RECEIPT_CANNOT_OVERWRITE_CURRENT_CONFIG
+        self.assertEqual(after["statusLine"]["command"], "/Users/founder/.claude/a different statusline.sh")
+        self.assertNotIn(lifecycle.MARKER_KEY, after["statusLine"])
+        self.assertTrue(any("CONFIG_DRIFT" in change.detail for change in plan.changes))
+        self.assertIn(
+            "the statusline was changed outside this lifecycle; no command was written back",
+            plan.notes,
+        )
+
+    def test_removal_never_deletes_the_file_it_shares_with_the_host(self) -> None:
+        self.settings.unlink()
+        self.enable("fornax")
+        self.assertEqual(list(self.read()), [lifecycle.STATUS_LINE_KEY])
+
+        result = self.uninstall()
+
+        # SHARED_CONFIG_IS_NEVER_DELETED_BY_DEFAULT -- this module created both the
+        # file and the only entry in it, and still does not remove the file. Claude
+        # Code reads it for everything else it does, and a missing file is a
+        # different thing to the tool than an empty one.
+        self.assertTrue(self.settings.exists())
+        self.assertEqual(self.read(), {})
+        self.assertNotIn(self.settings, result.plan.state_to_remove)
+        # Our own state, which we do exclusively own, is gone.
+        self.assertFalse(lifecycle.read_registry(self.home).present)
+
+    def test_a_status_line_we_created_inside_an_existing_file_is_removed_entirely(self) -> None:
+        data = rich_settings()
+        del data[lifecycle.STATUS_LINE_KEY]
+        self.write(data)
+
+        self.enable("fornax")
+        plan = self.plan_remove("fornax", operation="uninstall")
+        lifecycle.apply(plan)
+
+        self.assertNotIn(lifecycle.STATUS_LINE_KEY, self.read())
+        self.assertEqual(self.read(), data)
+        self.assertIn(
+            "statusLine is removed entirely; it held nothing but this integration", plan.notes
+        )
+
+    def test_without_a_recorded_original_the_object_is_left_command_less_not_guessed(self) -> None:
+        """The case where there is nothing safe to write and nothing safe to delete.
+
+        A user who adopted an existing configuration has settings this lifecycle
+        owns but no record of what preceded it. Inventing a command would be a
+        guess; deleting their `padding` and `refreshInterval` with it would be
+        destroying state we never owned. So the command goes and the rest stays.
+        """
+        data = rich_settings()
+        data[lifecycle.STATUS_LINE_KEY] = {
+            "type": "command",
+            "command": lifecycle.compositor_command(),
+            "padding": 2,
+            "refreshInterval": 5,
+        }
+        self.write(data)
+        self.enable("fornax", adopt=True)
+
+        plan = self.plan_remove("fornax", operation="uninstall")
+        lifecycle.apply(plan)
+
+        after = self.read()
+        self.assertEqual(after["statusLine"], {"type": "command", "padding": 2, "refreshInterval": 5})
+        self.assertNotIn("command", after["statusLine"])
+        self.assertTrue(any("no original command was recorded" in note for note in plan.notes))
+
+
+class FailSafeTest(LifecycleCase):
+    """Cases where the safe answer is to refuse, and refusing must cost nothing."""
+
+    def test_an_unmarked_copy_of_our_own_command_is_not_claimed_on_a_guess(self) -> None:
+        data = rich_settings()
+        data[lifecycle.STATUS_LINE_KEY] = {
+            "type": "command",
+            "command": lifecycle.compositor_command(),
+            "padding": 1,
+        }
+        self.write(data)
+        before = self.settings.read_bytes()
+
+        plan = self.plan_enable("fornax")
+
+        # LEGACY_OWNERSHIP_UNKNOWN_FAILS_SAFE -- a configuration that predates
+        # ownership markers (or had one stripped) looks exactly like one somebody
+        # wrote by hand. It does not license a destructive automatic action; the
+        # operator has to say so.
+        self.assertIsNotNone(plan.refusal)
+        self.assertFalse(plan.mutates)
+        with self.assertRaises(lifecycle.OwnershipError):
+            lifecycle.apply(plan)
+        self.assertEqual(self.settings.read_bytes(), before)
+        self.assertFalse(lifecycle.read_registry(self.home).present)
+        self.assertIn("re-run with --adopt if this configuration is yours", plan.remediation)
+
+    def test_ownership_without_the_record_of_the_original_is_a_refusal(self) -> None:
+        self.enable("fornax")
+        lifecycle.read_registry(self.home).path.unlink()
+        before = self.settings.read_bytes()
+
+        plan = self.plan_enable("circinus")
+
+        # The registry holds the only record of the user's original command. Taking
+        # a further action while it is missing would strand them.
+        self.assertIsNotNone(plan.refusal)
+        self.assertIn("registry holds the only record", plan.refusal)
+        self.assertEqual(self.settings.read_bytes(), before)
+
+    def test_an_unusable_registry_is_never_silently_rewritten(self) -> None:
+        self.enable("fornax")
+        self.enable("circinus")
+        registry_file = lifecycle.read_registry(self.home).path
+        registry_file.write_text('{"registry_version": 99, "providers": []}')
+        before = registry_file.read_bytes()
+
+        for plan in (self.plan_enable("libra"), self.plan_remove("fornax")):
+            with self.subTest(operation=plan.operation):
+                self.assertIsNotNone(plan.refusal)
+                with self.assertRaises(lifecycle.OwnershipError):
+                    lifecycle.apply(plan)
+
+        # Overwriting it would discard the other product's registration along with
+        # the recorded original -- the "let me clean up whatever I can find"
+        # behaviour HORO-1000 forbids.
+        self.assertEqual(registry_file.read_bytes(), before)
+
+    def test_a_foreign_ownership_marker_is_never_written_over(self) -> None:
+        data = rich_settings()
+        data[lifecycle.STATUS_LINE_KEY][lifecycle.MARKER_KEY] = {"owner": "some-other-product"}
+        self.write(data)
+        before = self.settings.read_bytes()
+
+        plan = self.plan_enable("fornax")
+
+        self.assertIs(plan.ownership, lifecycle.Ownership.UNSUPPORTED_SHAPE)
+        self.assertIsNotNone(plan.refusal)
+        self.assertEqual(self.settings.read_bytes(), before)
+
+    def test_adopting_is_the_one_explicit_way_past_a_refusal(self) -> None:
+        data = rich_settings()
+        data[lifecycle.STATUS_LINE_KEY] = {
+            "type": "command",
+            "command": lifecycle.compositor_command(),
+            "padding": 1,
+        }
+        self.write(data)
+
+        self.enable("fornax", adopt=True)
+
+        after = self.read()
+        self.assertIs(
+            lifecycle.classify(lifecycle.read_settings(self.settings)),
+            lifecycle.Ownership.HORONOM_OWNED,
+        )
+        self.assertEqual(after["statusLine"]["padding"], 1)
+        # Adoption records ownership. It does not invent an original command, and
+        # the registry says so rather than leaving the field absent and ambiguous.
+        self.assertNotIn("upstream", self.registry())
+        self.assertIsNone(self.registry()["lifecycle"]["created_status_line"])
+
+
 if __name__ == "__main__":
     unittest.main()
