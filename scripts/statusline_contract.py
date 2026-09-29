@@ -811,3 +811,124 @@ def _segment_to_wire(segment: Segment) -> dict:
     if segment.order_hint:
         payload["order_hint"] = segment.order_hint
     return payload
+
+
+def _parse_enum_strict(enum_cls: type, value: object, field: str):
+    """Parse an enum value, refusing anything unrecognised.
+
+    Used where there is no honest "I don't recognise this" member, so guessing
+    would silently mean something specific and wrong. `scope` is the case that
+    matters: an unrecognised scope must never land on `host` or `session`,
+    because that is how host-wide state starts rendering as session-scoped.
+    """
+    for member in enum_cls:
+        if member.value == value:
+            return member
+    allowed = ", ".join(sorted(m.value for m in enum_cls))
+    raise ContractViolation(f"{field} must be one of: {allowed}")
+
+
+def _parse_enum_lenient(enum_cls: type, value: object, field: str, unknown):
+    """Parse an enum value, mapping anything unrecognised to `unknown`.
+
+    Used where the enum has an explicit unknown member, so a provider from a
+    future contract minor version degrades to an honest "not recognised"
+    instead of failing the whole render. This is not collapsing: `unknown` is
+    the truthful reading of a state this host has never heard of.
+    """
+    if value is None:
+        raise ContractViolation(f"{field} is required")
+    for member in enum_cls:
+        if member.value == value:
+            return member
+    return unknown
+
+
+def _segment_from_wire(payload: object, index: int) -> Segment:
+    """Parse one segment, ignoring fields this contract version does not know."""
+    if not isinstance(payload, dict):
+        raise ContractViolation(f"segments[{index}] must be an object")
+    field = f"segments[{index}]"
+    confidence_raw = payload.get("confidence")
+    confidence = (
+        _parse_enum_strict(Confidence, confidence_raw, f"{field}.confidence")
+        if confidence_raw is not None
+        else None
+    )
+    confidence_of = (
+        _parse_enum_lenient(
+            ConfidenceSubject,
+            payload.get("confidence_of"),
+            f"{field}.confidence_of",
+            ConfidenceSubject.UNSPECIFIED,
+        )
+        if confidence is not None
+        else None
+    )
+    return Segment(
+        key=payload.get("key"),
+        state=_parse_enum_lenient(
+            SegmentState, payload.get("state"), f"{field}.state", SegmentState.UNKNOWN
+        ),
+        label=payload.get("label"),
+        reason_code=payload.get("reason_code"),
+        reason_label=payload.get("reason_label"),
+        confidence=confidence,
+        confidence_of=confidence_of,
+        age_seconds=payload.get("age_seconds"),
+        count=payload.get("count"),
+        total=payload.get("total"),
+        count_label=payload.get("count_label"),
+        hypothetical=bool(payload.get("hypothetical", False)),
+        explain_key=payload.get("explain_key"),
+        order_hint=payload.get("order_hint", 0),
+    )
+
+
+def provider_status_from_wire(payload: object) -> ProviderStatus:
+    """Parse a provider's JSON payload into a validated `ProviderStatus`.
+
+    Forward compatibility is deliberate and narrow: unknown *fields* are
+    ignored, and an unknown value for an enum that has an `unknown` member
+    degrades to that member. Everything else — an unknown `contract_version`,
+    an unrecognised `scope`, a missing required field — is refused, so a
+    future provider can add information without a host silently inventing a
+    meaning for information it does not understand.
+
+    One consequence is deliberate: an unrecognised `availability` degrades to
+    `unknown`, and the non-collapse rule then refuses any `ok` segment or any
+    count in the same payload. That rejects the whole provider rather than
+    rendering a health claim this host cannot stand behind — a caller that
+    catches `ContractViolation` and renders the provider as unknown is
+    truthful; one that had accepted the `ok` would not be.
+    """
+    if not isinstance(payload, dict):
+        raise ContractViolation("provider payload must be a JSON object")
+    version = payload.get("contract_version")
+    if not is_supported_contract_version(version):
+        raise UnsupportedContractVersion(
+            f"contract_version {version!r} is not supported by this host "
+            f"(supported: {sorted(SUPPORTED_CONTRACT_VERSIONS)})"
+        )
+    raw_segments = payload.get("segments", [])
+    if not isinstance(raw_segments, list):
+        raise ContractViolation("segments must be a list")
+    return ProviderStatus(
+        provider=payload.get("provider"),
+        provider_version=payload.get("provider_version"),
+        scope=_parse_enum_strict(Scope, payload.get("scope"), "scope"),
+        availability=_parse_enum_lenient(
+            Availability,
+            payload.get("availability"),
+            "availability",
+            Availability.UNKNOWN,
+        ),
+        segments=tuple(
+            _segment_from_wire(s, i) for i, s in enumerate(raw_segments)
+        ),
+        observed_at=payload.get("observed_at"),
+        cache_ttl_seconds=payload.get("cache_ttl_seconds", 0),
+        order_hint=payload.get("order_hint", 500),
+        fallback_text=payload.get("fallback_text"),
+        contract_version=version,
+    )
