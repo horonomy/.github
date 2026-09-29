@@ -106,6 +106,23 @@ class LifecycleCase(unittest.TestCase):
         self.original = rich_settings()
         self.write(self.original)
 
+    def deny_reads(self, target: pathlib.Path) -> object:
+        """Make exactly one path unreadable.
+
+        Monkeypatched rather than chmod-ed, because a suite running as root
+        would read the file anyway and the test would pass without ever
+        reaching the guard. One path at a time, so a test about the settings
+        file cannot be satisfied by the registry failing instead.
+        """
+        real = pathlib.Path.read_bytes
+
+        def fake(this: pathlib.Path) -> bytes:
+            if this == target:
+                raise PermissionError(13, "Permission denied: '/Users/founder/private/x'")
+            return real(this)
+
+        return unittest.mock.patch.object(pathlib.Path, "read_bytes", fake)
+
     def write(self, data: dict, *, indent: int | None = 2) -> None:
         self.settings.write_bytes(lifecycle.serialize(data, indent=indent))
 
@@ -910,6 +927,45 @@ class MalformedConfigTest(LifecycleCase):
             [f"repair {self.settings} by hand; no lifecycle operation will write to it until it parses"],
         )
 
+
+
+    def test_a_settings_file_we_cannot_read_refuses_and_names_no_paths(self) -> None:
+        with self.deny_reads(self.settings):
+            with self.assertRaises(lifecycle.LifecycleError) as caught:
+                lifecycle.read_settings(self.settings)
+            # The errno carries the reason. The OS message carries every parent
+            # directory on the way to the file, and those are the user's.
+            self.assertIn("errno 13", str(caught.exception))
+            self.assertNotIn("Permission denied", str(caught.exception))
+            self.assertNotIn("/Users/founder", str(caught.exception))
+
+            # And the diagnostic answers rather than ending in a traceback,
+            # which is the whole reason a user runs doctor on a broken host.
+            report = lifecycle.doctor(self.settings, self.home)
+        self.assertFalse(report["settings"]["readable"])
+        self.assertIn("errno 13", report["settings"]["problem"])
+        self.assertTrue(report["drift"]["detected"])
+
+    def test_a_registry_we_cannot_read_is_reported_and_blocks_a_write(self) -> None:
+        self.enable("fornax")
+        registry_path = lifecycle.read_registry(self.home).path
+        before = self._read()
+
+        with self.deny_reads(registry_path):
+            report = lifecycle.doctor(self.settings, self.home)
+            self.assertIn("errno 13", report["drift"]["reason"])
+            self.assertTrue(report["drift"]["detected"])
+
+            # MALFORMED_OR_UNSUPPORTED_CONFIG_FAILS_WITH_ZERO_MUTATION -- our own
+            # state counts. Registering over a registry we cannot read would
+            # discard whatever another product had put in it.
+            plan = self.plan_enable("circinus")
+            self.assertIsNotNone(plan.refusal)
+            self.assertIn("errno 13", plan.refusal)
+            self.assertIsNone(plan.settings_after)
+            self.assertIsNone(plan.registry_after)
+
+        self.assertEqual(self._read(), before)
 
 
 class ConcurrentChangeTest(LifecycleCase):
