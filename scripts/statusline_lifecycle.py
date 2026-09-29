@@ -174,3 +174,61 @@ class ChangeKind(enum.Enum):
     PRESERVED_USER = "host_user_state_preserved"
     PRESERVED_OTHER_PRODUCT = "other_product_state_preserved"
     BLOCKED_UNKNOWN = "unknown_state_blocking_mutation"
+
+
+# The first indented line in a JSON document, which is enough to recover how the
+# rest of it is indented. Anchored on a quote so that indentation inside a
+# multi-line string value cannot be mistaken for the document's own.
+_INDENT_PATTERN = re.compile(rb'\n([ \t]+)"')
+
+
+def detect_indent(raw: bytes) -> int | str:
+    """The indentation the document already uses, for `json.dump` to reuse.
+
+    Re-serialising with our own preferred formatting would rewrite every line of
+    a file we mostly do not own, which turns `git diff` on a dotfiles repo from
+    one line into hundreds and makes the honest claim "we changed one key"
+    impossible to see. Tabs are returned as a string because that is the form
+    `json.dump` wants for them.
+    """
+    match = _INDENT_PATTERN.search(raw)
+    if match is None:
+        return DEFAULT_INDENT
+    indent = match.group(1)
+    return "\t" * len(indent) if indent.startswith(b"\t") else len(indent)
+
+
+@dataclasses.dataclass(frozen=True)
+class SettingsDocument:
+    """One read of a settings file: its bytes, its value, and how it was written.
+
+    `raw` is kept alongside `data` because it is the only thing that can answer
+    "did this change under us" -- a re-parse cannot, since two different byte
+    sequences parse to the same value. `mode` and the formatting fields exist so
+    that writing the file back does not quietly restyle or re-permission it.
+    """
+
+    path: pathlib.Path
+    raw: bytes
+    data: dict
+    indent: int | str
+    trailing_newline: bool
+    mode: int | None
+
+    @property
+    def existed(self) -> bool:
+        """Whether there was a file here at all.
+
+        Distinguished from an empty file because the two differ at uninstall: a
+        `statusLine` we created in a file that did not exist is removable down to
+        nothing, and one we created in a file the user already had is not.
+        """
+        return self.mode is not None
+
+    @property
+    def fingerprint(self) -> str:
+        return hashlib.sha256(self.raw).hexdigest()
+
+    @property
+    def status_line(self) -> object:
+        return self.data.get(STATUS_LINE_KEY)
