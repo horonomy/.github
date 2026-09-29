@@ -71,3 +71,31 @@ class Scope(enum.Enum):
     def text_fallback(self) -> str:
         """The deterministic, emoji-free rendering of this scope."""
         return f"[{self.value}]"
+
+
+class Availability(enum.Enum):
+    """Whether a provider could answer at all, and if not, why not.
+
+    These five states are never collapsed. In particular:
+
+    - `UNKNOWN` is not `AVAILABLE`: "we did not find out" is not "healthy".
+    - `UNAVAILABLE` is not a zero reading: a stopped daemon is not a daemon
+      reporting no findings.
+    - `ERROR` is not "nothing happened": a probe that failed is a fact worth
+      rendering, not silence.
+    - `UNSUPPORTED` is a legitimate terminal answer, not a defect to hide.
+
+    Only `AVAILABLE` licenses a renderer to treat the provider's segment
+    values as live readings.
+    """
+
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+    UNSUPPORTED = "unsupported"
+    UNKNOWN = "unknown"
+    ERROR = "error"
+
+    @property
+    def has_live_readings(self) -> bool:
+        """Whether segment values may be read as current measurements."""
+        return self is Availability.AVAILABLE
