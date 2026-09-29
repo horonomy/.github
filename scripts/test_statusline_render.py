@@ -805,5 +805,28 @@ class TestProviderSeverity(unittest.TestCase):
         empty = status(availability=contract.Availability.UNAVAILABLE, segments=())
         self.assertEqual(render.provider_severity(empty), render.STATE_SEVERITY["unknown"])
 
+
+class TestModeLadder(unittest.TestCase):
+    def test_the_requested_mode_is_tried_first(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertIs(render._mode_candidates(mode)[0], mode)
+
+    def test_the_ladder_never_reintroduces_a_glyph_a_plain_request_declined(self):
+        for candidate in render._mode_candidates(render.PresentationMode.PLAIN):
+            self.assertFalse(candidate.uses_glyphs)
+
+    def test_a_compact_request_is_not_re_expanded_to_balanced(self):
+        self.assertNotIn(
+            render.PresentationMode.BALANCED,
+            render._mode_candidates(render.PresentationMode.COMPACT),
+        )
+
+    def test_the_ladder_is_a_suffix_of_the_declared_order(self):
+        for mode in MODES:
+            candidates = render._mode_candidates(mode)
+            with self.subTest(mode=mode):
+                self.assertEqual(candidates, render.MODE_LADDER[render.MODE_LADDER.index(mode):])
+
 if __name__ == "__main__":
     unittest.main()
