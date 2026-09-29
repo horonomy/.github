@@ -193,7 +193,14 @@ def _parse_provider(payload: object) -> ProviderEntry | None:
     """Parse one registry entry, or `None` if it is registered but disabled."""
     if not isinstance(payload, dict):
         raise RegistryError("each provider entry must be an object")
-    provider = contract.require_provider_id(payload.get("provider"))
+    try:
+        provider = contract.require_provider_id(payload.get("provider"))
+    except contract.ContractViolation as exc:
+        # Translated rather than propagated: `main` handles a bad registry by
+        # preserving the user's line, and it recognises this failure by type. A
+        # contract exception escaping from here would reach the host as a
+        # traceback and take their statusline with it.
+        raise RegistryError(f"provider id is not valid: {exc}") from exc
     if payload.get("enabled", True) is not True:
         return None
     return ProviderEntry(
