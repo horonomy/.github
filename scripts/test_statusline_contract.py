@@ -557,6 +557,78 @@ class SegmentTest(unittest.TestCase):
             segment.label = "Unverified"  # type: ignore[misc]
 
 
+class SegmentDurationTest(unittest.TestCase):
+    """A span carries seconds plus a noun, and the host formats it.
+
+    The defect being closed is Libra's, and it is the same shape as the count
+    rule's: the founder's wrapper rendered `P90≤5d4h` because the product had
+    nowhere to put a duration except a label it had formatted itself.
+    """
+
+    def _with(self, **overrides: object) -> sc.Segment:
+        fields: dict = {
+            "key": "remaining",
+            "state": sc.SegmentState.NEUTRAL,
+            "label": "Remaining work",
+        }
+        fields.update(overrides)
+        return sc.Segment(**fields)  # type: ignore[arg-type]
+
+    def test_a_duration_with_its_noun_is_accepted(self) -> None:
+        segment = self._with(duration_seconds=447120, duration_label="P90")
+        self.assertEqual((segment.duration_seconds, segment.duration_label), (447120, "P90"))
+
+    def test_a_duration_without_a_noun_is_refused(self) -> None:
+        # The load-bearing direction: a bare `5d4h` could be elapsed,
+        # remaining, a budget or a timeout, and the reader cannot tell which.
+        with self.assertRaises(sc.ContractViolation) as caught:
+            self._with(duration_seconds=447120)
+        self.assertIn("duration_label", str(caught.exception))
+
+    def test_a_noun_with_no_duration_is_accepted(self) -> None:
+        # Mirrors `count_label`, which is likewise permitted alone. Harmless
+        # rather than meaningful: nothing renders it, so it cannot mislead.
+        self.assertEqual(self._with(duration_label="P90").duration_seconds, None)
+
+    def test_a_negative_duration_is_refused(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            self._with(duration_seconds=-1, duration_label="P90")
+
+    def test_a_duration_past_the_bound_is_refused(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            self._with(duration_seconds=sc.MAX_DURATION_SECONDS + 1, duration_label="P90")
+
+    def test_the_bound_itself_is_accepted(self) -> None:
+        # So the rejection above is the bound biting rather than any duration
+        # of that magnitude being refused.
+        self.assertEqual(
+            self._with(
+                duration_seconds=sc.MAX_DURATION_SECONDS, duration_label="P90"
+            ).duration_seconds,
+            sc.MAX_DURATION_SECONDS,
+        )
+
+    def test_a_boolean_duration_is_refused(self) -> None:
+        # `True` is an `int` in Python, so this is a real way a wrong value
+        # reaches the field rather than a hypothetical one.
+        with self.assertRaises(sc.ContractViolation):
+            self._with(duration_seconds=True, duration_label="P90")
+
+    def test_a_float_duration_is_refused(self) -> None:
+        # The daemon's own estimate is a float; whoever converts it must round,
+        # and the contract is the place that forces the decision to be made.
+        with self.assertRaises(sc.ContractViolation):
+            self._with(duration_seconds=447120.5, duration_label="P90")
+
+    def test_a_secret_shaped_noun_cannot_enter_a_segment(self) -> None:
+        with self.assertRaises(sc.PrivacyViolation):
+            self._with(duration_seconds=60, duration_label="aB3dE5fG7hJ9kL1mN3pQ5")
+
+    def test_a_path_shaped_noun_cannot_enter_a_segment(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            self._with(duration_seconds=60, duration_label="/var/lib/libra")
+
+
 def _segment(**overrides: object) -> sc.Segment:
     """A valid minimal segment, with fields overridden per test."""
     fields: dict = {
@@ -814,8 +886,15 @@ class WireParsingTest(unittest.TestCase):
         with self.assertRaises(sc.ContractViolation):
             sc.provider_status_from_wire(_payload(segments=["ok"]))
 
-    def test_a_payload_survives_a_round_trip(self) -> None:
-        rich = _payload(
+    def _rich(self) -> dict:
+        """A payload setting every optional field, for the two tests below.
+
+        One fixture rather than two, so the completeness guard reads the same
+        object the round-trip asserts on. It used to check a hand-maintained
+        list of names instead, which could pass while the round-trip itself
+        omitted a field.
+        """
+        return _payload(
             observed_at="2026-09-29T08:00:00Z",
             cache_ttl_seconds=5,
             order_hint=20,
@@ -833,30 +912,23 @@ class WireParsingTest(unittest.TestCase):
                     "count": 113,
                     "total": 705,
                     "count_label": "findings",
+                    "duration_seconds": 447120,
+                    "duration_label": "P90",
                     "hypothetical": True,
                     "explain_key": "fornax.latest_finding",
                     "order_hint": 3,
                 }
             ],
         )
+
+    def test_a_payload_survives_a_round_trip(self) -> None:
+        rich = self._rich()
         self.assertEqual(sc.provider_status_from_wire(rich).to_wire(), rich)
 
     def test_the_round_trip_fixture_exercises_every_segment_field(self) -> None:
         # Guards the test above from silently stopping at the fields that
         # existed when it was written.
-        covered = set(_payload()["segments"][0]) | {
-            "reason_code",
-            "reason_label",
-            "confidence",
-            "confidence_of",
-            "age_seconds",
-            "count",
-            "total",
-            "count_label",
-            "hypothetical",
-            "explain_key",
-            "order_hint",
-        }
+        covered = set(self._rich()["segments"][0])
         declared = {f.name for f in dataclasses.fields(sc.Segment)}
         self.assertEqual(declared - covered, set())
 
@@ -1322,7 +1394,9 @@ class LibraRepresentabilityTest(unittest.TestCase):
                 sc.Segment(
                     key="remaining_p90",
                     state=sc.SegmentState.NEUTRAL,
-                    label="P90 ≤ 12m",
+                    label="remaining work",
+                    duration_seconds=720,
+                    duration_label="P90",
                     explain_key="libra.remaining_p90",
                     order_hint=3,
                 ),
@@ -1360,6 +1434,19 @@ class LibraRepresentabilityTest(unittest.TestCase):
         for segment in self._status().segments:
             with self.subTest(key=segment.key):
                 self.assertNotIn("pf:", segment.label)
+
+    def test_the_remaining_estimate_is_a_duration_not_a_formatted_label(self) -> None:
+        remaining = self._status().segments[2]
+        self.assertEqual((remaining.duration_seconds, remaining.duration_label), (720, "P90"))
+
+    def test_no_planned_label_formats_a_span_itself(self) -> None:
+        # The founder's wrapper rendered `P90≤5d4h` because the product had
+        # nowhere to put a span except a label it formatted itself. Every such
+        # label is a place two products can disagree about what a day is, so the
+        # host formats spans and a label never contains one.
+        for segment in self._status().segments:
+            with self.subTest(key=segment.key):
+                self.assertNotRegex(segment.label, r"\d\s*[smhd]\b")
 
     def test_a_stale_profile_is_representable_without_lying(self) -> None:
         stale = sc.Segment(

@@ -126,6 +126,18 @@ def libra_status(**overrides) -> contract.ProviderStatus:
                 reason_code="escalated_to_human",
                 order_hint=0,
             ),
+            # The remaining-work estimate: seconds and a noun, with the host
+            # owning the formatting. A product that sent `label="P90 ≤ 12m"`
+            # instead would be the drift the duration pair exists to prevent.
+            segment(
+                key="remaining",
+                state=contract.SegmentState.NEUTRAL,
+                label="Remaining work",
+                duration_seconds=720,
+                duration_label="P90",
+                explain_key="libra.remaining",
+                order_hint=20,
+            ),
         ),
     }
     fields.update(overrides)
@@ -482,6 +494,47 @@ class TestFormatCount(unittest.TestCase):
         self.assertIn("0", render.format_count(0, 14, "tool calls", render.PresentationMode.COMPACT))
 
 
+class TestFormatDuration(unittest.TestCase):
+    def test_a_single_unit_when_the_span_divides_cleanly(self):
+        cases = {60: "1m", 3600: "1h", 86400: "1d", 45: "45s"}
+        for seconds, expected in cases.items():
+            with self.subTest(seconds=seconds):
+                self.assertEqual(render.format_duration(seconds, "P90"), f"P90 {expected}")
+
+    def test_a_second_unit_appears_when_the_remainder_reaches_it(self):
+        # 5d4h. The second unit is the reason this is not `format_age`: `5d` for
+        # anything up to six days is a 20% understatement of work remaining.
+        self.assertEqual(render.format_duration(447120, "P90"), "P90 5d4h")
+
+    def test_the_second_unit_is_the_adjacent_one_or_nothing(self):
+        # 1d 0h 1m. `1d1m` would imply a precision the day already discarded, so
+        # the minutes are dropped rather than promoted past the empty hour.
+        self.assertEqual(render.format_duration(86460, "P90"), "P90 1d")
+
+    def test_truncation_never_carries_into_the_larger_unit(self):
+        # 1d 23h 59m 59s: not `2d`, which would overstate by a whole unit, and
+        # not `1d24h`, which is not a thing.
+        self.assertEqual(render.format_duration(172799, "P90"), "P90 1d23h")
+
+    def test_zero_is_rendered_not_suppressed(self):
+        # A provider that means "no estimate" omits the field; 0 means 0.
+        self.assertEqual(render.format_duration(0, "P90"), "P90 0s")
+
+    def test_a_negative_span_is_clamped(self):
+        self.assertEqual(render.format_duration(-10, "P90"), "P90 0s")
+
+    def test_the_noun_comes_first_and_survives(self):
+        # `5d4h P90` reads as a typo; `P90 5d4h` reads as a qualified quantity.
+        # And the noun is the whole point — an unlabelled span could be elapsed,
+        # remaining, a budget or a timeout.
+        for seconds in (0, 45, 447120):
+            with self.subTest(seconds=seconds):
+                self.assertTrue(render.format_duration(seconds, "remaining").startswith("remaining "))
+
+    def test_the_rendering_is_ascii(self):
+        self.assertTrue(render.format_duration(447120, "P90").isascii())
+
+
 class TestFormatConfidence(unittest.TestCase):
     def test_a_preflight_confidence_says_it_is_a_preflight_confidence(self):
         self.assertEqual(
@@ -636,6 +689,50 @@ class TestRenderSegment(unittest.TestCase):
                 self.assertIn(
                     "claims", render.render_segment(fornax_status().segments[0], mode)
                 )
+
+    def test_a_duration_keeps_its_noun(self):
+        remaining = libra_status().segments[-1]
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertIn("P90 12m", render.render_segment(remaining, mode))
+
+    def test_a_duration_sits_with_the_count_and_before_the_age(self):
+        # Both are quantities the segment reports; the age qualifies the whole
+        # reading, so it stays last whatever else is present.
+        text = render.render_segment(
+            segment(
+                count=2,
+                total=14,
+                count_label="tool calls",
+                duration_seconds=720,
+                duration_label="P90",
+                age_seconds=125,
+            ),
+            render.PresentationMode.BALANCED,
+        )
+        self.assertLess(text.index("tool calls"), text.index("P90"))
+        self.assertLess(text.index("P90"), text.index("ago"))
+
+    def test_a_segment_object_predating_the_duration_fields_still_renders(self):
+        # `render_segment` promises to accept anything with the same attributes,
+        # and the duration pair arrived after that promise. A provider pinned to
+        # an older copy of the contract must degrade to its other fields rather
+        # than raise. `Stub` below relies on the same tolerance.
+        class Older:
+            key = "k"
+            state = contract.SegmentState.OK
+            label = "Older"
+            reason_code = None
+            reason_label = None
+            confidence = None
+            confidence_of = None
+            age_seconds = None
+            count = None
+            total = None
+            count_label = None
+            hypothetical = False
+
+        self.assertIn("Older", render.render_segment(Older(), render.PresentationMode.PLAIN))
 
     def test_a_count_without_a_label_is_not_rendered_as_a_bare_number(self):
         # The contract refuses this combination, so this only guards a stub.

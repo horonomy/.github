@@ -333,6 +333,56 @@ def format_age(age_seconds: int, mode: PresentationMode) -> str:
     return token if mode is PresentationMode.COMPACT else f"{token} ago"
 
 
+# Descending, and each entry's divisor is the next one's unit, so the pair
+# picked below is always adjacent — `5d20m` would imply a precision the coarser
+# unit already discarded.
+_DURATION_UNITS = ((86400, "d"), (3600, "h"), (60, "m"), (1, "s"))
+
+
+def format_duration(duration_seconds: int, duration_label: str) -> str:
+    """Render a span as at most two adjacent coarse units, with its noun.
+
+    Takes no `PresentationMode`, unlike its siblings here, and the omission is
+    deliberate rather than an oversight: the token is already ASCII and already
+    as short as it can be, and the noun is load-bearing in every mode, so there
+    is nothing for a mode to change. A parameter that is accepted and ignored
+    would invite a caller to believe otherwise.
+
+    Two units rather than `format_age`'s one, because the two fields answer
+    different questions. An age is read as a threshold — "is this seconds or days
+    old" — so one unit is enough and the truncation error does not matter. A span
+    is read as a quantity someone plans against, and `5d` for anything from five
+    to six days is a 20% error in the optimistic direction; `5d4h` bounds it to
+    the smaller unit.
+
+    Truncates rather than rounds, so the second unit is never carried into the
+    first — `1d0h` would read as a suspiciously exact day and `2d` would be a
+    whole unit of overstatement.
+
+    The noun comes first, unlike `format_count`'s. `2 of 14 recent decisions`
+    reads as a sentence with the number as its subject, but a span's noun is a
+    qualifier on the number rather than what is being counted, so `P90 5d4h`
+    reads correctly where `5d4h P90` reads as a typo. Never dropped, in any
+    mode, for the same reason `count_label` is not.
+    """
+    seconds = max(0, int(duration_seconds))
+    for index, (divisor, unit) in enumerate(_DURATION_UNITS):
+        if seconds < divisor:
+            continue
+        whole, remainder = divmod(seconds, divisor)
+        token = f"{whole}{unit}"
+        if remainder and index + 1 < len(_DURATION_UNITS):
+            next_divisor, next_unit = _DURATION_UNITS[index + 1]
+            if remainder >= next_divisor:
+                token = f"{token}{remainder // next_divisor}{next_unit}"
+        break
+    else:
+        # Genuinely zero, not "too small to show": a provider that means "no
+        # estimate" omits the field rather than sending 0.
+        token = "0s"
+    return f"{duration_label} {token}"
+
+
 def format_count(count: int, total: int | None, count_label: str, mode: PresentationMode) -> str:
     """Render a count with the noun it counts.
 
@@ -473,6 +523,18 @@ def render_segment(segment: object, mode: PresentationMode) -> str:
     details: list[str] = []
     if segment.count is not None and segment.count_label:
         details.append(format_count(segment.count, segment.total, segment.count_label, mode))
+    # Beside the count rather than beside the age: both are quantities the
+    # segment is reporting, whereas the age qualifies the whole reading and so
+    # stays last.
+    #
+    # `getattr` rather than attribute access, unlike the fields above it, because
+    # this function's contract is "anything with the same attributes" and these
+    # two arrived after that promise was made — a segment object from an older
+    # copy of the contract must still render, minus the field it cannot supply.
+    duration = getattr(segment, "duration_seconds", None)
+    duration_label = getattr(segment, "duration_label", None)
+    if duration is not None and duration_label:
+        details.append(format_duration(duration, duration_label))
     confidence = _enum_value(segment.confidence)
     if confidence is not None:
         details.append(format_confidence(confidence, _enum_value(segment.confidence_of), mode))

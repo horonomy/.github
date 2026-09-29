@@ -39,6 +39,7 @@ So the split is:
 | Owning the host's single statusline slot | The Horonom statusline host, exactly one implementation |
 | Rewriting host configuration | The same host, exactly one config patcher |
 | Iconography, separators, widths, truncation, presentation modes | The same host |
+| Formatting numbers and spans into text (`5d4h`, `2 of 14`) | The same host — a product sends seconds and a noun, never a rendered span |
 | Ordering, deadlines, caching, failure isolation | The same host |
 | What is true about this product right now | Each product, in its own repo |
 
@@ -82,9 +83,17 @@ allowlist. There is deliberately **no free-text field**: see
 | `age_seconds` | no | int | Freshness of the underlying reading. |
 | `count` / `total` | no | int | A numerator, optionally out of a denominator. |
 | `count_label` | no | string | The noun the count counts. Required whenever `count` is set. |
+| `duration_seconds` | no | int | A forward-looking span — a remaining-work estimate, a budget. Not an age; `age_seconds` looks backwards. |
+| `duration_label` | no | string | The noun qualifying the span (`P90`, `remaining`). Required whenever `duration_seconds` is set. |
 | `hypothetical` | no | bool | This segment describes what *would* have happened, not what did. |
 | `explain_key` | no | string | Dotted key the shared explain surface resolves. |
 | `order_hint` | no | int | 0–1000 within the provider. |
+
+`duration_seconds` / `duration_label` were added for HORO-1569 under
+`contract_version` 1: both are optional and host-side, which the [version
+evolution](#version-evolution) rules already permit without a bump. They exist
+so a product never formats a span itself — see the last row of the ownership
+table above.
 
 ### Truthfulness rules the host enforces
 
@@ -103,8 +112,13 @@ cannot reach the renderer:
   a result it computed, so `unavailable` plus `high` is incoherent in the most
   misleading direction available. `age_seconds` *is* still allowed, because
   "last read two hours ago, unavailable now" is true and useful.
+- The same provider cannot carry a `duration_seconds`. A remaining-work estimate
+  is a claim about live work, so `remaining P90 5d4h` beside an unreachable
+  daemon is the same false-currency claim a `count` would be.
 - A bare `count` is refused without its `count_label` — an unlabelled number is
-  exactly the opaque abbreviation this contract replaces.
+  exactly the opaque abbreviation this contract replaces. `duration_seconds`
+  carries the same rule for the same reason: a bare `5d4h` beside a task id
+  could be elapsed, remaining, a budget or a timeout.
 - `confidence` and `confidence_of` must be set together. A bare
   `high`/`medium`/`low` reads as risk or priority; Libra's is *preflight
   confidence*, and the contract will not let that be ambiguous.
