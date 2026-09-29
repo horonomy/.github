@@ -273,3 +273,11 @@ STATE_SEVERITY = {
     "warn": 3,
     "critical": 4,
 }
+
+# States that keep their word even in COMPACT, because an exception must become
+# *more* explicit under pressure, not less. `unknown` is in here deliberately:
+# a provider that could not read its own state is the case a reader is most
+# likely to misread as fine.
+EMPHATIC_STATES = frozenset({"unknown", "attention", "warn", "critical"})
+
+UNKNOWN_STATE = "unknown"
