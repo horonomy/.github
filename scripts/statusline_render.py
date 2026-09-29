@@ -59,10 +59,10 @@ class PresentationMode(enum.Enum):
         return self is not PresentationMode.PLAIN
 
 
-_ZWJ = "‍"
+_ZWJ = "\u200d"  # ZERO WIDTH JOINER
 _VARIATION_SELECTORS = frozenset(chr(cp) for cp in range(0xFE00, 0xFE10))
 _EMOJI_MODIFIERS = frozenset(chr(cp) for cp in range(0x1F3FB, 0x1F400))
-_KEYCAP_ENCLOSER = "⃣"
+_KEYCAP_ENCLOSER = "\u20e3"  # COMBINING ENCLOSING KEYCAP
 _REGIONAL_INDICATORS = frozenset(chr(cp) for cp in range(0x1F1E6, 0x1F200))
 _TAG_CHARACTERS = frozenset(chr(cp) for cp in range(0xE0020, 0xE0080))
 _COMBINING_CATEGORIES = frozenset({"Mn", "Me", "Mc"})
@@ -114,6 +114,7 @@ def grapheme_clusters(text: str) -> list[str]:
 
 
 _WIDE_EAST_ASIAN_WIDTHS = frozenset({"W", "F"})
+_VS16 = "\ufe0f"  # VARIATION SELECTOR-16: "render the previous codepoint as emoji"
 _ZERO_WIDTH = _VARIATION_SELECTORS | _TAG_CHARACTERS | {_ZWJ}
 
 
@@ -144,7 +145,7 @@ def cluster_width(cluster: str) -> int:
     if not cluster:
         return 0
     total = sum(_codepoint_width(char) for char in cluster)
-    if "️" in cluster:
+    if _VS16 in cluster:
         total = max(total, 2)
     return max(total, 1)
 
