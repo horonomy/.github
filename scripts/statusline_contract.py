@@ -364,20 +364,26 @@ MAX_LABEL_CHARS = 48
 _LABEL_EXTRA_CHARS = frozenset(" .,'-—()%+?!≤≥")
 
 
-def require_label(value: object, field: str = "label") -> str:
+def require_label(
+    value: object, field: str = "label", max_chars: int = MAX_LABEL_CHARS
+) -> str:
     """Validate a short human label against a strict character allowlist.
 
     Rejects emoji as well as separators: the shared host owns iconography, so
     a provider embedding its own glyph would defeat consistent rendering
     across products. Emoji are `Symbol, other` and so are not alphanumeric,
     which is why the allowlist check catches them without an emoji table.
+
+    `max_chars` is explicit because the same character rules apply to a
+    provider's optional whole-line convenience rendering, which is legitimately
+    longer than one segment label.
     """
     if not isinstance(value, str):
         raise ContractViolation(f"{field} must be a string")
     if not value:
         raise ContractViolation(f"{field} must not be empty")
-    if len(value) > MAX_LABEL_CHARS:
-        raise ContractViolation(f"{field} must be at most {MAX_LABEL_CHARS} characters")
+    if len(value) > max_chars:
+        raise ContractViolation(f"{field} must be at most {max_chars} characters")
     for char in value:
         if not char.isalnum() and char not in _LABEL_EXTRA_CHARS:
             raise ContractViolation(
@@ -504,9 +510,11 @@ def assert_privacy_safe(value: str, field: str) -> str:
     return value
 
 
-def require_safe_label(value: object, field: str) -> str:
+def require_safe_label(
+    value: object, field: str, max_chars: int = MAX_LABEL_CHARS
+) -> str:
     """Validate a human label for both shape and privacy."""
-    return assert_privacy_safe(require_label(value, field), field)
+    return assert_privacy_safe(require_label(value, field, max_chars), field)
 
 
 # A segment is one fact. A provider showing more than a handful of them is
