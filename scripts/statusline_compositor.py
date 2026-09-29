@@ -101,5 +101,20 @@ class RegistryError(ValueError):
     """
 
 
+@dataclasses.dataclass(frozen=True)
+class ProviderEntry:
+    """One registered provider, as the install lifecycle recorded it.
+
+    `scope` is metadata the product declared at enable time. It is used *only*
+    to render a not-available status, where there is no live answer to take a
+    scope from. A provider that answers supplies its own, and that one wins.
+    """
+
+    provider: str
+    argv: tuple[str, ...]
+    scope: contract.Scope
+    timeout_ms: int
+
+
 if __name__ == "__main__":
     sys.exit(main())
