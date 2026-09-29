@@ -707,5 +707,32 @@ class TestProviderDisplayName(unittest.TestCase):
         # of does not render anonymously beside the ones it knows.
         self.assertEqual(render.provider_display_name("future-product"), "Future Product")
 
+
+class TestScopeMarker(unittest.TestCase):
+    def test_glyph_modes_use_the_glyph(self):
+        for scope, glyph in render.SCOPE_GLYPHS.items():
+            for mode in (render.PresentationMode.BALANCED, render.PresentationMode.COMPACT):
+                with self.subTest(scope=scope, mode=mode):
+                    self.assertEqual(render.scope_marker(scope, mode), glyph)
+
+    def test_plain_mode_uses_the_contract_token(self):
+        for scope, token in render.SCOPE_TEXT.items():
+            with self.subTest(scope=scope):
+                self.assertEqual(
+                    render.scope_marker(scope, render.PresentationMode.PLAIN), token
+                )
+
+    def test_an_unrecognised_scope_renders_as_its_literal_rather_than_a_guess(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertEqual(render.scope_marker("cluster", mode), "[cluster]")
+
+    def test_host_scope_is_always_marked(self):
+        # Host-wide state read as session-scoped is a user believing their other
+        # sessions are guarded, or unguarded, incorrectly.
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertTrue(render.scope_marker("host", mode))
+
 if __name__ == "__main__":
     unittest.main()
