@@ -17,12 +17,15 @@ that a careless re-serialisation would mangle.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
+import os
 import pathlib
 import shutil
 import tempfile
 import unittest
+import unittest.mock
 
 import statusline_lifecycle as lifecycle
 
@@ -864,6 +867,149 @@ class FailSafeTest(LifecycleCase):
         # the registry says so rather than leaving the field absent and ambiguous.
         self.assertNotIn("upstream", self.registry())
         self.assertIsNone(self.registry()["lifecycle"]["created_status_line"])
+
+
+class MalformedConfigTest(LifecycleCase):
+    MALFORMED = (
+        b'{"model": "claude-opus-4",',
+        b'{"statusLine": {"type": "command", "command": "/x"} "theme": "dark"}',
+        b"[]",
+        b"not json at all",
+        b'{"statusLine": {"type": "command", "command": "/x",}}',
+    )
+
+    def test_a_file_that_does_not_parse_stops_every_operation_before_any_write(self) -> None:
+        for raw in self.MALFORMED:
+            with self.subTest(raw=raw):
+                self.settings.write_bytes(raw)
+                before = self.settings.read_bytes()
+
+                with self.assertRaises(lifecycle.SettingsParseError):
+                    lifecycle.read_settings(self.settings)
+
+                # MALFORMED_OR_UNSUPPORTED_CONFIG_FAILS_WITH_ZERO_MUTATION -- the
+                # bytes, not just the parsed value, and the absence of our own
+                # state too: a run that refused must not have left a registry
+                # behind claiming a provider is installed.
+                self.assertEqual(self.settings.read_bytes(), before)
+                self.assertFalse(lifecycle.read_registry(self.home).present)
+
+    def test_refusal_is_reported_as_a_refusal_and_not_an_empty_configuration(self) -> None:
+        # The specific bug this forbids: a parse error becoming `{}`, after which
+        # the next write erases everything the user had.
+        self.settings.write_bytes(b'{"model": "claude-opus-4",')
+        with self.assertRaises(lifecycle.SettingsParseError):
+            lifecycle.read_settings(self.settings)
+
+        report = lifecycle.doctor(self.settings, self.home)
+        self.assertFalse(report["settings"]["readable"])
+        self.assertTrue(report["drift"]["detected"])
+        self.assertEqual(
+            report["remediation"],
+            [f"repair {self.settings} by hand; no lifecycle operation will write to it until it parses"],
+        )
+
+
+class ConcurrentChangeTest(LifecycleCase):
+    def test_a_settings_edit_between_plan_and_apply_aborts_the_write(self) -> None:
+        plan = self.plan_enable("fornax")
+
+        concurrent = self.read()
+        concurrent["theme"] = "changed in another terminal"
+        self.write(concurrent)
+        before = self.settings.read_bytes()
+
+        with self.assertRaises(lifecycle.ConcurrentModificationError):
+            lifecycle.apply(plan)
+
+        # CONCURRENT_CHANGE_DOES_NOT_CLOBBER -- and the concurrent edit is still
+        # there, which is the part that matters: detecting the race and then
+        # writing anyway would be the same bug with a log line.
+        self.assertEqual(self.settings.read_bytes(), before)
+        self.assertEqual(self.read()["theme"], "changed in another terminal")
+        self.assertNotIn(lifecycle.MARKER_KEY, self.read()["statusLine"])
+
+    def test_a_registry_edit_between_plan_and_apply_aborts_the_write(self) -> None:
+        """The registry is fingerprinted too, and this is why.
+
+        Another product enabling itself in a second terminal writes only the
+        registry. A plan that checked the settings file alone would apply happily
+        and drop that product's entry -- the settings file it compared is
+        untouched, so nothing would look wrong.
+        """
+        self.enable("fornax")
+        plan = self.plan_enable("libra")
+        self.enable("circinus")
+        before = lifecycle.read_registry(self.home).path.read_bytes()
+
+        with self.assertRaises(lifecycle.ConcurrentModificationError):
+            lifecycle.apply(plan)
+
+        self.assertEqual(lifecycle.read_registry(self.home).path.read_bytes(), before)
+        self.assertEqual(
+            [entry["provider"] for entry in self.registry()["providers"]], ["fornax", "circinus"]
+        )
+
+
+class AtomicWriteTest(LifecycleCase):
+    def test_the_destination_never_holds_a_partial_document(self) -> None:
+        """Proven by looking at the destination at the moment of publication.
+
+        `os.replace` is the only thing that makes new content visible, so if the
+        destination still holds the old bytes when it is called, no reader can ever
+        have seen a half-written file. Checking for a leftover temp file afterwards
+        would only prove the cleanup ran.
+        """
+        self.enable("fornax")
+        before = self.settings.read_bytes()
+        observed: list[bytes] = []
+        real_replace = os.replace
+
+        def spy(src, dst, *args, **kwargs):
+            if pathlib.Path(dst) == self.settings:
+                observed.append(pathlib.Path(dst).read_bytes())
+                self.assertEqual(pathlib.Path(src).parent, self.settings.parent)
+            return real_replace(src, dst, *args, **kwargs)
+
+        with unittest.mock.patch.object(os, "replace", spy):
+            self.uninstall()
+
+        # FAILED_MUTATION_IS_ATOMIC -- one publication, and the old content was
+        # still intact right up to it. The temp file is also asserted to be a
+        # sibling, because a rename across filesystems is not atomic.
+        self.assertEqual(observed, [before])
+
+    def test_a_write_that_fails_leaves_the_original_and_no_debris(self) -> None:
+        self.enable("fornax")
+        before = self.settings.read_bytes()
+
+        def fail(src, dst, *args, **kwargs):
+            raise OSError(28, "No space left on device")
+
+        with unittest.mock.patch.object(os, "replace", fail):
+            with self.assertRaises(lifecycle.LifecycleError):
+                self.uninstall()
+
+        self.assertEqual(self.settings.read_bytes(), before)
+        self.assertEqual(sorted(path.name for path in self.settings.parent.iterdir()), ["settings.json"])
+
+    def test_a_directory_that_cannot_be_created_is_a_refusal_not_a_traceback(self) -> None:
+        # The state directory's parent is a file here, so `mkdir` fails. A raw
+        # OSError escaping would be reported to the user as a crash rather than as
+        # the refusal it is.
+        blocker = self.root / "blocker"
+        blocker.write_text("not a directory\n")
+        with self.assertRaises(lifecycle.LifecycleError):
+            lifecycle.atomic_write(blocker / "nested" / "registry.json", b"{}", mode=0o600)
+
+    def test_a_read_back_that_disagrees_with_the_plan_is_a_failure_not_a_success(self) -> None:
+        self.enable("fornax")
+        plan = self.plan_remove("fornax", operation="uninstall")
+        tampered = dataclasses.replace(
+            plan, settings_after={"statusLine": {"type": "command", "command": "/never/written"}}
+        )
+        with self.assertRaises(lifecycle.VerificationError):
+            lifecycle._verify(tampered)
 
 
 if __name__ == "__main__":
