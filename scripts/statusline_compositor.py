@@ -291,7 +291,7 @@ def parse_registry(payload: object) -> Registry:
     if len(identifiers) != len(set(identifiers)):
         raise RegistryError("provider ids must be unique in the registry")
 
-    presentation, width = _parse_presentation(payload.get("presentation", {}))
+    mode, width = _parse_presentation(payload.get("presentation", {}))
 
     return Registry(
         upstream_command=upstream_command,
@@ -303,7 +303,7 @@ def parse_registry(payload: object) -> Registry:
         # refusing: it decides how the line looks, not what we execute, and
         # losing the whole statusline over a typo in a cosmetic preference is a
         # worse outcome than rendering it in the default style.
-        mode=render.PresentationMode.parse(presentation),
+        mode=render.PresentationMode.parse(mode),
         width_budget=width,
         deadline_ms=_bounded_ms(payload, "deadline_ms", DEFAULT_DEADLINE_MS, MAX_DEADLINE_MS),
     )
