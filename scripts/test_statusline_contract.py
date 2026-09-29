@@ -7,6 +7,7 @@ Stdlib unittest only. Run with:
 
 from __future__ import annotations
 
+import dataclasses
 import unittest
 
 import statusline_contract as sc
@@ -380,6 +381,141 @@ class HostShapeTest(unittest.TestCase):
         with self.assertRaises(sc.PrivacyViolation):
             sc.assert_privacy_safe("gateway.internal", "label")
         self.assertEqual(sc.assert_privacy_safe("Unverified", "label"), "Unverified")
+
+
+class SegmentTest(unittest.TestCase):
+    def test_a_minimal_segment_is_valid(self) -> None:
+        segment = sc.Segment(
+            key="latest_finding", state=sc.SegmentState.OK, label="Verified"
+        )
+        self.assertEqual(segment.key, "latest_finding")
+        self.assertFalse(segment.hypothetical)
+        self.assertIsNone(segment.count)
+
+    def test_a_fully_populated_segment_is_valid(self) -> None:
+        segment = sc.Segment(
+            key="would_block",
+            state=sc.SegmentState.NEUTRAL,
+            label="shadow mode",
+            reason_code="shadow_only",
+            reason_label="shadow only",
+            confidence=sc.Confidence.MEDIUM,
+            confidence_of=sc.ConfidenceSubject.POLICY_DECISION,
+            age_seconds=42,
+            count=113,
+            total=705,
+            count_label="would block",
+            hypothetical=True,
+            explain_key="circinus.would_block",
+            order_hint=2,
+        )
+        self.assertTrue(segment.hypothetical)
+        self.assertEqual((segment.count, segment.total), (113, 705))
+
+    def test_confidence_without_its_subject_is_rejected(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.Segment(
+                key="plan",
+                state=sc.SegmentState.OK,
+                label="stable",
+                confidence=sc.Confidence.HIGH,
+            )
+
+    def test_subject_without_a_confidence_is_rejected(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.Segment(
+                key="plan",
+                state=sc.SegmentState.OK,
+                label="stable",
+                confidence_of=sc.ConfidenceSubject.PREFLIGHT_ESTIMATE,
+            )
+
+    def test_a_count_without_a_noun_is_rejected(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.Segment(
+                key="would_block", state=sc.SegmentState.NEUTRAL, label="shadow", count=113
+            )
+
+    def test_a_total_without_a_count_is_rejected(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.Segment(
+                key="would_block",
+                state=sc.SegmentState.NEUTRAL,
+                label="shadow",
+                total=705,
+                count_label="would block",
+            )
+
+    def test_a_count_above_its_total_is_rejected(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.Segment(
+                key="would_block",
+                state=sc.SegmentState.NEUTRAL,
+                label="shadow",
+                count=706,
+                total=705,
+                count_label="would block",
+            )
+
+    def test_a_negative_age_is_rejected(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.Segment(
+                key="latest", state=sc.SegmentState.OK, label="Verified", age_seconds=-1
+            )
+
+    def test_an_unbounded_count_is_rejected(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.Segment(
+                key="n",
+                state=sc.SegmentState.NEUTRAL,
+                label="many",
+                count=sc.MAX_COUNT + 1,
+                count_label="events",
+            )
+
+    def test_a_secret_shaped_label_cannot_enter_a_segment(self) -> None:
+        # Deliberately a value the character allowlist accepts (pure
+        # alphanumerics), so this exercises the privacy layer rather than
+        # passing because the charset check happened to fire first.
+        with self.assertRaises(sc.PrivacyViolation):
+            sc.Segment(
+                key="latest", state=sc.SegmentState.OK, label="aB3dE5fG7hJ9kL1mN3pQ5"
+            )
+
+    def test_a_charset_rejection_is_not_reported_as_a_privacy_violation(self) -> None:
+        # An underscore is a shape problem, not a disclosure; the two error
+        # types must stay distinguishable so the host can degrade correctly.
+        with self.assertRaises(sc.ContractViolation) as caught:
+            sc.Segment(key="latest", state=sc.SegmentState.OK, label="ghp_token")
+        self.assertNotIsInstance(caught.exception, sc.PrivacyViolation)
+
+    def test_a_secret_shaped_count_label_cannot_enter_a_segment(self) -> None:
+        with self.assertRaises(sc.PrivacyViolation):
+            sc.Segment(
+                key="n",
+                state=sc.SegmentState.NEUTRAL,
+                label="many",
+                count=1,
+                count_label="AKIA" + "IOSFODNN7EXAMPLE",
+            )
+
+    def test_a_path_shaped_reason_label_cannot_enter_a_segment(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.Segment(
+                key="latest",
+                state=sc.SegmentState.UNKNOWN,
+                label="Unverified",
+                reason_label="/var/log/fornax.log",
+            )
+
+    def test_state_must_be_the_enum_not_a_string(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.Segment(key="latest", state="ok", label="Verified")
+
+    def test_a_segment_is_immutable(self) -> None:
+        segment = sc.Segment(key="latest", state=sc.SegmentState.OK, label="Verified")
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            segment.label = "Unverified"  # type: ignore[misc]
 
 
 if __name__ == "__main__":
