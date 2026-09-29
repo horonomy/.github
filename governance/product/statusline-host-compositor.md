@@ -232,3 +232,12 @@ is refused outright rather than best-efforted, because a future writer may have
 moved the very field we would be reading. Version is checked by *type* as well
 as value: in Python `True` and `1.0` both compare equal to `1`, so membership
 alone is not a version check.
+
+## Adding a host
+
+A second coding agent gets support only if it has a real, supported, documented
+single-command statusline mechanism. Emitting ANSI escapes into a shared stream,
+echoing from a background process, or scraping a TTY is not support, and a host
+with no such mechanism is recorded as UNSUPPORTED for this capability — which is
+a valid, final answer, not a gap to be worked around. Capability is judged
+against the *currently installed* version of that host, not its roadmap.
