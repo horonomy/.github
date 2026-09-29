@@ -603,9 +603,24 @@ class TestHostSynthesisedStatuses(unittest.TestCase):
 
 
 class TestSourceFingerprint(unittest.TestCase):
-    def test_the_same_argv_fingerprints_the_same(self):
-        argv = ("/usr/bin/fornax", "statusline")
-        self.assertEqual(compositor.source_fingerprint(argv), compositor.source_fingerprint(argv))
+    def test_an_equal_argv_fingerprints_the_same(self):
+        # Two separately built tuples rather than one passed twice, and both held
+        # alive across both calls. The same object twice would prove only that the
+        # function is not salted per call; equal but simultaneously-live objects
+        # prove that *and* that it keys on the value rather than on identity --
+        # which is what the cache needs, since the argv it fingerprints on a later
+        # refresh is rebuilt from the registry and is never the same object.
+        #
+        # Both references are load-bearing. Built inline, the first tuple is freed
+        # before the second is allocated, CPython hands out the same address
+        # again, and an implementation keyed on `id()` passes -- which is how this
+        # assertion was first written and what a mutation probe caught.
+        first = ("/usr/bin/fornax", "statusline")
+        second = ("/usr/bin/" + "fornax", "status" + "line")
+        self.assertIsNot(first, second)
+        self.assertEqual(
+            compositor.source_fingerprint(first), compositor.source_fingerprint(second)
+        )
 
     def test_a_different_argv_fingerprints_differently(self):
         self.assertNotEqual(
