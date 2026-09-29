@@ -189,3 +189,33 @@ def truncate_to_width(text: str, budget: int, *, ellipsis: str = ELLIPSIS) -> st
         # empty string but costs three columns to say it.
         return ""
     return "".join(kept).rstrip() + ellipsis
+
+
+def is_emoji_presentation_safe(glyph: str) -> bool:
+    """Whether `glyph` will actually render as a 2-column emoji.
+
+    This is the mechanical form of a real defect. Live Libra output used U+2696
+    SCALES and U+1F6E1 SHIELD bare; both carry `Emoji_Presentation=No`, so a
+    terminal is entitled to draw them as 1-column monochrome text — which is
+    what happened, and the column accounting around them went wrong with it.
+    U+1F9ED COMPASS in the same line was fine, which is exactly why the bug
+    looked arbitrary.
+
+    `unicodedata` does not expose `Emoji_Presentation`, so the rule is
+    expressed in terms that ship with the stdlib and hold for every glyph this
+    module can choose: a glyph is safe if it ends with U+FE0F (which *requests*
+    emoji presentation explicitly) or if every codepoint is East-Asian wide or
+    fullwidth (which is how the default-emoji-presentation codepoints are
+    classified). The table below is asserted against this rule by the test
+    suite, so the Libra defect cannot be reintroduced by adding a glyph.
+    """
+    if not glyph:
+        return False
+    if glyph.endswith(_VS16):
+        return True
+    return all(
+        unicodedata.east_asian_width(char) in _WIDE_EAST_ASIAN_WIDTHS
+        or char in _ZERO_WIDTH
+        or unicodedata.category(char) in _COMBINING_CATEGORIES
+        for char in glyph
+    )
