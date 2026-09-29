@@ -638,6 +638,13 @@ def collect(
                         "Missed the render deadline",
                     )
                 )
+        # No thread-level deadline on the upstream, unlike the providers above,
+        # and not an oversight: `run_upstream` cannot block past its subprocess
+        # timeout, and a timeout here would be theatre anyway. The pool joins its
+        # workers on `with` exit, and `concurrent.futures` joins them again at
+        # interpreter exit, so a thread that genuinely hung could not be escaped
+        # by declining to wait for it here. The bound that does the work is the
+        # one inside `_run_bounded`.
         upstream_text = upstream_future.result() if upstream_future else ""
     return upstream_text, tuple(statuses)
 
