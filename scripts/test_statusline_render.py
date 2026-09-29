@@ -734,5 +734,62 @@ class TestScopeMarker(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.assertTrue(render.scope_marker("host", mode))
 
+
+class TestRenderProvider(unittest.TestCase):
+    def test_the_provider_is_attributed(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertIn("Fornax", render.render_provider(fornax_status(), mode))
+
+    def test_the_scope_is_rendered(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertIn(
+                    render.scope_marker("host", mode), render.render_provider(circinus_status(), mode)
+                )
+
+    def test_segments_are_ordered_by_the_contract_rule(self):
+        # libra's `approval` carries the lower order_hint, so it renders first
+        # even though it is declared second.
+        text = render.render_provider(libra_status(), render.PresentationMode.BALANCED)
+        self.assertLess(text.index("Awaiting your approval"), text.index("Preflight"))
+
+    def test_a_provider_with_no_segments_says_so_rather_than_rendering_nothing(self):
+        # Silence reads as all-clear, which is the one meaning it must not have.
+        empty = status(availability=contract.Availability.UNAVAILABLE, segments=())
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                text = render.render_provider(empty, mode)
+                self.assertIn(render.NO_SEGMENTS_LABEL, text)
+                self.assertIn("Example", text)
+
+    def test_fallback_text_is_used_only_when_there_are_no_segments(self):
+        with_fallback = status(
+            availability=contract.Availability.UNAVAILABLE,
+            segments=(),
+            fallback_text="Not configured",
+        )
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertIn("Not configured", render.render_provider(with_fallback, mode))
+        both = status(fallback_text="Not configured")
+        self.assertNotIn(
+            "Not configured", render.render_provider(both, render.PresentationMode.BALANCED)
+        )
+
+    def test_an_absent_reading_is_marked_unknown_not_ok(self):
+        empty = status(availability=contract.Availability.UNAVAILABLE, segments=())
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                text = render.render_provider(empty, mode)
+                self.assertIn(render.state_marker("unknown", mode), text)
+                self.assertNotIn(render.STATE_GLYPHS["ok"], text)
+
+    def test_rendering_is_stable_across_repeated_calls(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                first = render.render_provider(libra_status(), mode)
+                self.assertEqual(first, render.render_provider(libra_status(), mode))
+
 if __name__ == "__main__":
     unittest.main()
