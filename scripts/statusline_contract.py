@@ -99,3 +99,33 @@ class Availability(enum.Enum):
     def has_live_readings(self) -> bool:
         """Whether segment values may be read as current measurements."""
         return self is Availability.AVAILABLE
+
+
+class SegmentState(enum.Enum):
+    """The shared semantic role of one segment, owned by the renderer.
+
+    This is the enum that lets the host — not each product — pick the glyph.
+    Two products reporting the same semantic role therefore get the same
+    icon, which is what stops Fornax and Circinus from independently choosing
+    incompatible emoji for "needs your attention".
+
+    `NEUTRAL` is informational state with no health claim (a mode label, a
+    task id). `UNKNOWN` is an explicit absence of state, never a stand-in for
+    `OK`.
+    """
+
+    OK = "ok"
+    ATTENTION = "attention"
+    WARN = "warn"
+    CRITICAL = "critical"
+    NEUTRAL = "neutral"
+    UNKNOWN = "unknown"
+
+    @property
+    def makes_a_health_claim(self) -> bool:
+        """Whether this state asserts something about product health.
+
+        `NEUTRAL` and `UNKNOWN` deliberately do not, so a renderer must not
+        colour or sort them as if they were good news.
+        """
+        return self not in (SegmentState.NEUTRAL, SegmentState.UNKNOWN)
