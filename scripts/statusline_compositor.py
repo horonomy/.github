@@ -370,5 +370,33 @@ def names_this_command(command: str) -> bool:
         return False
 
 
+def run_upstream(command: str, payload: bytes, timeout_ms: int) -> str:
+    """Run the user's original statusline command and return its stdout.
+
+    Executed through the shell with the command string exactly as configured.
+    That is the point: the host runs this slot through a shell, so handing the
+    same string to a shell reproduces its quoting, spaces and arguments without
+    this module ever having to understand them. Splitting it into an argv would
+    mean parsing the user's command, which is the one thing we must not do.
+
+    `payload` is forwarded byte for byte — the same stdin the host gave us.
+
+    Never raises. Every failure path returns whatever output was produced, or
+    the empty string, because losing the user's line is the worst outcome
+    available here and a diagnostic they cannot see would not make up for it.
+    """
+    try:
+        # The return code is deliberately ignored. A statusline script that
+        # prints its line and then exits non-zero still printed their line, and
+        # deciding their output is invalid on their behalf is not ours to do.
+        _, produced = _run_bounded(command, payload, timeout_ms, shell=True)
+    except OSError:
+        produced = b""
+    text = produced[:MAX_UPSTREAM_OUTPUT_BYTES].decode("utf-8", errors="replace")
+    # Only the trailing newline goes: leading and internal whitespace is theirs,
+    # including the indentation a padded statusline relies on.
+    return text.rstrip("\n")
+
+
 if __name__ == "__main__":
     sys.exit(main())
