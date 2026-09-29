@@ -419,8 +419,11 @@ class Change:
 class Plan:
     """Everything an operation would do, before any of it has been done.
 
-    A plan is built from one read of the settings file and carries that read's
-    `fingerprint`, which is what lets `apply` refuse a plan that has gone stale.
+    A plan is built from one read of each file it may write and carries both
+    reads' fingerprints, which is what lets `apply` refuse a plan that has gone
+    stale. Both files are fingerprinted, not just the settings file: the registry
+    is where another product's provider entry lives, so a plan formed before a
+    concurrent `enable` in another terminal would silently drop that entry.
     `settings_after` and `registry_after` are the complete documents to be
     written, not patches: the diffing has already happened, so there is no second
     interpretation step between deciding and writing.
@@ -431,6 +434,8 @@ class Plan:
     ownership: Ownership
     changes: tuple[Change, ...]
     fingerprint: str
+    registry_path: pathlib.Path | None = None
+    registry_fingerprint: str | None = None
     settings_after: dict | None = None
     registry_after: dict | None = None
     refusal: str | None = None
@@ -763,6 +768,8 @@ def plan_enable(
             ownership=ownership,
             changes=(Change(ChangeKind.BLOCKED_UNKNOWN, STATUS_LINE_KEY, refusal),),
             fingerprint=document.fingerprint,
+            registry_path=registry.path,
+            registry_fingerprint=registry.fingerprint,
             refusal=refusal,
             remediation=remediation,
         )
@@ -830,6 +837,8 @@ def plan_enable(
         ownership=ownership,
         changes=tuple(changes),
         fingerprint=document.fingerprint,
+        registry_path=registry.path,
+        registry_fingerprint=registry.fingerprint,
         settings_after=None if settings_after == document.data else settings_after,
         registry_after=None if registry_after == registry.data else registry_after,
     )
