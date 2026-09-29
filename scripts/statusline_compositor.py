@@ -495,5 +495,65 @@ def write_cache(
         return
 
 
+def run_provider(
+    entry: ProviderEntry, timeout_ms: int, home: pathlib.Path | None = None
+) -> contract.ProviderStatus:
+    """Get one provider's status, from cache if fresh, else by asking it.
+
+    Never raises and never returns `None`: every failure becomes an explicit
+    not-available status, so a provider that broke is visibly a provider that
+    broke rather than a gap in the line.
+
+    Reasons are fixed codes and short fixed prose, never the exception text. A
+    subprocess error message routinely contains a path, a command line or an
+    environment value, and this string is rendered into the user's terminal.
+    """
+    cached = read_cache(entry, home)
+    if cached is not None:
+        return cached
+    if timeout_ms <= 0:
+        return _host_not_available(
+            entry, contract.Availability.UNKNOWN, "deadline_exhausted", "No time left to ask"
+        )
+    try:
+        returncode, produced = _run_bounded(entry.argv, b"", timeout_ms, shell=False)
+    except FileNotFoundError:
+        return _host_not_available(
+            entry, contract.Availability.UNSUPPORTED, "not_installed", "Not installed"
+        )
+    except OSError:
+        return _host_not_available(
+            entry, contract.Availability.ERROR, "probe_failed", "Could not be started"
+        )
+    if returncode is None:
+        return _host_not_available(
+            entry, contract.Availability.ERROR, "probe_timeout", "Did not answer in time"
+        )
+    if returncode != 0:
+        return _host_not_available(
+            entry, contract.Availability.ERROR, "probe_failed", "Reported an error"
+        )
+    try:
+        payload = json.loads(produced[:MAX_PROVIDER_OUTPUT_BYTES].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _host_not_available(
+            entry, contract.Availability.ERROR, "malformed_output", "Sent unreadable output"
+        )
+    try:
+        status = contract.provider_status_from_wire(payload)
+    except contract.ContractViolation:
+        return _host_not_available(
+            entry, contract.Availability.ERROR, "contract_violation", "Sent an invalid status"
+        )
+    if status.provider != entry.provider:
+        # A provider answering under another product's id would let it attribute
+        # its own state to that product, or hide behind it.
+        return _host_not_available(
+            entry, contract.Availability.ERROR, "identity_mismatch", "Answered as another provider"
+        )
+    write_cache(entry, status, home)
+    return status
+
+
 if __name__ == "__main__":
     sys.exit(main())
