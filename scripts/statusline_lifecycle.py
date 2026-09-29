@@ -904,3 +904,120 @@ def atomic_write(path: pathlib.Path, payload: bytes, *, mode: int) -> None:
         os.fsync(directory)
     finally:
         os.close(directory)
+
+
+@dataclasses.dataclass(frozen=True)
+class ApplyResult:
+    """What an applied plan actually did, including that the result was read back.
+
+    `verified` exists as a reported fact rather than an internal assumption
+    because "the write returned successfully" and "the file on disk now says what
+    we intended" are different claims, and only the second one is worth telling a
+    user (HORO-1000's after-mutation question 7).
+    """
+
+    plan: Plan
+    settings_written: bool
+    registry_written: bool
+    verified: bool
+
+    def to_json(self) -> dict:
+        return {
+            "operation": self.plan.operation,
+            "settings_written": self.settings_written,
+            "registry_written": self.registry_written,
+            "read_back_verified": self.verified,
+            "changes": [change.to_json() for change in self.plan.changes],
+        }
+
+
+def _releases_slot(plan: Plan) -> bool:
+    """Whether applying this plan hands the statusline back to the user."""
+    if plan.settings_after is None:
+        return False
+    status_line = plan.settings_after.get(STATUS_LINE_KEY)
+    command = status_line.get("command") if isinstance(status_line, dict) else None
+    return not refers_to_compositor(command)
+
+
+def _verify(plan: Plan) -> None:
+    """Read both files back and refuse to call the operation a success unless they match.
+
+    The registry is additionally re-validated through the compositor's own
+    parser, because a registry we can read and the compositor cannot is a
+    statusline that renders nothing -- the interesting failure is not "did our
+    bytes land" but "is the tool still working".
+    """
+    if plan.settings_after is not None:
+        landed = read_settings(plan.settings_path).data
+        if landed != plan.settings_after:
+            raise VerificationError(
+                f"{plan.settings_path} does not match the plan after writing it; "
+                "the file has been left as written and needs inspection"
+            )
+    if plan.registry_after is not None and plan.registry_path is not None:
+        after = read_registry_at(plan.registry_path)
+        if after.data != plan.registry_after:
+            raise VerificationError(f"{plan.registry_path} does not match the plan after writing it")
+        if not after.usable:
+            raise VerificationError(
+                f"the registry just written is not one the compositor will accept ({after.problem})"
+            )
+
+
+def apply(plan: Plan) -> ApplyResult:
+    """Carry out a plan, or refuse to.
+
+    Both files are re-read and re-fingerprinted first: a plan is a statement
+    about state that was true when it was formed, and applying it to state that
+    has since moved is exactly the clobber this lifecycle exists to prevent.
+
+    The two writes are ordered so that an interruption between them can only
+    leave the user's own statusline working. Taking the slot writes the registry
+    first, so a crash leaves the original command recorded but still in charge.
+    Giving the slot back writes the settings first, so a crash leaves the
+    original command restored and merely a stale registry behind it. In both
+    directions the file that could strand the user is written last.
+    """
+    if plan.refusal is not None:
+        raise OwnershipError(plan.refusal)
+    if not plan.mutates:
+        return ApplyResult(plan=plan, settings_written=False, registry_written=False, verified=True)
+
+    current = read_settings(plan.settings_path)
+    if current.fingerprint != plan.fingerprint:
+        raise ConcurrentModificationError(
+            f"{plan.settings_path} changed after this plan was formed; nothing was written"
+        )
+    if plan.registry_path is not None and plan.registry_fingerprint is not None:
+        if read_registry_at(plan.registry_path).fingerprint != plan.registry_fingerprint:
+            raise ConcurrentModificationError(
+                f"{plan.registry_path} changed after this plan was formed; nothing was written"
+            )
+
+    settings_write = None
+    if plan.settings_after is not None:
+        settings_write = (
+            plan.settings_path,
+            serialize(
+                plan.settings_after,
+                indent=current.indent,
+                trailing_newline=current.trailing_newline,
+            ),
+            current.mode if current.mode is not None else NEW_FILE_MODE,
+        )
+    registry_write = None
+    if plan.registry_after is not None and plan.registry_path is not None:
+        registry_write = (plan.registry_path, serialize(plan.registry_after), STATE_FILE_MODE)
+
+    order = (settings_write, registry_write) if _releases_slot(plan) else (registry_write, settings_write)
+    for target, payload, mode in [write for write in order if write is not None]:
+        atomic_write(target, payload, mode=mode)
+
+    _verify(plan)
+    return ApplyResult(
+        plan=plan,
+        settings_written=settings_write is not None,
+        registry_written=registry_write is not None,
+        verified=True,
+    )
