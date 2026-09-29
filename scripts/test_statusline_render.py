@@ -134,5 +134,35 @@ def libra_status(**overrides) -> contract.ProviderStatus:
 
 UPSTREAM = "~/proj  main*  claude-opus-5  $0.42"
 
+
+class TestPresentationModeParse(unittest.TestCase):
+    def test_every_member_round_trips_from_its_value(self):
+        for mode in MODES:
+            self.assertIs(render.PresentationMode.parse(mode.value), mode)
+
+    def test_a_member_is_returned_unchanged(self):
+        for mode in MODES:
+            self.assertIs(render.PresentationMode.parse(mode), mode)
+
+    def test_case_and_surrounding_space_are_tolerated(self):
+        self.assertIs(
+            render.PresentationMode.parse("  COMPACT "), render.PresentationMode.COMPACT
+        )
+
+    def test_unrecognised_input_falls_back_rather_than_raising(self):
+        for value in ("", "verbose", None, 7, [], object()):
+            self.assertIs(render.PresentationMode.parse(value), render.PresentationMode.BALANCED)
+
+    def test_the_fallback_is_overridable(self):
+        self.assertIs(
+            render.PresentationMode.parse("nope", render.PresentationMode.PLAIN),
+            render.PresentationMode.PLAIN,
+        )
+
+    def test_only_plain_declines_glyphs(self):
+        self.assertFalse(render.PresentationMode.PLAIN.uses_glyphs)
+        self.assertTrue(render.PresentationMode.BALANCED.uses_glyphs)
+        self.assertTrue(render.PresentationMode.COMPACT.uses_glyphs)
+
 if __name__ == "__main__":
     unittest.main()
