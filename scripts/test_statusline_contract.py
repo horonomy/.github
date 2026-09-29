@@ -1015,5 +1015,355 @@ class OrderingTest(unittest.TestCase):
             sc.order_segments([_segment()])
 
 
+#
+# AC 8 / AC 9 representability. These tests are the reason the contract has the
+# shape it has: each one encodes a real field from a real product's existing
+# state surface, so a later change that makes one of them unrepresentable fails
+# here rather than during that product's integration.
+#
+
+
+def _fornax_verdict(verdict: str) -> sc.ProviderStatus:
+    """Fornax's five-verdict vocabulary, one verdict at a time.
+
+    The mapping is the host's, not Fornax's: `fornax-types` keeps five
+    `Verdict` variants and this contract must render each one distinguishably.
+    Note that verdict `Unavailable` — a finding whose signal could not be
+    collected — is carried while the *provider* is `AVAILABLE`, because the
+    daemon answered. Collapsing those two would lose exactly the semantics
+    AC 8 protects.
+    """
+    by_verdict = {
+        "verified": (sc.SegmentState.OK, "Verified"),
+        "unverified": (sc.SegmentState.ATTENTION, "Unverified"),
+        "contradicted": (sc.SegmentState.CRITICAL, "Contradicted"),
+        "review": (sc.SegmentState.WARN, "Needs review"),
+        "unavailable": (sc.SegmentState.NEUTRAL, "Signal unavailable"),
+    }
+    state, label = by_verdict[verdict]
+    return sc.ProviderStatus(
+        provider="fornax",
+        provider_version="0.0.8",
+        scope=sc.Scope.HOST,
+        availability=sc.Availability.AVAILABLE,
+        observed_at="2026-09-29T08:00:00Z",
+        cache_ttl_seconds=5,
+        order_hint=20,
+        segments=(
+            sc.Segment(
+                key="latest_verdict",
+                state=state,
+                label=label,
+                reason_code="evidence_gap" if verdict == "unverified" else None,
+                reason_label="evidence gap" if verdict == "unverified" else None,
+                age_seconds=7200,
+                explain_key="fornax.latest_verdict",
+            ),
+        ),
+    )
+
+
+class FornaxRepresentabilityTest(unittest.TestCase):
+    """AC 8 — existing Fornax DogFood output, no loss of truthful semantics."""
+
+    VERDICTS = ("verified", "unverified", "contradicted", "review", "unavailable")
+
+    def test_all_five_verdicts_are_representable(self) -> None:
+        for verdict in self.VERDICTS:
+            with self.subTest(verdict=verdict):
+                self.assertEqual(len(_fornax_verdict(verdict).segments), 1)
+
+    def test_the_five_verdict_vocabulary_is_never_collapsed(self) -> None:
+        rendered = {
+            (s.segments[0].state, s.segments[0].label)
+            for s in (_fornax_verdict(v) for v in self.VERDICTS)
+        }
+        self.assertEqual(len(rendered), len(self.VERDICTS))
+
+    def test_an_unavailable_signal_is_not_an_unavailable_provider(self) -> None:
+        status = _fornax_verdict("unavailable")
+        self.assertIs(status.availability, sc.Availability.AVAILABLE)
+        self.assertIsNot(status.segments[0].state, sc.SegmentState.UNKNOWN)
+
+    def test_unverified_is_not_promoted_to_healthy_by_activity(self) -> None:
+        # The founder wrapper's failure mode: a daemon with events is not a
+        # verified claim. `unverified` must stay non-ok however busy Fornax is.
+        status = _fornax_verdict("unverified")
+        self.assertIsNot(status.segments[0].state, sc.SegmentState.OK)
+        self.assertTrue(status.segments[0].state.makes_a_health_claim)
+
+    def test_observing_is_a_host_state_not_a_sixth_verdict(self) -> None:
+        # Provider reachable, no finding yet. Fornax has no OBSERVING verdict,
+        # so this is presentation only and must not claim health.
+        observing = _status(
+            provider="fornax",
+            segments=(
+                _segment(key="latest_verdict", state=sc.SegmentState.NEUTRAL, label="Observing"),
+            ),
+        )
+        self.assertIs(observing.availability, sc.Availability.AVAILABLE)
+        self.assertFalse(observing.segments[0].state.makes_a_health_claim)
+        verdict_labels = {
+            _fornax_verdict(v).segments[0].label for v in self.VERDICTS
+        }
+        self.assertNotIn(observing.segments[0].label, verdict_labels)
+
+    def test_an_unverified_reason_may_be_absent_without_becoming_a_guess(self) -> None:
+        # "Do not infer a reason from event count" — unknown stays unknown.
+        status = _status(
+            provider="fornax",
+            segments=(
+                _segment(key="latest_verdict", state=sc.SegmentState.ATTENTION, label="Unverified"),
+            ),
+        )
+        self.assertIsNone(status.segments[0].reason_code)
+
+    def test_a_daemon_that_is_not_running_is_a_provider_level_state(self) -> None:
+        status = sc.not_available(
+            "fornax",
+            "0.0.8",
+            sc.Scope.HOST,
+            sc.Availability.UNAVAILABLE,
+            "daemon_not_running",
+            "daemon not running",
+        )
+        self.assertFalse(status.availability.has_live_readings)
+        self.assertEqual(status.segments[0].reason_code, "daemon_not_running")
+
+    def test_a_transcript_rationale_cannot_be_carried(self) -> None:
+        # Fornax `Finding.rationale` is free text derived from a transcript.
+        # There is no field for it, and it would fail the label rules anyway.
+        self.assertNotIn(
+            "rationale", {f.name for f in dataclasses.fields(sc.Segment)}
+        )
+
+
+class CircinusRepresentabilityTest(unittest.TestCase):
+    """AC 9 — planned Circinus fields, no product-specific host hacks."""
+
+    def _status(self) -> sc.ProviderStatus:
+        return sc.ProviderStatus(
+            provider="circinus",
+            provider_version="1.2.0",
+            scope=sc.Scope.HOST,
+            availability=sc.Availability.AVAILABLE,
+            observed_at="2026-09-29T08:00:00Z",
+            cache_ttl_seconds=5,
+            order_hint=30,
+            segments=(
+                sc.Segment(
+                    key="mode",
+                    state=sc.SegmentState.NEUTRAL,
+                    label="shadow mode",
+                    explain_key="circinus.mode",
+                    order_hint=1,
+                ),
+                sc.Segment(
+                    key="latest_decision",
+                    state=sc.SegmentState.OK,
+                    label="allowed",
+                    age_seconds=45,
+                    explain_key="circinus.latest_decision",
+                    order_hint=2,
+                ),
+                sc.Segment(
+                    key="would_block",
+                    state=sc.SegmentState.ATTENTION,
+                    label="would have blocked",
+                    count=113,
+                    total=705,
+                    count_label="decisions",
+                    hypothetical=True,
+                    explain_key="circinus.would_block",
+                    order_hint=3,
+                ),
+            ),
+        )
+
+    def test_mode_latest_decision_and_would_block_all_fit(self) -> None:
+        keys = {s.key for s in self._status().segments}
+        self.assertEqual(keys, {"mode", "latest_decision", "would_block"})
+
+    def test_a_shadow_would_block_is_marked_hypothetical(self) -> None:
+        # Shadow-mode would-block must never read as an executed enforcement.
+        would_block = self._status().segments[2]
+        self.assertTrue(would_block.hypothetical)
+        self.assertNotIn("blocked (", would_block.label)
+
+    def test_the_hypothetical_marker_survives_the_wire(self) -> None:
+        payload = self._status().to_wire()
+        segment = next(s for s in payload["segments"] if s["key"] == "would_block")
+        self.assertIs(segment["hypothetical"], True)
+
+    def test_would_block_is_a_labelled_fraction_not_an_abbreviation(self) -> None:
+        would_block = self._status().segments[2]
+        self.assertEqual((would_block.count, would_block.total), (113, 705))
+        self.assertEqual(would_block.count_label, "decisions")
+        self.assertNotIn("wb", would_block.label)
+
+    def test_a_running_mode_differing_from_config_is_representable(self) -> None:
+        # Runtime truth wins; the stale marker is a state, not a footnote.
+        stale = sc.Segment(
+            key="mode",
+            state=sc.SegmentState.WARN,
+            label="shadow mode, restart required",
+            reason_code="config_changed_since_start",
+            reason_label="config changed since start",
+            explain_key="circinus.mode",
+        )
+        self.assertIs(stale.state, sc.SegmentState.WARN)
+
+
+class LibraRepresentabilityTest(unittest.TestCase):
+    """AC 9 — planned Libra fields, no product-specific host hacks."""
+
+    def _status(self) -> sc.ProviderStatus:
+        return sc.ProviderStatus(
+            provider="libra",
+            provider_version="0.0.2",
+            scope=sc.Scope.HOST,
+            availability=sc.Availability.AVAILABLE,
+            observed_at="2026-09-29T08:00:00Z",
+            cache_ttl_seconds=5,
+            order_hint=40,
+            segments=(
+                sc.Segment(
+                    key="task",
+                    state=sc.SegmentState.NEUTRAL,
+                    label="planning",
+                    explain_key="libra.task",
+                    order_hint=1,
+                ),
+                sc.Segment(
+                    key="preflight",
+                    state=sc.SegmentState.OK,
+                    label="high",
+                    confidence=sc.Confidence.HIGH,
+                    confidence_of=sc.ConfidenceSubject.PREFLIGHT_ESTIMATE,
+                    explain_key="libra.preflight",
+                    order_hint=2,
+                ),
+                sc.Segment(
+                    key="remaining_p90",
+                    state=sc.SegmentState.NEUTRAL,
+                    label="P90 ≤ 12m",
+                    explain_key="libra.remaining_p90",
+                    order_hint=3,
+                ),
+                sc.Segment(
+                    key="replan_state",
+                    state=sc.SegmentState.ATTENTION,
+                    label="escalated — awaiting approval",
+                    explain_key="libra.replan_state",
+                    order_hint=4,
+                ),
+            ),
+        )
+
+    def test_all_four_planned_segments_fit_within_the_bound(self) -> None:
+        segments = self._status().segments
+        self.assertEqual(len(segments), 4)
+        self.assertLessEqual(len(segments), sc.MAX_SEGMENTS_PER_PROVIDER)
+
+    def test_confidence_carries_its_subject_so_it_cannot_read_as_severity(self) -> None:
+        preflight = self._status().segments[1]
+        self.assertIs(preflight.confidence, sc.Confidence.HIGH)
+        self.assertEqual(preflight.confidence_of.label, "preflight confidence")
+
+    def test_the_confidence_subject_survives_the_wire(self) -> None:
+        payload = self._status().to_wire()
+        segment = next(s for s in payload["segments"] if s["key"] == "preflight")
+        self.assertEqual(segment["confidence_of"], "preflight_estimate")
+
+    def test_escalation_is_explicit_prose_not_a_bang_prefix(self) -> None:
+        replan = self._status().segments[3]
+        self.assertIn("awaiting approval", replan.label)
+        self.assertFalse(replan.label.startswith("!"))
+
+    def test_no_segment_uses_the_pf_abbreviation(self) -> None:
+        for segment in self._status().segments:
+            with self.subTest(key=segment.key):
+                self.assertNotIn("pf:", segment.label)
+
+    def test_a_stale_profile_is_representable_without_lying(self) -> None:
+        stale = sc.Segment(
+            key="profile",
+            state=sc.SegmentState.WARN,
+            label="balanced, restart required",
+            reason_code="profile_changed_since_start",
+            reason_label="profile changed since start",
+            explain_key="libra.profile",
+        )
+        self.assertIs(stale.state, sc.SegmentState.WARN)
+
+    def test_the_statusline_carries_no_approval_affordance(self) -> None:
+        # Rendering is read-only: there is no field through which a provider
+        # could offer an approve/deny action.
+        fields = {f.name for f in dataclasses.fields(sc.Segment)}
+        self.assertEqual(fields & {"action", "command", "callback", "on_click"}, set())
+
+
+class MultiProductCompositionTest(unittest.TestCase):
+    """AC 6 — adding a provider needs no edit to another product's renderer."""
+
+    def _all(self) -> tuple[sc.ProviderStatus, ...]:
+        return (
+            _fornax_verdict("unverified"),
+            CircinusRepresentabilityTest()._status(),
+            LibraRepresentabilityTest()._status(),
+        )
+
+    def test_three_products_compose_in_one_deterministic_order(self) -> None:
+        ordered = sc.order_providers(self._all())
+        self.assertEqual(
+            [s.provider for s in ordered], ["fornax", "circinus", "libra"]
+        )
+
+    def test_every_product_uses_the_same_segment_type(self) -> None:
+        for status in self._all():
+            for segment in status.segments:
+                with self.subTest(provider=status.provider, key=segment.key):
+                    self.assertIsInstance(segment, sc.Segment)
+
+    def test_no_product_supplies_its_own_iconography(self) -> None:
+        # The host owns glyphs. A provider emitting one would have to smuggle
+        # it through a label, which the allowlist rejects.
+        for status in self._all():
+            for segment in status.segments:
+                with self.subTest(provider=status.provider, key=segment.key):
+                    for char in segment.label:
+                        self.assertNotEqual(ord(char), 0xFE0F)
+                        self.assertLess(ord(char), 0x2500)
+
+    def test_every_segment_is_understandable_without_emoji(self) -> None:
+        for status in self._all():
+            for segment in status.segments:
+                with self.subTest(provider=status.provider, key=segment.key):
+                    self.assertTrue(segment.label.strip())
+                    self.assertTrue(any(c.isalpha() for c in segment.label))
+
+    def test_every_segment_offers_progressive_disclosure(self) -> None:
+        for status in self._all():
+            for segment in status.segments:
+                with self.subTest(provider=status.provider, key=segment.key):
+                    self.assertIsNotNone(segment.explain_key)
+
+    def test_every_explain_key_is_namespaced_to_its_provider(self) -> None:
+        for status in self._all():
+            for segment in status.segments:
+                with self.subTest(provider=status.provider, key=segment.key):
+                    self.assertTrue(
+                        segment.explain_key.startswith(f"{status.provider}.")
+                    )
+
+    def test_the_whole_composition_round_trips_over_the_wire(self) -> None:
+        for status in self._all():
+            with self.subTest(provider=status.provider):
+                payload = status.to_wire()
+                self.assertEqual(
+                    sc.provider_status_from_wire(payload).to_wire(), payload
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
