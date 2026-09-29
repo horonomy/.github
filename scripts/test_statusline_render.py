@@ -998,5 +998,36 @@ class TestComposeDegradation(unittest.TestCase):
         self.assertNotRegex(block, self.HIDDEN)
         self.assertIn("Fornax", block)
 
+
+class TestComposeDeterminism(unittest.TestCase):
+    ALL = (fornax_status(), circinus_status(), libra_status())
+
+    def test_repeated_renders_of_the_same_input_are_identical(self):
+        for mode in MODES:
+            for budget in (None, 200, 100, 50):
+                with self.subTest(mode=mode, budget=budget):
+                    first = render.compose(UPSTREAM, self.ALL, mode=mode, width_budget=budget)
+                    for _ in range(3):
+                        self.assertEqual(
+                            first,
+                            render.compose(UPSTREAM, self.ALL, mode=mode, width_budget=budget),
+                        )
+
+    def test_input_order_does_not_change_the_output(self):
+        # The statusline re-renders on a timer, so a registry that yields
+        # providers in a different order must not shuffle the line.
+        forward = render.compose(UPSTREAM, self.ALL)
+        backward = render.compose(UPSTREAM, tuple(reversed(self.ALL)))
+        self.assertEqual(forward, backward)
+
+    def test_providers_render_in_contract_order_hint_order(self):
+        block = render.compose(None, self.ALL)
+        self.assertLess(block.index("Fornax"), block.index("Circinus"))
+        self.assertLess(block.index("Circinus"), block.index("Libra Governor"))
+
+    def test_a_duplicate_provider_is_refused_rather_than_silently_deduplicated(self):
+        with self.assertRaises(contract.ContractViolation):
+            render.compose(UPSTREAM, (fornax_status(), fornax_status()))
+
 if __name__ == "__main__":
     unittest.main()
