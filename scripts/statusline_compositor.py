@@ -432,5 +432,30 @@ def source_fingerprint(argv: tuple[str, ...]) -> str:
     return hashlib.sha256(joined).hexdigest()
 
 
+def read_cache(entry: ProviderEntry, home: pathlib.Path | None = None) -> contract.ProviderStatus | None:
+    """A provider's last answer, if it is still inside its own stated TTL.
+
+    Only ever returns an *unexpired* entry. A stale cache is not served as a
+    substitute for a failed probe: the two mean different things, and rendering
+    last minute's healthy reading while the daemon is down is precisely the lie
+    the contract's not-available states exist to prevent.
+    """
+    path = cache_dir(home) / f"{entry.provider}.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("expires_at"), (int, float)):
+        return None
+    if payload["expires_at"] <= time.time():
+        return None
+    if payload.get("source") != source_fingerprint(entry.argv):
+        return None
+    try:
+        return contract.provider_status_from_wire(payload.get("wire"))
+    except contract.ContractViolation:
+        return None
+
+
 if __name__ == "__main__":
     sys.exit(main())
