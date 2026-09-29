@@ -555,5 +555,66 @@ def run_provider(
     return status
 
 
+def collect(
+    registry: Registry, payload: bytes, home: pathlib.Path | None = None
+) -> tuple[str, tuple[contract.ProviderStatus, ...]]:
+    """Run the upstream command and every provider, concurrently.
+
+    One pool for all of them, so the wall clock is about the slowest single
+    child rather than the sum of the timeouts — serialising independent
+    subprocesses would make the worst case grow with every product the user
+    enables, which is exactly the cost this whole design exists to avoid.
+
+    Each provider gets the smaller of its own timeout and the time left on the
+    overall deadline, so the deadline is a real bound and not an aspiration. The
+    upstream command has its own, more generous budget and is not subject to the
+    provider deadline: preserving the user's line outranks our own promptness.
+    """
+    started = time.monotonic()
+    workers = max(1, len(registry.providers) + (1 if registry.upstream_command else 0))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        upstream_future = (
+            pool.submit(run_upstream, registry.upstream_command, payload, registry.upstream_timeout_ms)
+            if registry.upstream_command
+            else None
+        )
+        provider_futures = [
+            (
+                entry,
+                pool.submit(
+                    run_provider,
+                    entry,
+                    min(
+                        entry.timeout_ms,
+                        # Recomputed per submission rather than once, so a slow
+                        # scheduler eats into the budget it actually delayed.
+                        max(0, registry.deadline_ms - int((time.monotonic() - started) * 1000)),
+                    ),
+                    home,
+                ),
+            )
+            for entry in registry.providers
+        ]
+
+        statuses = []
+        for entry, future in provider_futures:
+            remaining = registry.deadline_ms - int((time.monotonic() - started) * 1000)
+            try:
+                statuses.append(future.result(timeout=max(0.0, remaining / 1000)))
+            except concurrent.futures.TimeoutError:
+                # The child's own timeout should have fired first; this is the
+                # backstop for a provider that hangs outside the subprocess call.
+                statuses.append(
+                    _host_not_available(
+                        entry,
+                        contract.Availability.ERROR,
+                        "deadline_exceeded",
+                        "Missed the render deadline",
+                    )
+                )
+        upstream_text = upstream_future.result() if upstream_future else ""
+    return upstream_text, tuple(statuses)
+
+
 if __name__ == "__main__":
     sys.exit(main())
