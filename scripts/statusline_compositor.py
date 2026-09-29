@@ -193,6 +193,12 @@ def _parse_provider(payload: object) -> ProviderEntry | None:
     """Parse one registry entry, or `None` if it is registered but disabled."""
     if not isinstance(payload, dict):
         raise RegistryError("each provider entry must be an object")
+    # The id is validated before the `enabled` check, unlike everything else in
+    # the entry, because the two mean different things about the document. A
+    # disabled entry's command will never run, so not checking it costs nothing;
+    # an id our own lifecycle could not have written means the registry was
+    # produced by something else, and that is a reason to distrust the whole
+    # document rather than one row of it.
     try:
         provider = contract.require_provider_id(payload.get("provider"))
     except contract.ContractViolation as exc:
