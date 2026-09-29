@@ -490,5 +490,160 @@ class EnablePreservationTest(LifecycleCase):
         self.assertIn("env", rendered)
 
 
+class IdempotenceTest(LifecycleCase):
+    def test_enabling_the_same_provider_twice_changes_nothing_the_second_time(self) -> None:
+        self.enable("fornax")
+        settings_before = self.settings.read_bytes()
+        registry_file = lifecycle.read_registry(self.home).path
+        registry_before = registry_file.read_bytes()
+
+        result = self.enable("fornax")
+
+        # REPEATED_INSTALL_IS_IDEMPOTENT -- asserted on bytes, and on the plan
+        # having decided there was nothing to write at all. Byte equality alone
+        # would also pass for an implementation that rewrites an identical file,
+        # which is a write to a shared artifact for no reason.
+        self.assertFalse(result.settings_written)
+        self.assertFalse(result.registry_written)
+        self.assertEqual(self.settings.read_bytes(), settings_before)
+        self.assertEqual(registry_file.read_bytes(), registry_before)
+
+    def test_re_enabling_does_not_duplicate_or_reorder_the_registry(self) -> None:
+        self.enable("fornax")
+        self.enable("circinus")
+        self.enable("libra")
+        order = [entry["provider"] for entry in self.registry()["providers"]]
+
+        self.enable("circinus", timeout_ms=400)
+
+        entries = self.registry()["providers"]
+        # The middle entry is replaced in place. A remove-then-append would pass a
+        # "no duplicates" check and still rewrite the document for no reason.
+        self.assertEqual([entry["provider"] for entry in entries], order)
+        self.assertEqual(len(entries), 3)
+        self.assertEqual(entries[1]["timeout_ms"], 400)
+
+    def test_the_order_products_are_enabled_in_does_not_change_the_result(self) -> None:
+        self.enable("fornax")
+        self.enable("circinus")
+        self.enable("libra")
+        forwards = self.settings.read_bytes()
+        forwards_upstream = self.registry()["upstream"]
+        forwards_providers = {entry["provider"] for entry in self.registry()["providers"]}
+
+        shutil.rmtree(self.home)
+        self.write(self.original)
+        self.enable("libra")
+        self.enable("circinus")
+        self.enable("fornax")
+
+        # AC 4: enabling in either order leaves the same configuration. The
+        # registry's own ordering is allowed to differ -- rendering order is the
+        # contract's `order_hint`, not the order entries happen to sit in.
+        self.assertEqual(self.settings.read_bytes(), forwards)
+        self.assertEqual(self.registry()["upstream"], forwards_upstream)
+        self.assertEqual(
+            {entry["provider"] for entry in self.registry()["providers"]}, forwards_providers
+        )
+
+
+class PostInstallUserChangeTest(LifecycleCase):
+    """A user who edits their configuration after installing must not lose the edit."""
+
+    def edit_after_install(self) -> None:
+        data = self.read()
+        data["statusLine"]["padding"] = 4
+        data["theme"] = "light-daltonized"
+        data["aNewKeyTheUserAdded"] = ["after", "installing"]
+        self.write(data)
+
+    def test_edits_survive_re_running_enable_as_a_repair(self) -> None:
+        self.enable("fornax")
+        self.edit_after_install()
+        self.enable("fornax")
+
+        after = self.read()
+        # POST_INSTALL_USER_CHANGES_SURVIVE_REPAIR -- the edit inside `statusLine`
+        # is the one that matters, since that is the object a repair rewrites.
+        self.assertEqual(after["statusLine"]["padding"], 4)
+        self.assertEqual(after["theme"], "light-daltonized")
+        self.assertEqual(after["aNewKeyTheUserAdded"], ["after", "installing"])
+
+    def test_edits_survive_an_upgrade_that_moves_the_compositor(self) -> None:
+        """An upgrade reconciles the live file; it does not re-derive it.
+
+        The stale install is simulated the way a real one happens: the recorded
+        command still resolves to the compositor, but by a different path. That is
+        what a moved checkout or a reinstalled interpreter looks like, and it is
+        the case where re-deriving from a template would quietly discard the user's
+        `padding`.
+        """
+        self.enable("fornax")
+        self.edit_after_install()
+
+        link = self.root / "compositor-as-it-used-to-be.py"
+        link.symlink_to(lifecycle.compositor_path())
+        stale = self.read()
+        stale["statusLine"]["command"] = f"/usr/bin/env python3 {link}"
+        self.write(stale)
+        self.assertIs(
+            lifecycle.classify(lifecycle.read_settings(self.settings)),
+            lifecycle.Ownership.HORONOM_OWNED,
+        )
+
+        self.enable("circinus")
+
+        after = self.read()
+        # POST_INSTALL_USER_CHANGES_SURVIVE_UPGRADE
+        self.assertEqual(after["statusLine"]["padding"], 4)
+        self.assertEqual(after["theme"], "light-daltonized")
+        self.assertEqual(after["aNewKeyTheUserAdded"], ["after", "installing"])
+        self.assertEqual(after["statusLine"]["command"], lifecycle.compositor_command())
+        # And the original command recorded before the upgrade is still recorded.
+        self.assertEqual(
+            self.registry()["upstream"]["command"],
+            self.original["statusLine"]["command"],
+        )
+
+
+class DisableTest(LifecycleCase):
+    def test_disabling_one_provider_leaves_the_others_and_the_settings_alone(self) -> None:
+        self.enable("fornax")
+        self.enable("circinus")
+        self.enable("libra")
+        settings_before = self.settings.read_bytes()
+
+        result = self.remove("circinus")
+
+        # AC 7, and REMOVE_TOUCHES_ONLY_PRODUCT_OWNED_STATE at provider
+        # granularity: the slot is still ours, so the settings file is not
+        # written at all.
+        self.assertFalse(result.settings_written)
+        self.assertEqual(self.settings.read_bytes(), settings_before)
+        self.assertEqual(
+            [entry["provider"] for entry in self.registry()["providers"]], ["fornax", "libra"]
+        )
+        self.assertEqual(self.registry()["upstream"]["command"], self.original["statusLine"]["command"])
+
+    def test_disabling_a_provider_that_is_not_registered_is_a_reported_no_op(self) -> None:
+        self.enable("fornax")
+        self.enable("circinus")
+        self.remove("circinus")
+        registry_before = lifecycle.read_registry(self.home).path.read_bytes()
+        settings_before = self.settings.read_bytes()
+
+        plan = self.plan_remove("circinus")
+        result = lifecycle.apply(plan)
+
+        # AC 6: idempotent, and *reported* as such rather than silently succeeding
+        # or falling back to cleaning up whatever it can find.
+        self.assertFalse(plan.mutates)
+        self.assertFalse(result.settings_written)
+        self.assertFalse(result.registry_written)
+        self.assertIn("circinus is not registered; nothing to remove", plan.notes)
+        self.assertEqual(lifecycle.read_registry(self.home).path.read_bytes(), registry_before)
+        self.assertEqual(self.settings.read_bytes(), settings_before)
+
+
 if __name__ == "__main__":
     unittest.main()
