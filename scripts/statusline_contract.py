@@ -549,6 +549,14 @@ MAX_COUNT = 10**9
 MAX_ORDER_HINT = 1000
 MAX_AGE_SECONDS = 10 * 365 * 24 * 60 * 60
 
+# A *forward-looking* span, as distinct from `age_seconds` looking backwards:
+# Libra's remaining-work P90 is the first one. Bounded separately from
+# `MAX_AGE_SECONDS` despite sharing its value today, because the two answer to
+# different things — an age is capped by how long the machine has existed, while
+# an estimate is capped only by a model's willingness to extrapolate, and a
+# runaway estimator is exactly the case this bound exists to catch.
+MAX_DURATION_SECONDS = 10 * 365 * 24 * 60 * 60
+
 
 def require_bounded_int(value: object, field: str, maximum: int) -> int:
     """Validate a non-negative integer within an explicit upper bound."""
