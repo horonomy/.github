@@ -1202,7 +1202,12 @@ class TestNothingLeaksAndNothingLeaksOut(FixtureCase):
         # This command re-runs every few seconds for the life of a session, so a
         # worker orphaned per refresh accumulates into a real process count.
         parent, worker = self.forking_fixture("orphan-probe")
-        self.assertEqual(self.running(worker), 0)
+        # Settled, not sampled, for the same reason as the assertion below.
+        # Warming the parent runs it as far as its readiness marker, which is far
+        # enough to fork the worker, so the fixture's own kill is still being
+        # torn down as this line runs. Polling cannot mask a warm-up that
+        # genuinely leaked: that worker outlives the poll limit and is counted.
+        self.assertEqual(self.settled(worker), 0)
         compositor.run_provider(self.entry("fornax", parent), IMPATIENT_MS, self.home)
         self.assertEqual(self.settled(worker), 0)
 
