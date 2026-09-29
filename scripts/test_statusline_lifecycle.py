@@ -1079,7 +1079,7 @@ class AtomicWriteTest(LifecycleCase):
         self.settings.with_name(f"{self.settings.name}.tmp.{os.getpid()}").symlink_to(decoy)
         before = self.settings.read_bytes()
 
-        with unittest.mock.patch.object(pathlib.Path, "unlink", lambda *a, **k: None):
+        with unittest.mock.patch.object(pathlib.Path, "unlink", return_value=None):
             with self.assertRaises(lifecycle.LifecycleError):
                 lifecycle.atomic_write(self.settings, b'{"statusLine": {}}\n', mode=0o600)
 
