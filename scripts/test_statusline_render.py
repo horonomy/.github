@@ -453,5 +453,33 @@ class TestFormatAge(unittest.TestCase):
         for mode in MODES:
             self.assertTrue(render.format_age(90061, mode).isascii())
 
+
+class TestFormatCount(unittest.TestCase):
+    def test_a_count_without_a_total(self):
+        for mode in MODES:
+            self.assertEqual(render.format_count(3, None, "findings", mode), "3 findings")
+
+    def test_a_count_out_of_a_total_reads_as_prose_when_there_is_room(self):
+        self.assertEqual(
+            render.format_count(2, 14, "tool calls", render.PresentationMode.BALANCED),
+            "2 of 14 tool calls",
+        )
+
+    def test_compact_mode_uses_a_slash(self):
+        self.assertEqual(
+            render.format_count(2, 14, "tool calls", render.PresentationMode.COMPACT),
+            "2/14 tool calls",
+        )
+
+    def test_the_noun_survives_every_mode(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertIn("tool calls", render.format_count(2, 14, "tool calls", mode))
+
+    def test_zero_is_rendered_not_suppressed(self):
+        # "0 blocked" and "" mean different things; the contract refuses a count
+        # from a provider that cannot answer for exactly this reason.
+        self.assertIn("0", render.format_count(0, 14, "tool calls", render.PresentationMode.COMPACT))
+
 if __name__ == "__main__":
     unittest.main()
