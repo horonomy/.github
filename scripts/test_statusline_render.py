@@ -2157,8 +2157,14 @@ class TestDetailLayout(DetailLayoutCase):
                     with self.subTest(mode=mode, reading=reading):
                         self.assertIn(reading, block)
 
-    def test_rendering_twice_gives_the_same_rows(self):
-        self.assertEqual(self.compose(), self.compose())
+    def test_the_same_snapshot_always_gives_the_same_rows(self):
+        # Built twice rather than rendered twice: a layout that ordered by
+        # anything mutable, or that cached on object identity, produces a block
+        # that depends on which snapshot it was handed rather than on what the
+        # snapshot says. Two equal-but-distinct snapshots are what tell them apart.
+        first = self.compose((fornax_status(), circinus_status(), libra_status()))
+        second = self.compose((fornax_status(), circinus_status(), libra_status()))
+        self.assertEqual(first, second)
 
 
 class TestDetailLayoutUnderPressure(DetailLayoutCase):
