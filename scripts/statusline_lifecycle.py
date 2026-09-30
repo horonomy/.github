@@ -1431,6 +1431,30 @@ def _released_status_line(
     return after, changes, notes
 
 
+def _cached_readings(home: pathlib.Path) -> tuple[pathlib.Path, ...]:
+    """Cached provider answers, so the last provider leaving takes them with it.
+
+    Without this an uninstall left the last readings on disk under a state
+    directory whose registry had just been deleted -- product state outliving the
+    product, which is the half of `A+B+C -> A+C` that says B must be able to go
+    away completely. Harmless to a later install, since the compositor validates
+    every cache entry against a TTL and a source fingerprint, but a product does
+    not get to leave its own residue behind and call the removal done.
+
+    Files only, and only the ones this module's own cache directory holds. The
+    directory itself stays: removing directories is not something any path here
+    does, and an empty one it created is a smaller surprise than an `rmdir` of a
+    path someone else may have put something in.
+    """
+    directory = home / compositor.CACHE_DIRNAME
+    try:
+        return tuple(sorted(path for path in directory.iterdir() if path.is_file()))
+    except OSError:
+        # An unreadable or absent cache directory is not a reason to refuse the
+        # removal the user asked for; the readings in it are not authority.
+        return ()
+
+
 def _giving_the_slot_back(
     document: SettingsDocument, ownership: Ownership, registry: RegistryDocument
 ) -> tuple[dict | None, tuple[pathlib.Path, ...], list[Change], list[str]]:
@@ -1445,10 +1469,18 @@ def _giving_the_slot_back(
     notes: list[str] = []
     state_to_remove: tuple[pathlib.Path, ...] = ()
     if registry.present:
-        state_to_remove = (registry.path,)
+        state_to_remove = (registry.path, *_cached_readings(registry.path.parent))
         changes.append(
             Change(ChangeKind.REMOVE, str(registry.path), "the last provider is gone with it")
         )
+        if len(state_to_remove) > 1:
+            changes.append(
+                Change(
+                    ChangeKind.REMOVE,
+                    str(registry.path.parent / compositor.CACHE_DIRNAME),
+                    f"{len(state_to_remove) - 1} cached reading(s) discarded with it",
+                )
+            )
 
     before = document.status_line
     if not isinstance(before, dict):

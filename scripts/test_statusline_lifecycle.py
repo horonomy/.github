@@ -994,6 +994,45 @@ class RestorationTest(LifecycleCase):
             )
         )
 
+    def test_the_last_provider_leaving_takes_its_cached_readings_with_it(self) -> None:
+        """The other half of `A+B+C -> A+C`: B has to be able to go away entirely.
+
+        Observed on the DogFood workstation -- a full uninstall restored the
+        founder's statusline byte-for-byte and still left a cached reading on
+        disk, under a state directory whose registry had just been deleted.
+        """
+        self.enable("fornax")
+        cache = compositor.cache_dir(self.home)
+        cache.mkdir(parents=True, exist_ok=True)
+        stale = cache / "fornax.json"
+        stale.write_text('{"cache_version": 1, "expires_at": 0, "source": "x", "wire": {}}')
+
+        result = self._uninstall()
+
+        self.assertFalse(stale.exists(), "a cached reading outlived the product")
+        self.assertIn(stale, result.plan.state_to_remove)
+        self.assertTrue(
+            any("cached reading" in change.detail for change in result.plan.changes),
+            "the discarded readings were not disclosed",
+        )
+        # The directory stays: nothing here removes directories.
+        self.assertTrue(cache.exists())
+
+    def test_disabling_one_of_several_keeps_every_cached_reading(self) -> None:
+        # Only the *last* provider leaving retires the shared state. Discarding
+        # another product's cached reading because this one was disabled would be
+        # exactly the `C` loss the invariant forbids.
+        self.enable("fornax")
+        self.enable("circinus")
+        cache = compositor.cache_dir(self.home)
+        cache.mkdir(parents=True, exist_ok=True)
+        theirs = cache / "circinus.json"
+        theirs.write_text('{"cache_version": 1, "expires_at": 0, "source": "x", "wire": {}}')
+
+        self.remove("fornax", operation="disable")
+
+        self.assertTrue(theirs.exists())
+
     def test_removal_never_deletes_the_file_it_shares_with_the_host(self) -> None:
         self.settings.unlink()
         self.enable("fornax")
