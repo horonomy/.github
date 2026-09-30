@@ -52,6 +52,7 @@ import pathlib
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 
 import statusline_compositor as compositor
@@ -1675,6 +1676,95 @@ def _remediation(ownership: Ownership, registry: RegistryDocument, owned: bool) 
     if owned and not _provider_ids(registry):
         return ["no providers are registered, so the statusline renders only the original line"]
     return []
+
+
+# How long a product's own explain surface may take, and how much of its answer
+# is kept. Both far looser than anything on the render path, because these are
+# different operations: a refresh nobody asked for gets 250ms, and a command a
+# person typed can afford to wait for a real answer. Bounded all the same -- a
+# product that hangs must not hang this.
+EXPLAIN_TIMEOUT_SECONDS = 5.0
+MAX_EXPLAIN_OUTPUT_BYTES = 16 * 1024
+
+
+def _explain_commands(registry: RegistryDocument) -> dict[str, tuple[str, ...]]:
+    """Each provider's recorded long-form command, read from the raw document.
+
+    Read here rather than through `compositor.parse_registry` deliberately. The
+    compositor's read model has no field for this at all, which is what keeps a
+    command carrying a five-second budget out of reach of the render path;
+    reading it from the raw entries preserves that while still letting this
+    surface hand over to it.
+
+    A malformed value is skipped rather than raised on. Every field that decides
+    what runs on the statusline has already been validated by the compositor; a
+    bad value here costs one hand-over section in a diagnostic, and failing the
+    whole command over it would deny the reader the key as well.
+    """
+    commands: dict[str, tuple[str, ...]] = {}
+    for entry in (registry.data or {}).get("providers") or []:
+        if not isinstance(entry, dict) or "explain_command" not in entry:
+            continue
+        provider = entry.get("provider")
+        if not isinstance(provider, str):
+            continue
+        try:
+            commands[provider] = _validated_argv(entry["explain_command"], "explain_command")
+        except LifecycleError:
+            continue
+    return commands
+
+
+def _product_detail(argv: tuple[str, ...]) -> dict:
+    """Ask the owning product for its own long-form explanation of its readings.
+
+    Runs with no shell and no stdin: the child cannot read the host payload, so
+    it cannot render, log or grow a dependency on the user's session, and there
+    is nothing for a quoting mistake to reinterpret.
+
+    Only stdout is reproduced. A product's explain surface is output designed for
+    a person to read and carries that product's own privacy tests; its stderr is
+    neither, and a crash message is exactly the kind of thing that carries a
+    filesystem path or an environment value. So a failure is reported as a status
+    and a name, never as whatever the product printed on its way down.
+    """
+    detail: dict = {"available": False, "command_name": pathlib.Path(argv[0]).name, "text": None}
+    try:
+        # `shell=False` by omission, and an argv list rather than a string, so
+        # neither a space in a path nor a metacharacter in an argument can turn a
+        # recorded command into a different one.
+        completed = subprocess.run(
+            list(argv),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=EXPLAIN_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except FileNotFoundError:
+        detail["problem"] = "the recorded explain command is not installed"
+        return detail
+    except PermissionError:
+        detail["problem"] = "the recorded explain command is not executable"
+        return detail
+    except subprocess.TimeoutExpired:
+        detail["problem"] = f"it did not answer within {EXPLAIN_TIMEOUT_SECONDS:g}s"
+        return detail
+    except OSError as exc:
+        detail["problem"] = f"it could not be started (errno {exc.errno})"
+        return detail
+    if completed.returncode != 0:
+        detail["problem"] = (
+            f"it exited {completed.returncode}; its error output is not reproduced here "
+            "because that is not a surface the product designed to be read"
+        )
+        return detail
+    text = completed.stdout[:MAX_EXPLAIN_OUTPUT_BYTES].decode("utf-8", "replace").strip()
+    if not text:
+        detail["problem"] = "it answered with nothing"
+        return detail
+    detail["available"] = True
+    detail["text"] = text
+    return detail
 
 
 EXIT_OK = 0
