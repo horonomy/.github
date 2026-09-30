@@ -927,6 +927,11 @@ def plan_enable(
 _DENSITY_WORDS = {False: "balanced", True: "compact"}
 _ICON_WORDS = {False: "text only", True: "emoji"}
 
+# The same two axes as the command line spells them. `.get` on an omitted flag
+# yields `None`, which is exactly "leave this axis alone".
+_DENSITY_FLAG = {"balanced": False, "compact": True}
+_ICON_FLAG = {"emoji": True, "text": False}
+
 
 def _presentation_refusal(registry: RegistryDocument) -> tuple[str | None, tuple[str, ...]]:
     """Why a preference change must not proceed, or `(None, ())` if it may.
@@ -1004,14 +1009,28 @@ def plan_presentation(
     registry_after = dict(registry.data)
     registry_after[PRESENTATION_KEY] = presentation
 
-    changes = [
-        Change(
-            ChangeKind.UPDATE if "mode" in stored else ChangeKind.ADD,
-            f"registry.{PRESENTATION_KEY}.mode",
-            f"density {_DENSITY_WORDS[after.is_compact]}, "
-            f"icons {_ICON_WORDS[after.uses_glyphs]}",
-        )
-    ]
+    setting = (
+        f"density {_DENSITY_WORDS[after.is_compact]}, icons {_ICON_WORDS[after.uses_glyphs]}"
+    )
+    if stored.get("mode") == after.value:
+        # Running this with no flags, or with the flags already in effect, is a
+        # legitimate way to ask what the current setting is. Reporting it as a
+        # change that is not happening is the honest answer to that question.
+        changes = [
+            Change(
+                ChangeKind.PRESERVED_USER,
+                f"registry.{PRESENTATION_KEY}.mode",
+                f"already {setting}",
+            )
+        ]
+    else:
+        changes = [
+            Change(
+                ChangeKind.UPDATE if "mode" in stored else ChangeKind.ADD,
+                f"registry.{PRESENTATION_KEY}.mode",
+                setting,
+            )
+        ]
     kept = [key for key in stored if key != "mode"]
     if kept:
         changes.append(
@@ -1633,7 +1652,10 @@ EXIT_FAILED = 3
 
 def _describe(plan: Plan, result: ApplyResult | None) -> str:
     """The plan as prose, for a reader who is about to trust it with their config."""
-    target = plan.settings_path if plan.settings_path is not None else "no host configuration"
+    # Names the file the operation actually writes, which for a plan with no
+    # settings read is the registry. Reporting a settings path there would be
+    # naming a file this operation cannot touch.
+    target = plan.settings_path or plan.registry_path
     lines = [f"{plan.operation}: {target} ({plan.scope} scope)"]
     if plan.ownership is not None:
         lines.append(f"  current owner: {plan.ownership.value}")
@@ -1753,11 +1775,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
 
-    def shared(subcommand: argparse.ArgumentParser, *, mutating: bool = True) -> None:
-        subcommand.add_argument(
-            "--settings",
-            help=f"path to the Claude Code settings file (default {DEFAULT_SETTINGS_PATH})",
-        )
+    def shared(
+        subcommand: argparse.ArgumentParser, *, mutating: bool = True, settings: bool = True
+    ) -> None:
+        # `--settings` is omitted rather than accepted-and-ignored for the one
+        # subcommand that never opens that file. A flag that silently does
+        # nothing is worse than an absent one: it invites the reader to believe
+        # the operation is scoped by it.
+        if settings:
+            subcommand.add_argument(
+                "--settings",
+                help=f"path to the Claude Code settings file (default {DEFAULT_SETTINGS_PATH})",
+            )
         subcommand.add_argument("--json", action="store_true", help="emit machine-readable output")
         if mutating:
             subcommand.add_argument(
@@ -1797,6 +1826,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     shared(uninstall)
 
+    # Two independent flags rather than one `--mode compact_plain`, because the
+    # stored value is a resolved pair and a user thinking about their terminal is
+    # not. Either may be omitted, which is what makes "my font is bad" expressible
+    # on its own; `presentation` with neither is a legitimate no-op that prints
+    # the current setting.
+    presentation = subcommands.add_parser(
+        "presentation", help="choose how the line is rendered for this reader"
+    )
+    presentation.add_argument(
+        "--density",
+        choices=("balanced", "compact"),
+        help="how many columns a reading may spend (unchanged if omitted)",
+    )
+    presentation.add_argument(
+        "--icon-style",
+        choices=("emoji", "text"),
+        dest="icon_style",
+        help="text is for terminals whose font or width handling makes emoji unreliable",
+    )
+    shared(presentation, settings=False)
+
     listing = subcommands.add_parser("list", help="show what is registered")
     shared(listing, mutating=False)
 
@@ -1831,6 +1881,18 @@ def _run_report(options: argparse.Namespace, path: pathlib.Path, stream: object)
 def main(argv: list[str] | None = None, stdout: object = None) -> int:
     options = build_parser().parse_args(argv)
     stream = stdout if stdout is not None else sys.stdout
+
+    if options.command == "presentation":
+        # Handled before the settings file is located, let alone read. The
+        # preference is ours, and a settings file we cannot parse must not stand
+        # between a user and a line their terminal can render.
+        plan = plan_presentation(
+            read_registry(),
+            compact=_DENSITY_FLAG.get(options.density),
+            glyphs=_ICON_FLAG.get(options.icon_style),
+        )
+        return _run_plan(plan, options, stream)
+
     path = _settings_path(options.settings)
 
     if options.command in ("doctor", "list"):
