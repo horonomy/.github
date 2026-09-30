@@ -30,6 +30,18 @@ restore deleting a key the user added later; removing one provider taking the
 others with it; wrapper recursion; a provider's timeout blocking the user's own
 line; a missing product reported as healthy; and a secret-shaped field reaching
 the rendered line.
+
+Then the fourteen the information-depth gate is required to demonstrate
+(HORO-1627), which are a different kind of defect: nothing crashes, nothing is
+destroyed, and the line still looks like a statusline. Clear and detail
+disagreeing about a product's state; detail costing an extra provider request;
+detail showing a field no depth is allowed to show; clear losing the product's
+name, its unavailability, its enforcement marker, its reason, or its confidence
+semantics; clear choosing a routine reading over an escalation; a mode switch
+writing the host settings file, editing the reader's own statusline script or
+restarting a daemon; and an unrelated operation -- adopting a product, or
+dropping one -- resetting the stored preference. Each of those renders something
+a reader would accept, which is why they need a test that does not.
 """
 
 from __future__ import annotations
@@ -37,6 +49,9 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import os
+import pathlib
+import shlex
+import subprocess
 import unittest
 import unittest.mock
 
@@ -46,6 +61,9 @@ import statusline_lifecycle as lifecycle
 import statusline_render as render
 import test_statusline_compositor as compositor_tests
 import test_statusline_contract as contract_tests
+import test_statusline_depth_gate as depth_gate
+import test_statusline_lifecycle as lifecycle_tests
+import test_statusline_performance as performance_tests
 import test_statusline_release_gate as gate
 
 # Guards proven clean once per run. The clean run exists to establish that a
@@ -384,6 +402,345 @@ def trusting_our_own_products_labels() -> object:
 
 
 # --------------------------------------------------------------------------
+# The information-depth mutations (HORO-1627).
+#
+# "Clear and detail are two readings of one snapshot" is a property with four
+# owners: the renderer decides what a depth says about a reading, the clear
+# projection decides which readings survive, the compositor decides what a render
+# costs, and the lifecycle decides what switching is allowed to touch. Every
+# mutation below breaks it in exactly one of those four places, because a defect
+# that broke two would be caught by whichever guard fired first and would prove
+# nothing about the other.
+# --------------------------------------------------------------------------
+
+
+def summarising_the_state_in_clears_own_words() -> object:
+    """Clear states the state in its own vocabulary instead of the provider's.
+
+    The shape a shorter summary invites: the state ladder is already a vocabulary
+    a reader understands, so say the state and skip the prose. It reads perfectly
+    well -- and it is a second state engine. The provider said `Verified`, the
+    summary says `Ok`, and the two depths are now describing the same snapshot
+    differently.
+    """
+    real = render.render_segment
+
+    def mutated(segment, mode, depth=render.InformationDepth.DETAIL):
+        if depth.shows_supporting_detail:
+            return real(segment, mode, depth)
+        state = render._enum_value(segment.state)
+        return f"{render.state_marker(state, mode)} {render.STATE_TEXT[state].title()}"
+
+    return unittest.mock.patch.object(render, "render_segment", mutated)
+
+
+def a_summary_that_does_not_name_the_product() -> object:
+    """The product's name dropped from the summary, where columns are scarce.
+
+    The most tempting width saving there is, and the reason the founder's own
+    screenshot prompted this ticket: on a line with three products, `🛡 Verified`
+    is a sentence with the subject removed.
+    """
+    real = render.provider_parts
+
+    def mutated(status, mode, depth=render.InformationDepth.DETAIL):
+        name, scope, readings = real(status, mode, depth)
+        if depth.shows_supporting_detail:
+            return name, scope, readings
+        return "", scope, readings
+
+    return unittest.mock.patch.object(render, "provider_parts", mutated)
+
+
+def treating_availability_as_one_reading_among_the_rest() -> object:
+    """The unavailability rule removed, leaving severity to choose.
+
+    Stated as a simplification rather than as a break, which is how it would
+    arrive: a provider that cannot be read reports that as a segment like any
+    other, so let the ladder rank it. What the ladder then does is prefer the
+    cached `warn` posture over the `unknown` availability -- and the line tells
+    the reader their tool calls are being evaluated by a daemon that is not
+    answering.
+    """
+    return unittest.mock.patch.object(render, "_has_live_readings", lambda status: True)
+
+
+def dropping_the_hypothetical_marker_from_the_summary() -> object:
+    """`[NOT ENFORCED]` treated as a detail-depth aside.
+
+    Eleven columns and a bracketed shout, on the line with the least room for it.
+    The defect is that removing it does not make the reading shorter, it makes it
+    a different reading: `Would have blocked` without the marker is an executed
+    block.
+    """
+    real = render.render_segment
+    aside = f" [{render.HYPOTHETICAL_TEXT}]"
+
+    def mutated(segment, mode, depth=render.InformationDepth.DETAIL):
+        text = real(segment, mode, depth)
+        if depth.shows_supporting_detail:
+            return text
+        return text.replace(aside, "")
+
+    return unittest.mock.patch.object(render, "render_segment", mutated)
+
+
+def explaining_an_unrecorded_reason_helpfully() -> object:
+    """`reason_not_recorded` expanded into prose about the evidence.
+
+    The honest phrase is kept, which is what makes this the realistic version of
+    the fabrication: nobody deletes the truth, they annotate it. "Not recorded" is
+    a fact about Fornax's bookkeeping; "insufficient evidence" is a finding about
+    the claim, and the provider made no such finding.
+    """
+    real = render.format_reason
+    prose = {
+        "reason_not_recorded": "Evidence not recorded, so there is insufficient evidence to verify",
+    }
+
+    def mutated(reason_code, reason_label):
+        if not reason_label and reason_code in prose:
+            return prose[reason_code]
+        return real(reason_code, reason_label)
+
+    return unittest.mock.patch.object(render, "format_reason", mutated)
+
+
+def a_confidence_without_its_subject() -> object:
+    """The confidence value rendered bare, with the noun it qualifies dropped.
+
+    `preflight confidence high` costs twenty columns to say one word, so the word
+    goes in alone -- next to a state marker, where `high` reads as severity or
+    priority. The ticket names this one directly: high, medium and low must remain
+    attributable to preflight confidence and not to risk.
+    """
+    return unittest.mock.patch.object(
+        render, "format_confidence", lambda confidence, confidence_of, mode: confidence
+    )
+
+
+def keeping_the_confidence_in_the_summary() -> object:
+    """The same word, arriving at the depth that has no room to qualify it.
+
+    The other half of the confidence defect, and independent of it: this one keeps
+    the subject and moves the phrase into clear. Worth proving separately because
+    `render_segment` gates the confidence field and the projection gates the
+    reading, so a guard on one says nothing about the other.
+    """
+    real = render.render_segment
+
+    def mutated(segment, mode, depth=render.InformationDepth.DETAIL):
+        text = real(segment, mode, depth)
+        confidence = render._enum_value(getattr(segment, "confidence", None))
+        if depth.shows_supporting_detail or confidence is None:
+            return text
+        phrase = render.format_confidence(
+            confidence, render._enum_value(getattr(segment, "confidence_of", None)), mode
+        )
+        if text.endswith(")"):
+            return f"{text[:-1]}{render.DETAIL_SEPARATOR}{phrase})"
+        return f"{text} ({phrase})"
+
+    return unittest.mock.patch.object(render, "render_segment", mutated)
+
+
+def summarising_the_declared_posture_and_ignoring_the_escalation() -> object:
+    """The provider's declared posture taken as the summary, always.
+
+    The most defensible-sounding of these: the provider knows its own product, it
+    declared which reading is its posture, so show that one and stop inferring.
+    What it discards is the rung above -- a segment whose state says the operator
+    is being waited on, which the ladder infers precisely because a provider
+    cannot declare it in advance. Libra then reports a delivery estimate for work
+    that is not moving, and the approval nobody has given goes unmentioned.
+
+    This is the mutation HORO-1627 asks for by name: the clear projection choosing
+    a less important field over an available action-required signal.
+    """
+    real = render.clear_readings
+
+    def mutated(status):
+        declared = tuple(
+            part
+            for part in contract.order_segments(status)
+            if getattr(part, "clear_role", None) is contract.ClearRole.POSTURE
+        )
+        return declared[:1] or real(status)
+
+    return unittest.mock.patch.object(render, "clear_readings", mutated)
+
+
+def telling_the_reader_which_explain_topic_to_open() -> object:
+    """The explain key appended at detail, as a pointer to the deeper surface.
+
+    With the justification the ticket anticipates and refuses: detail is the
+    developer's depth, so a machine identifier is arguably useful there. It is a
+    field no reader is meant to see, and "this is developer mode" does not make an
+    unsafe field safe -- detail is a deeper reading of the reviewed surface, not a
+    wider one.
+    """
+    real = render.render_segment
+
+    def mutated(segment, mode, depth=render.InformationDepth.DETAIL):
+        text = real(segment, mode, depth)
+        key = getattr(segment, "explain_key", None)
+        if not depth.shows_supporting_detail or not key:
+            return text
+        return f"{text} [{key}]"
+
+    return unittest.mock.patch.object(render, "render_segment", mutated)
+
+
+def polls_twice_at_detail() -> object:
+    """A second round of provider probes, because more is being shown.
+
+    The defect the ticket's performance rule exists for, in the form it would
+    actually take: not a deliberate extra call, but a depth that re-collects
+    because it wants the fuller snapshot and does not trust the one it has. It is
+    nearly invisible on a clock -- the probes run underneath the user's own
+    command -- which is why the fixtures count executions instead.
+    """
+    real = compositor.collect
+
+    def mutated(registry, payload, home=None):
+        upstream, statuses = real(registry, payload, home)
+        if registry.depth.shows_supporting_detail:
+            _, statuses = real(registry, payload, home)
+        return upstream, statuses
+
+    return unittest.mock.patch.object(compositor, "collect", mutated)
+
+
+def recording_the_depth_in_the_host_settings_file() -> object:
+    """The chosen depth written into the host's settings as an environment entry.
+
+    The reasoning that makes it feel right: the compositor is launched by Claude
+    Code, so the place to tell it something is the file that launches it. It
+    reaches into a file this operation has no business opening -- and all three of
+    the plan's settings fields have to be supplied together, because the planner
+    refuses a half-formed one, which is itself a guard worth exercising.
+    """
+    real = lifecycle.plan_presentation
+
+    def mutated(registry, **kwargs):
+        plan = real(registry, **kwargs)
+        recorded = (registry.data.get("lifecycle") or {}).get("settings_path")
+        if plan.registry_after is None or not recorded:
+            return plan
+        document = lifecycle.read_settings(pathlib.Path(recorded))
+        depth = plan.registry_after[lifecycle.PRESENTATION_KEY]["depth"]
+        env = dict(document.data.get("env") or {}) | {"HORONOM_STATUSLINE_DEPTH": depth}
+        return dataclasses.replace(
+            plan,
+            settings_path=document.path,
+            ownership=lifecycle.classify(document),
+            fingerprint=document.fingerprint,
+            settings_after=dict(document.data) | {"env": env},
+        )
+
+    return unittest.mock.patch.object(lifecycle, "plan_presentation", mutated)
+
+
+@contextlib.contextmanager
+def teaching_the_readers_own_script_the_new_depth():
+    """The depth exported from the reader's own statusline script.
+
+    Which is the one file in this whole integration that is not ours to write at
+    all. It is an easy defect to arrive at honestly: the registry records the
+    command we wrapped, so the path is right there, and a single exported variable
+    looks harmless next to a JSON rewrite.
+    """
+    real = lifecycle.apply
+
+    def mutated(plan):
+        result = real(plan)
+        if plan.operation != "presentation" or plan.registry_after is None:
+            return result
+        recorded = (plan.registry_after.get("upstream") or {}).get("command")
+        depth = (plan.registry_after.get(lifecycle.PRESENTATION_KEY) or {}).get("depth")
+        if recorded and depth:
+            with pathlib.Path(shlex.split(recorded)[0]).open("a", encoding="utf-8") as script:
+                script.write(f"export HORONOM_DEPTH={depth}\n")
+        return result
+
+    with unittest.mock.patch.object(lifecycle, "apply", mutated):
+        yield
+
+
+def reloading_the_daemon_after_a_switch() -> object:
+    """A process started so the new depth takes effect.
+
+    The assumption underneath it is the interesting part: that a presentation
+    preference is something a running product has to be told, rather than
+    something the next render reads. `/bin/sh -c :` stands in for the reload --
+    what is being proven is that a switch starts no process at all, and the
+    cheapest possible process makes that claim without the fixture depending on
+    any product being installed.
+    """
+    real = lifecycle.apply
+
+    def mutated(plan):
+        result = real(plan)
+        if plan.operation == "presentation":
+            subprocess.run(["/bin/sh", "-c", ":"], check=False)
+        return result
+
+    return unittest.mock.patch.object(lifecycle, "apply", mutated)
+
+
+def filling_in_the_presentation_defaults_on_every_enable() -> object:
+    """Every enable restates the presentation block, defaults included.
+
+    The upgrade defect, in the place it would really live. Nobody writes "reset
+    the user's preference"; they write "make sure the registry has a complete
+    presentation block", and the completion runs on an operation that had no
+    business touching it. A reader who chose detail months ago gets clear back the
+    next time they adopt a product.
+    """
+    real = lifecycle.plan_enable
+
+    def mutated(document, registry, registration, **kwargs):
+        plan = real(document, registry, registration, **kwargs)
+        if plan.registry_after is None:
+            return plan
+        presentation = dict(plan.registry_after.get(lifecycle.PRESENTATION_KEY) or {})
+        presentation["depth"] = render.DEFAULT_INFORMATION_DEPTH.value
+        return dataclasses.replace(
+            plan,
+            registry_after=dict(plan.registry_after)
+            | {lifecycle.PRESENTATION_KEY: presentation},
+        )
+
+    return unittest.mock.patch.object(lifecycle, "plan_enable", mutated)
+
+
+def normalising_the_presentation_block_when_a_product_leaves() -> object:
+    """And the same completion on the way out.
+
+    The disable side of the defect above, and the one more likely to survive
+    review: a disable already rewrites the provider list, so normalising the rest
+    of the registry while the file is open looks like tidying rather than like
+    resetting somebody's preference. The reader loses the depth they chose by
+    taking a product out -- an operation with no presentation in it at all.
+    """
+    real = lifecycle.plan_remove
+
+    def mutated(document, registry, **kwargs):
+        plan = real(document, registry, **kwargs)
+        if plan.registry_after is None:
+            return plan
+        presentation = dict(plan.registry_after.get(lifecycle.PRESENTATION_KEY) or {})
+        presentation["depth"] = render.DEFAULT_INFORMATION_DEPTH.value
+        return dataclasses.replace(
+            plan,
+            registry_after=dict(plan.registry_after)
+            | {lifecycle.PRESENTATION_KEY: presentation},
+        )
+
+    return unittest.mock.patch.object(lifecycle, "plan_remove", mutated)
+
+
+# --------------------------------------------------------------------------
 # The seven defects.
 # --------------------------------------------------------------------------
 
@@ -612,6 +969,208 @@ class SecretShapedFieldTest(MutationCase):
             "test_a_secret_shaped_label_is_refused_outright",
             trusting_our_own_products_labels(),
             expect=compositor_tests.TestNothingLeaksAndNothingLeaksOut.CANARY,
+        )
+
+
+# --------------------------------------------------------------------------
+# The fourteen depth defects.
+# --------------------------------------------------------------------------
+
+
+class ClearDetailAgreementTest(MutationCase):
+    """The invariant that makes the two depths one product rather than two."""
+
+    def test_a_summary_that_writes_its_own_verdict_is_caught(self) -> None:
+        self.assert_guard_catches(
+            depth_gate.CrossDepthInvariantTest,
+            "test_the_primary_state_reads_identically_at_both_depths",
+            summarising_the_state_in_clears_own_words(),
+            expect="Verified' not found in",
+        )
+
+    def test_a_summary_that_does_not_name_its_product_is_caught(self) -> None:
+        self.assert_guard_catches(
+            depth_gate.FornaxDepthTest,
+            "test_the_product_is_named_at_both_depths",
+            a_summary_that_does_not_name_the_product(),
+            expect="'Fornax' not found in",
+        )
+
+
+class ClearPriorityTest(MutationCase):
+    """Which reading earns the one phrase, in the two rows where it matters most.
+
+    Both mutations here are simplifications of the priority ladder rather than
+    breaks of it, and both produce a line that is true about something while being
+    wrong about the thing the reader needed.
+    """
+
+    def test_a_cached_posture_beside_an_unreachable_daemon_is_caught(self) -> None:
+        self.assert_guard_catches(
+            depth_gate.CircinusDepthTest,
+            "test_an_unreachable_daemon_overrides_every_cached_posture",
+            treating_availability_as_one_reading_among_the_rest(),
+            expect="!= ['availability']",
+        )
+
+    def test_a_routine_posture_chosen_over_an_escalation_is_caught(self) -> None:
+        self.assert_guard_catches(
+            depth_gate.LibraDepthTest,
+            "test_someone_being_waited_on_takes_the_line_from_an_estimate",
+            summarising_the_declared_posture_and_ignoring_the_escalation(),
+            expect="['remaining'] != ['approval']",
+        )
+
+    def test_the_matrix_row_catches_the_same_choice_from_the_other_side(self) -> None:
+        """The same defect, seen as a reading that should not be there.
+
+        Proven twice deliberately: the case above asserts which reading was chosen,
+        this one asserts what the chosen reading says. A row whose expectations were
+        weakened to whatever the implementation produces would still satisfy the
+        first and not the second.
+        """
+        self.assert_guard_catches(
+            depth_gate.LibraDepthTest,
+            "test_the_summary_leaves_out_every_reading_its_row_forbids",
+            summarising_the_declared_posture_and_ignoring_the_escalation(),
+            expect="'Remaining work' unexpectedly found in",
+        )
+
+
+class EnforcementWordingTest(MutationCase):
+    def test_a_shadow_outcome_stripped_of_its_marker_is_caught(self) -> None:
+        self.assert_guard_catches(
+            depth_gate.CircinusDepthTest,
+            "test_a_shadow_outcome_and_an_executed_one_never_read_the_same",
+            dropping_the_hypothetical_marker_from_the_summary(),
+            expect="'NOT ENFORCED' not found in",
+        )
+
+
+class InventedReasonTest(MutationCase):
+    def test_explaining_an_unrecorded_reason_into_a_finding_is_caught(self) -> None:
+        self.assert_guard_catches(
+            depth_gate.FornaxDepthTest,
+            "test_an_unrecorded_reason_is_reported_as_unrecorded_and_not_invented",
+            explaining_an_unrecorded_reason_helpfully(),
+            expect="'insufficient evidence' unexpectedly found in",
+        )
+
+
+class ConfidenceSemanticsTest(MutationCase):
+    """Two ways to lose the same distinction, at opposite depths."""
+
+    def test_a_confidence_without_its_subject_is_caught(self) -> None:
+        self.assert_guard_catches(
+            depth_gate.LibraDepthTest,
+            "test_a_confidence_that_is_shown_always_names_its_subject",
+            a_confidence_without_its_subject(),
+            expect="'preflight confidence' not found in",
+        )
+
+    def test_a_confidence_value_reaching_the_summary_is_caught(self) -> None:
+        self.assert_guard_catches(
+            depth_gate.LibraDepthTest,
+            "test_no_confidence_value_reaches_the_summary",
+            keeping_the_confidence_in_the_summary(),
+            expect="'low' unexpectedly found in",
+        )
+
+
+class DepthDisclosureTest(MutationCase):
+    """One leak, caught two ways, because the two ways catch different leaks.
+
+    The subtractive check has no list of bad values and so catches fields nobody
+    anticipated; the token check knows what an identifier looks like and so catches
+    the ones that read like prose. This mutation is visible to both, which is the
+    only kind of mutation that can demonstrate either.
+    """
+
+    def test_a_machine_identifier_shown_at_detail_is_caught(self) -> None:
+        self.assert_guard_catches(
+            depth_gate.DisclosureBoundaryTest,
+            "test_no_machine_token_reaches_a_reader_at_either_depth",
+            telling_the_reader_which_explain_topic_to_open(),
+            expect="'fornax.verdict.latest' unexpectedly found in",
+        )
+
+    def test_the_subtractive_check_sees_it_without_being_told_what_to_look_for(
+        self,
+    ) -> None:
+        self.assert_guard_catches(
+            depth_gate.DisclosureBoundaryTest,
+            "test_nothing_on_the_line_came_from_outside_the_reviewed_surface",
+            telling_the_reader_which_explain_topic_to_open(),
+            expect="fornax.verdict.latest",
+        )
+
+
+class DepthCostTest(MutationCase):
+    def test_polling_again_because_more_is_shown_is_caught(self) -> None:
+        """Caught by the count, which is the only half that can catch it.
+
+        The timing assertions in the same class pass with this mutation in place --
+        the extra probes run concurrently underneath the user's own command and
+        land inside the slack every timing bound has to allow. That is not a
+        weakness in those tests; it is why the class counts executions as well.
+        """
+        self.assert_guard_catches(
+            performance_tests.InformationDepthCostTest,
+            "test_showing_more_of_a_snapshot_does_not_ask_for_a_new_one",
+            polls_twice_at_detail(),
+            expect="6 != 3",
+        )
+
+
+class DepthSwitchSafetyTest(MutationCase):
+    """The three things a switch must not touch, broken one at a time.
+
+    All three are caught by one guard, which is deliberate on that guard's part:
+    the interesting failure is a switch that gets two of these right and takes the
+    third with it in the same step, and six separate tests over six separate
+    switches could not see that. What the three cases here add is that the one
+    guard is not passing by accident on any of the three.
+    """
+
+    GUARD = (depth_gate.DepthSwitchTest, "test_a_switch_takes_nothing_else_with_it")
+
+    def test_recording_the_depth_in_the_host_settings_file_is_caught(self) -> None:
+        self.assert_guard_catches(
+            *self.GUARD,
+            recording_the_depth_in_the_host_settings_file(),
+            expect="a depth switch wrote the host settings file",
+        )
+
+    def test_editing_the_readers_own_statusline_script_is_caught(self) -> None:
+        self.assert_guard_catches(
+            *self.GUARD,
+            teaching_the_readers_own_script_the_new_depth(),
+            expect="HORONOM_DEPTH",
+        )
+
+    def test_restarting_a_daemon_to_apply_a_switch_is_caught(self) -> None:
+        self.assert_guard_catches(
+            *self.GUARD,
+            reloading_the_daemon_after_a_switch(),
+            expect="a depth switch started a process",
+        )
+
+
+class PreferenceMigrationTest(MutationCase):
+    def test_an_unrelated_operation_resetting_an_explicit_preference_is_caught(self) -> None:
+        self.assert_guard_catches(
+            lifecycle_tests.PresentationDepthTest,
+            "test_enabling_another_provider_preserves_the_depth",
+            filling_in_the_presentation_defaults_on_every_enable(),
+            expect="is not <InformationDepth.DETAIL",
+        )
+
+    def test_a_product_leaving_and_resetting_the_preference_is_caught(self) -> None:
+        self.assert_guard_catches(
+            depth_gate.ProviderChurnTest,
+            "test_disabling_a_product_at_detail_takes_nothing_else_with_it",
+            normalising_the_presentation_block_when_a_product_leaves(),
+            expect="is not <InformationDepth.DETAIL",
         )
 
 

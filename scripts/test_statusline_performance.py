@@ -60,6 +60,25 @@ property of how the command is installed, not of this module's behaviour, and
 including it would only add variance to every measurement. It is recorded above
 instead, where it belongs.
 
+Information depth costs nothing measurable, which is the answer HORO-1627 wants
+and is worth recording as numbers rather than as a bound that happened to hold.
+Same fixtures as `InformationDepthCostTest`, three 200 ms products behind a 300 ms
+upstream, median of three in-process renders:
+
+    cold, clear                                  379 ms
+    cold, detail                                 366 ms   (-13 ms)
+    warm, clear                                  359 ms
+    warm, detail                                 360 ms   (+1 ms)
+
+Both deltas are inside the noise of a shared machine, which is what "detail reads
+more of a snapshot the render already had" looks like from outside. The same
+fixtures against a host deliberately made to re-collect at detail instead --
+`polls_twice_at_detail` -- render in 743 ms against 360 ms, failing the bound by
+383 ms, and the execution count goes from 3 to 6. The count is the assertion that
+matters: a double poll is roughly free on a clock here, because the probes run
+underneath the user's own command, so the whole finding would fit inside the slack
+a timing test has to allow.
+
 A timing test that passes proves nothing on its own, so the two that carry a
 guarantee were run against the matching defects in `test_statusline_mutations`.
 Probing the products one after another instead of together
@@ -270,6 +289,151 @@ class CachingTest(PerformanceCase):
             SLACK_MS,
             f"a warm render cost {warm:.0f}ms against {statistics.median(cold):.0f}ms cold",
         )
+
+
+class InformationDepthCostTest(PerformanceCase):
+    """What asking for supporting context is allowed to cost (HORO-1627).
+
+    The rule the ticket states is that detail must not become a privileged mode
+    with a budget of its own: no additional cloud call, no LLM call, no scan, no
+    daemon start, no extra provider poll merely because more text is being shown.
+    Those are all the same claim from the cost side -- detail reads more of a
+    snapshot the render already had -- and this class checks it two ways, because
+    either one alone can be satisfied while the property is false.
+
+    Counting is the load-bearing half. A depth that polled each product twice and
+    threw one answer away would show up as roughly nothing on a clock, since the
+    user's own command dominates and the probes run underneath it; the whole
+    finding would be inside the slack every assertion here has to allow. So the
+    fixtures count their own executions and the count is asserted exactly.
+
+    Timing is the half that catches what counting cannot: a depth that spent its
+    extra time somewhere other than a subprocess.
+    """
+
+    PRODUCTS = ("fornax", "circinus", "libra-governor")
+
+    def counting(self, provider: str, *, ttl: int = 0) -> str:
+        """A slow product that records having been asked.
+
+        The counter is one byte per execution in a shared file, appended by the
+        shell. Read as a delta rather than an absolute: writing an executable warms
+        it by running it once, and a count that assumed otherwise would be
+        measuring the fixture's own setup.
+        """
+        payload = wire(provider=provider, cache_ttl_seconds=ttl)
+        return self.script(
+            f"{provider}-counted",
+            f"cat >/dev/null\nsleep {PROBE_MS / 1000}\n"
+            f"printf 'x' >> '{self.home / 'asked'}'\n"
+            + "cat <<'HORONOM_EOF'\n"
+            + json.dumps(payload)
+            + "\nHORONOM_EOF\n",
+        )
+
+    def asked(self) -> int:
+        counter = self.home / "asked"
+        return len(counter.read_bytes()) if counter.exists() else 0
+
+    def install(self, depth: str, *, ttl: int = 0, extra: list | None = None) -> None:
+        self.write_registry(
+            upstream={"command": f"'{self.their_line}'"},
+            providers=[
+                provider_document(product, [self.counting(product, ttl=ttl)], timeout_ms=1500)
+                for product in self.PRODUCTS
+            ]
+            + (extra or []),
+            deadline_ms=2500,
+            presentation={"depth": depth},
+        )
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.their_line = self.upstream()
+
+    def test_showing_more_of_a_snapshot_does_not_ask_for_a_new_one(self) -> None:
+        """One render, one question per product, at either depth.
+
+        Asserted as equality rather than as a bound, because this is the one
+        property here that can be stated exactly. Everything the ticket forbids
+        detail from doing -- a cloud call, an LLM call, a scan, a daemon start, an
+        extra poll -- has to leave the process to happen, and these products are
+        processes that keep their own tally.
+        """
+        counted = {}
+        for depth in ("clear", "detail"):
+            self.install(depth)
+            before = self.asked()
+            code, line = self.run_main()
+            self.assertEqual(code, 0)
+            self.assertTrue(line.startswith("THEIRS"), line)
+            counted[depth] = self.asked() - before
+        self.assertEqual(counted["clear"], len(self.PRODUCTS))
+        self.assertEqual(counted["detail"], counted["clear"])
+
+    def test_detail_is_not_a_second_latency_class(self) -> None:
+        """The delta the founder feels, cold.
+
+        Measured with the cache disabled (`ttl=0`) so both depths pay for the
+        probes, which is the comparison that could plausibly differ. A depth that
+        added a round of provider work would have to add at least one `PROBE_MS`
+        here, and the slack is smaller than that.
+        """
+        self.install("clear")
+        clear = self.render_ms()
+        self.install("detail")
+        detail = self.render_ms()
+        self.assertLess(
+            detail - clear,
+            SLACK_MS,
+            f"clear rendered in {clear:.0f}ms and detail in {detail:.0f}ms",
+        )
+
+    def test_the_delta_stays_small_once_the_cache_is_warm(self) -> None:
+        """And warm, where a per-reading cache validation would show up instead.
+
+        Cold and warm are different code paths -- one probes, one decodes a stored
+        document and checks its age -- and detail reads more of whatever comes back
+        either way. A depth that revalidated the cache per reading rather than per
+        product would be invisible in the cold measurement above.
+        """
+        self.install("clear", ttl=60)
+        clear = self.render_ms()
+        self.assertTrue(any(compositor.cache_dir(self.home).iterdir()), "nothing was cached")
+        self.install("detail", ttl=60)
+        detail = self.render_ms()
+        self.assertLess(
+            detail - clear,
+            SLACK_MS,
+            f"warm clear rendered in {clear:.0f}ms and warm detail in {detail:.0f}ms",
+        )
+
+    def test_a_wedged_product_is_still_contained_when_it_has_its_own_row(self) -> None:
+        """Containment survives the layout that gives every product a line.
+
+        `WedgedProductTest` proves a product that never answers costs the render
+        nothing. At detail that product is also given a physical row of its own, so
+        the render has to lay out something for a provider that produced no
+        document -- and a layout that waited for the row's contents would put the
+        wait back after the timeout had already removed it.
+        """
+        wedged = provider_document("slow", [self.hanging_script("wedged", "sleep 30\n")], timeout_ms=250)
+        self.install("detail")
+        healthy_only = self.render_ms()
+        self.install("detail", extra=[wedged])
+        with_wedged = self.render_ms()
+        self.assertLess(
+            with_wedged - healthy_only,
+            SLACK_MS,
+            f"a wedged product moved a detail render from {healthy_only:.0f}ms to "
+            f"{with_wedged:.0f}ms",
+        )
+        line = self.run_main()[1]
+        # Still reported, and on a row of its own rather than dropped for having
+        # nothing to say. A product that disappeared from the line when it broke
+        # would be cheap and dishonest.
+        self.assertIn("slow", line.lower())
+        self.assertEqual(len([row for row in line.splitlines() if "slow" in row.lower()]), 1, line)
 
 
 class DeclaredBudgetTest(unittest.TestCase):
