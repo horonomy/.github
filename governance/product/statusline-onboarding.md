@@ -30,7 +30,7 @@ file, does not accept `--settings` at all rather than accepting and ignoring it.
 | `enable --provider … --scope … --command …` | settings + registry | put this product on the line |
 | `disable --provider …` | registry (+ settings if last) | take this one off |
 | `uninstall` | settings + registry | take all of it off and give the slot back |
-| `presentation --density … --icon-style …` | registry | render it in a way my terminal can show |
+| `presentation --density … --icon-style … --depth …` | registry | render it in a way my terminal can show, at the depth I want |
 
 `--dry-run` prints the same `Plan` object `apply` acts on. A preview generated
 by separate code is a preview of nothing, so there is only one. `--json` is
@@ -258,19 +258,59 @@ contract.
 ```
 presentation --density compact|balanced
 presentation --icon-style emoji|text
+presentation --depth clear|detail
+presentation                                  # prints what is currently set
 ```
 
-Two orthogonal axes, each settable without stating the other, because a reader
+Three orthogonal axes, each settable without stating the others, because a reader
 whose font renders emoji as boxes has said nothing about how wide their terminal
-is. Text style is a full non-emoji rendering, not a degraded one, for terminals
-and fonts where glyph handling cannot be trusted — including the key itself,
-which would otherwise arrive drawn in exactly the characters the reader turned
-off.
+is or about how much they want it to say. Text style is a full non-emoji
+rendering, not a degraded one, for terminals and fonts where glyph handling
+cannot be trusted — including the key itself, which would otherwise arrive drawn
+in exactly the characters the reader turned off.
 
 The preference lives in our registry, not in the user's settings file, and is
 never rewritten by any other operation. It does not survive `uninstall`,
 deliberately: it is our state, and leaving a preferences file behind after an
 uninstall is litter rather than a courtesy.
+
+### Information depth — `clear` and `detail`
+
+Depth is a third axis rather than more modes because it answers a different
+question. Density and icon style are about how much room a reading may spend;
+depth is about how much there is to say. Folding them together would have
+produced eight members whose only job was to re-express three independent
+choices, and every site consulting density would silently also have asserted a
+depth.
+
+| depth | what the line carries |
+|---|---|
+| `clear` (default) | one high-signal summary per product: state, label, product identity, and — where it changes the interpretation — one secondary vital |
+| `detail` | the same primary state, plus the bounded supporting context the provider reported: the reason clause, freshness, counts and confidence |
+
+Two properties are load-bearing, and both are tested directly:
+
+- **One state engine.** `clear` is not `detail` minus some fields, and it is not a
+  second derivation either. Both are projections of the *same* provider snapshot,
+  so the primary state a reader sees is identical at either depth and only the
+  supporting context changes. A `clear` line can never be quieter about a problem
+  than a `detail` one.
+- **`detail` is not a privileged data-egress mode.** It renders more of the same
+  privacy-reviewed snapshot. It collects nothing extra: no additional provider
+  run, no cloud call, no scan, no daemon start. If a field would be unsafe to show
+  at `clear`, "this is the diagnostic depth" is not a reason to show it.
+
+A switch takes effect on the next render. It writes one file — our registry —
+restarts no daemon, reinstalls no provider, rebuilds nothing, and never opens the
+user's settings file, because which fields of a line are visible is not a fact
+about how the host launches a command.
+
+`doctor` and `explain` both name the depth in force and where the preference came
+from, which is the fastest answer to *why does my line not say why*: at `clear`
+the missing field is a setting, not a failure. `explain` goes further and quotes
+each fragment at the depth the line is actually using, while still decoding every
+reading the provider reported — the ones the current depth leaves out are marked
+as not being on the line rather than listed as though they were.
 
 ## Privacy of these surfaces
 
@@ -317,16 +357,20 @@ with the project-scope replacement trap stated in place.
 
 ## Test contract
 
-`scripts/test_statusline_lifecycle.py` carries 32 cases for `explain` in five
+`scripts/test_statusline_lifecycle.py` carries 41 cases for `explain` in six
 groups — what the decode says about a reading, the hand-over to the product,
-read-only-and-quiet behaviour, presentation, and the CLI — and 5 for migration,
-one per real starting point plus the preference.
+read-only-and-quiet behaviour, presentation, information depth, and the CLI —
+and 5 for migration, one per real starting point plus the preference.
 
 Two of them are the anti-vacuity anchors:
 
 - The decode's quoted fragment is required to appear **verbatim in the line the
   real compositor produces**, so every other assertion about a fragment is an
-  assertion about the user's line rather than about a second renderer.
+  assertion about the user's line rather than about a second renderer. That
+  anchor holds at *either* information depth, which is what stops `explain` from
+  quoting a `detail` fragment to a reader whose line is at `clear`; the readings
+  `clear` leaves out are still decoded in full, and marked as not being on the
+  line.
 - The "recorded explain command never runs on the render path" case then
   asserts that the same registration *does* answer `explain`, so the negative
   is about the render path rather than about a command that never worked.
@@ -354,6 +398,17 @@ the second — stripping product calls out of the wrapper — survived because t
 recorded upstream is absent on a first `enable`, and was answered by retargeting
 the mutation at `plan.registry_after`, which the first `enable` does write.
 
+The information-depth wiring was put through the same treatment — twelve
+mutations, each detected, each by the case that claims the thing it broke: a line
+that renders at `detail` whatever the registry says, an unreadable depth widening
+instead of narrowing, a switch that reads the host settings file, a switch that
+re-runs the registered providers, a preference block rebuilt rather than copied,
+an `enable` that normalises a stored depth away, a no-op switch reported as a
+change, `explain` quoting a `detail` fragment to a `clear` reader, `explain`
+narrowing its decode to what the line happens to show, a left-out reading decoded
+without saying it is left out, `doctor` not naming the depth in force, and an
+unreadable saved depth reported as the reader's own.
+
 One caveat recorded honestly: a single full-suite run during this work reported
 one failure whose name was lost to a truncated pipe. Fifteen subsequent runs,
 six of them under artificial CPU load, were clean. The most likely candidate by
@@ -362,8 +417,12 @@ reproduced and is not claimed to be fixed.
 
 ## Status
 
-Implemented and tested against fixtures. What remains is HORO-1572: the 20-case
-safety matrix, the mutation fixtures for the compositor and host, cold/warm
-latency measurement, and the Founder DogFood readability gate against a real
-workstation — the first test of whether any of this prose is actually legible to
-the person reading the line.
+Implemented and tested against fixtures, including the two information depths.
+HORO-1572's safety matrix, compositor and host mutation fixtures, and latency
+measurement are in place. What remains is HORO-1628 — giving each product its own
+physical line in `detail`, so a multi-product diagnostic view is readable — and
+HORO-1627, the gate over both depths: the per-product state matrix, the switching
+cases, the mutations for this capability added without weakening the existing
+ones, and cold/warm latency at each depth. Behind those sits the Founder DogFood
+readability judgement against a real workstation, which is the first test of
+whether any of this prose is actually legible to the person reading the line.
