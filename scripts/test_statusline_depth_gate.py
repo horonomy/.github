@@ -195,7 +195,10 @@ FORNAX = (
         ),
         primary="latest_verdict",
         clear_says=("Unverified",),
-        clear_omits=("3747", "Verified ", "insufficient"),
+        # "Verified" rather than "verified": the reading is `Unverified`, and the
+        # fabrication this row guards against is the host supplying a reason the
+        # provider did not record — "insufficient evidence" being the plausible one.
+        clear_omits=("3747", "Verified", "insufficient"),
         detail_says=("Unverified", "3747 observations", "not recorded"),
     ),
     Case(
@@ -242,9 +245,12 @@ FORNAX = (
         snapshot=fornax(
             segment(
                 key="availability",
+                # No reason code: the label is the reason, and a fixture that
+                # renders "Not installed (not installed)" would be asserting the
+                # renderer's tolerance for redundancy rather than this product's
+                # unavailable state.
                 state=contract.SegmentState.UNKNOWN,
                 label="Not installed",
-                reason_code="not_installed",
             ),
             availability=contract.Availability.UNAVAILABLE,
         ),
@@ -386,7 +392,6 @@ CIRCINUS = (
         # If the would-have-blocked reaches the line at all, it reaches it welded
         # to the marker saying nothing was stopped.
         clear_says=("Shadow mode", "Would have blocked", render.HYPOTHETICAL_TEXT),
-        clear_omits=("Blocked (",),
         detail_says=("Shadow mode", "Would have blocked", render.HYPOTHETICAL_TEXT),
     ),
     Case(
@@ -566,7 +571,9 @@ LIBRA = (
                 order_hint=10,
                 clear_role=contract.ClearRole.POSTURE,
             ),
-            _estimate(contract.Confidence.LOW),
+            # A vital rather than a second posture: the plan's state is the
+            # posture, and the estimate qualifies how to read it.
+            _estimate(contract.Confidence.LOW, clear_role=contract.ClearRole.VITAL),
         ),
         primary="plan",
         clear_says=("Replan budget spent",),
@@ -616,6 +623,30 @@ LIBRA = (
 
 
 MATRIX = FORNAX + CIRCINUS + LIBRA
+
+
+def primary_of(snapshot: contract.ProviderStatus) -> contract.Segment | None:
+    """The one reading a product's summary is built around.
+
+    Read out of the host's own role ladder rather than recomputed, so this cannot
+    drift into a second opinion about what the primary state is — which is the
+    very thing the cross-depth invariant exists to rule out.
+
+    The exception outranks the posture, because the top rung of the ladder exists
+    precisely so that it is not competing with routine readings. Where a provider
+    is not answering at all, neither role survives the projection, and the single
+    reading it is allowed to show *is* the primary.
+    """
+    segments = contract.order_segments(snapshot)
+    readings = render.clear_readings(snapshot)
+    if not segments or not readings:
+        return None
+    roles = dict(zip((part.key for part in segments), render.clear_roles(snapshot)))
+    for role in (contract.ClearRole.EXCEPTION, contract.ClearRole.POSTURE):
+        for part in readings:
+            if roles[part.key] is role:
+                return part
+    return readings[0]
 
 
 class MatrixIntegrityTest(unittest.TestCase):
@@ -701,3 +732,308 @@ class MatrixIntegrityTest(unittest.TestCase):
             if part.key in ("mode", "latest_decision")
         }
         self.assertEqual(marks, {True, False})
+
+
+class DepthMatrixChecks:
+    """What every row of every product's matrix owes a reader at each depth.
+
+    A mixin rather than a base test case: a `unittest.TestCase` with an empty
+    matrix would be collected and would pass, reporting a coverage it does not
+    have. Subclasses pair this with `TestCase` and supply `CASES`;
+    `MatrixCoverageTest` below asserts the three of them account for every row.
+    """
+
+    CASES: tuple[Case, ...] = ()
+
+    def read(self, case: Case, depth, mode=render.PresentationMode.BALANCED) -> str:
+        """One product rendered as the reader sees it, at one depth.
+
+        `render_provider` rather than `compose`: the claims in this class are about
+        one product's reading, and going through the whole line would let a
+        width-pressure decision about a *different* product change what is
+        asserted here.
+        """
+        return render.render_provider(case.snapshot, mode, depth)
+
+    def shown(self, case: Case, depth) -> tuple:
+        """The segments this depth puts on the line for this provider."""
+        if depth.shows_supporting_detail:
+            return contract.order_segments(case.snapshot)
+        return render.clear_readings(case.snapshot)
+
+    def test_the_summary_is_built_around_the_reading_its_row_names(self) -> None:
+        # The anchor for everything else: each row declares which of the
+        # provider's segments is its primary state, and the host's role ladder has
+        # to agree. A row whose expectations all hold while the summary is built
+        # around a different reading is a row that proves nothing.
+        for case in self.CASES:
+            with self.subTest(case=case.name):
+                primary = primary_of(case.snapshot)
+                self.assertEqual("" if primary is None else primary.key, case.primary)
+
+    def test_the_summary_carries_every_reading_its_row_requires(self) -> None:
+        for case in self.CASES:
+            line = self.read(case, CLEAR)
+            for fragment in case.clear_says:
+                with self.subTest(case=case.name, says=fragment):
+                    self.assertIn(fragment, line, line)
+
+    def test_the_summary_leaves_out_every_reading_its_row_forbids(self) -> None:
+        for case in self.CASES:
+            line = self.read(case, CLEAR)
+            for fragment in case.clear_omits:
+                with self.subTest(case=case.name, omits=fragment):
+                    self.assertNotIn(fragment, line, line)
+
+    def test_detail_carries_every_reading_its_row_requires(self) -> None:
+        for case in self.CASES:
+            line = self.read(case, DETAIL)
+            for fragment in case.detail_says:
+                with self.subTest(case=case.name, says=fragment):
+                    self.assertIn(fragment, line, line)
+
+    def test_the_product_is_named_at_both_depths(self) -> None:
+        # Attribution is not a detail-only luxury. A summary that says `Verified`
+        # without saying which product verified anything is a glyph with a mood.
+        for case in self.CASES:
+            name = render.provider_display_name(case.snapshot.provider)
+            for depth in DEPTHS:
+                for mode in MODES:
+                    with self.subTest(case=case.name, depth=depth.value, mode=mode.value):
+                        self.assertIn(name, self.read(case, depth, mode))
+
+    def test_the_scope_is_marked_at_both_depths(self) -> None:
+        for case in self.CASES:
+            marker = {
+                mode: render.scope_marker(case.snapshot.scope.value, mode) for mode in MODES
+            }
+            for depth in DEPTHS:
+                for mode in MODES:
+                    with self.subTest(case=case.name, depth=depth.value, mode=mode.value):
+                        self.assertIn(marker[mode], self.read(case, depth, mode))
+
+    def test_the_summary_is_never_wider_than_the_detail_it_summarises(self) -> None:
+        # The one arithmetic relation between the depths. `clear` selects segments
+        # and drops fields; it has no path that adds anything, so any row where it
+        # came out wider means something was rendered differently rather than less.
+        for case in self.CASES:
+            for mode in MODES:
+                with self.subTest(case=case.name, mode=mode.value):
+                    self.assertLessEqual(
+                        render.display_width(self.read(case, CLEAR, mode)),
+                        render.display_width(self.read(case, DETAIL, mode)),
+                    )
+
+    def test_a_hypothetical_reading_is_welded_to_its_marker_at_both_depths(self) -> None:
+        """No reading that did not happen may appear without saying so.
+
+        Asserted structurally rather than by looking for the marker anywhere in
+        the line: with two readings present, a marker attached to the wrong one is
+        worse than a missing marker, because it labels the executed outcome as
+        hypothetical and the hypothetical one as executed.
+        """
+        for case in self.CASES:
+            for depth in DEPTHS:
+                line = self.read(case, depth)
+                for part in self.shown(case, depth):
+                    welded = f"{part.label} [{render.HYPOTHETICAL_TEXT}]"
+                    with self.subTest(case=case.name, depth=depth.value, key=part.key):
+                        if part.hypothetical:
+                            self.assertIn(welded, line, line)
+                        else:
+                            self.assertNotIn(welded, line, line)
+
+    def test_no_reading_reaches_the_summary_that_detail_would_not_show(self) -> None:
+        # The containment half of the cross-depth invariant, per product: `clear`
+        # chooses among the provider's segments, so every segment it chooses is one
+        # `detail` also has. A `clear` that synthesised its own reading would be a
+        # second state engine, and this is where that shows up first.
+        for case in self.CASES:
+            with self.subTest(case=case.name):
+                everything = contract.order_segments(case.snapshot)
+                for part in render.clear_readings(case.snapshot):
+                    self.assertIn(part, everything)
+
+
+class FornaxDepthTest(DepthMatrixChecks, unittest.TestCase):
+    """Verification: the verdict is the product, so the verdict is the summary."""
+
+    CASES = FORNAX
+
+    def test_only_the_verified_verdict_is_ever_summarised_as_verified(self) -> None:
+        for case in self.CASES:
+            verdict = case.snapshot.segments[0]
+            verified = verdict.label == "Verified"
+            for depth in DEPTHS:
+                with self.subTest(case=case.name, depth=depth.value):
+                    said = "Verified" in self.read(case, depth)
+                    self.assertEqual(said, verified, self.read(case, depth))
+
+    def test_an_unrecorded_reason_is_reported_as_unrecorded_and_not_invented(self) -> None:
+        """The specific fabrication this product invites.
+
+        A verification product that cannot say *why* a claim is unverified has one
+        honest answer and several plausible-sounding dishonest ones. `detail` must
+        give the honest one — the provider's own `reason_not_recorded` — and must
+        not upgrade it into a finding about the evidence.
+        """
+        case = next(row for row in self.CASES if row.name == "unverified_no_reason")
+        detail = self.read(case, DETAIL)
+        self.assertIn("not recorded", detail)
+        for invented in ("insufficient evidence", "no evidence", "evidence missing"):
+            with self.subTest(invented=invented):
+                self.assertNotIn(invented, detail.lower())
+
+    def test_activity_never_becomes_a_verdict_at_either_depth(self) -> None:
+        # Three thousand observations and an `attention` verdict is an unverified
+        # claim that has been looked at a lot, and the tally must not read as the
+        # verdict at either depth.
+        case = next(row for row in self.CASES if row.name == "unverified_no_reason")
+        for depth in DEPTHS:
+            line = self.read(case, depth)
+            with self.subTest(depth=depth.value):
+                self.assertIn("Unverified", line)
+                self.assertNotIn("Verified (", line)
+
+
+class CircinusDepthTest(DepthMatrixChecks, unittest.TestCase):
+    """Enforcement: two confusions have to be structurally impossible."""
+
+    CASES = CIRCINUS
+
+    def test_an_unreachable_daemon_overrides_every_cached_posture(self) -> None:
+        """The rule that makes a wedged daemon safe to look at.
+
+        The cached shadow posture in this row is `warn`, which outranks the
+        `unknown` of the daemon that is not answering — so a summary built on
+        severity alone picks the cached one and tells the reader their tool calls
+        are being evaluated by a process that is not running.
+        """
+        case = next(row for row in self.CASES if row.name == "unreachable_with_cached_posture")
+        readings = render.clear_readings(case.snapshot)
+        self.assertEqual([part.key for part in readings], ["availability"])
+        for mode in MODES:
+            with self.subTest(mode=mode.value):
+                summary = self.read(case, CLEAR, mode)
+                self.assertIn("Not responding", summary)
+                self.assertNotIn("Shadow mode", summary)
+
+    def test_a_shadow_outcome_and_an_executed_one_never_read_the_same(self) -> None:
+        shadow = next(row for row in self.CASES if row.name == "latest_would_block_in_shadow")
+        executed = next(
+            row for row in self.CASES if row.name == "executed_block_while_enforcing"
+        )
+        for depth in DEPTHS:
+            with self.subTest(depth=depth.value):
+                self.assertIn(render.HYPOTHETICAL_TEXT, self.read(shadow, depth))
+                self.assertNotIn(render.HYPOTHETICAL_TEXT, self.read(executed, depth))
+
+    def test_a_decision_tally_never_reaches_the_summary(self) -> None:
+        # `1520 of 3747 decisions` is the counter defect in its purest form: it is
+        # not actionable, and it costs the product its entire summary line.
+        for case in self.CASES:
+            for part in case.snapshot.segments:
+                if part.count is None:
+                    continue
+                with self.subTest(case=case.name, key=part.key):
+                    self.assertNotIn(str(part.count), self.read(case, CLEAR))
+                    self.assertIn(str(part.count), self.read(case, DETAIL))
+
+    def test_a_product_that_could_not_be_read_is_not_a_product_that_is_calm(self) -> None:
+        malformed = next(row for row in self.CASES if row.name == "malformed_answer")
+        for depth in DEPTHS:
+            with self.subTest(depth=depth.value):
+                line = self.read(malformed, depth, render.PresentationMode.PLAIN)
+                self.assertIn("Unreadable answer", line)
+                # The host is speaking for a provider it could not parse, so the
+                # state it speaks with must be the one that makes no health claim.
+                self.assertIn(render.STATE_TEXT[render.UNKNOWN_STATE], line)
+
+
+class LibraDepthTest(DepthMatrixChecks, unittest.TestCase):
+    """Scheduling and budget: both defects here are missing nouns."""
+
+    CASES = LIBRA
+
+    def test_no_confidence_value_reaches_the_summary(self) -> None:
+        """A bare `high` beside a state marker reads as severity, not certainty.
+
+        Checked against the confidence *values* rather than the rendered phrase,
+        because the danger is the word arriving without its subject — which is
+        exactly what dropping the subject and keeping the value would do.
+        """
+        for case in self.CASES:
+            for part in case.snapshot.segments:
+                if part.confidence is None:
+                    continue
+                with self.subTest(case=case.name, key=part.key):
+                    self.assertNotIn(part.confidence.value, self.read(case, CLEAR))
+
+    def test_a_confidence_that_is_shown_always_names_its_subject(self) -> None:
+        for case in self.CASES:
+            for part in case.snapshot.segments:
+                if part.confidence is None:
+                    continue
+                detail = self.read(case, DETAIL)
+                with self.subTest(case=case.name, key=part.key):
+                    self.assertIn(part.confidence_of.label, detail)
+                    self.assertIn(
+                        f"{part.confidence_of.label} {part.confidence.value}", detail
+                    )
+
+    def test_every_percentage_keeps_the_axis_it_arrived_with(self) -> None:
+        # The provider is required to name the axis inside the label; the renderer
+        # must not be able to separate them, at either depth. `38%` alone could
+        # mean spent or left, and those are opposite instructions to the reader.
+        for case in self.CASES:
+            for part in case.snapshot.segments:
+                if "%" not in part.label:
+                    continue
+                for depth in DEPTHS:
+                    with self.subTest(case=case.name, depth=depth.value):
+                        self.assertIn(part.label, self.read(case, depth))
+
+    def test_a_spent_budget_is_a_posture_and_not_a_blockage(self) -> None:
+        """The state ladder's most consequential distinction, in Libra's words.
+
+        `Replan budget spent` is `warn`: something is wrong and work continues.
+        Promoting it to the rung above would tell the reader they are being waited
+        on when nothing is waiting on them — and the product's own explain surface
+        would then disagree with its statusline.
+        """
+        case = next(row for row in self.CASES if row.name == "replanned")
+        self.assertNotIn(contract.ClearRole.EXCEPTION, render.clear_roles(case.snapshot))
+        self.assertEqual(primary_of(case.snapshot).key, "plan")
+        # The estimate riding along is legitimate — it changes how a spent budget
+        # reads. What is not legitimate is the posture being displaced by it.
+        self.assertIn("Replan budget spent", self.read(case, CLEAR))
+
+    def test_someone_being_waited_on_takes_the_line_from_an_estimate(self) -> None:
+        case = next(row for row in self.CASES if row.name == "awaiting_approval")
+        readings = render.clear_readings(case.snapshot)
+        self.assertEqual([part.key for part in readings], ["approval"])
+        detail = self.read(case, DETAIL)
+        # The estimate is not wrong and is not hidden — it is just not the thing
+        # the reader needs in one phrase.
+        self.assertIn("Remaining work", detail)
+
+
+class MatrixCoverageTest(unittest.TestCase):
+    """Every row of the matrix is actually read by one of the product classes.
+
+    Without this, adding a row to `MATRIX` and forgetting to add it to a product
+    tuple would grow the matrix's apparent coverage while asserting nothing new.
+    """
+
+    CLASSES = (FornaxDepthTest, CircinusDepthTest, LibraDepthTest)
+
+    def test_the_product_classes_partition_the_matrix(self) -> None:
+        read = [case for klass in self.CLASSES for case in klass.CASES]
+        self.assertEqual(len(read), len(MATRIX))
+        self.assertEqual({id(case) for case in read}, {id(case) for case in MATRIX})
+
+    def test_each_product_class_reads_exactly_one_product(self) -> None:
+        for klass in self.CLASSES:
+            with self.subTest(klass=klass.__name__):
+                providers = {case.snapshot.provider for case in klass.CASES}
+                self.assertEqual(len(providers), 1, providers)
