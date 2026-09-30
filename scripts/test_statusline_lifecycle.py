@@ -2074,6 +2074,125 @@ class ExplainHandoverTest(ExplainCase):
         self.assertTrue(report["providers"][0]["readings"])
 
 
+class ExplainReadOnlyTest(ExplainCase):
+    """The command a reader runs when the line confuses them, changing nothing."""
+
+    def test_it_mutates_nothing_on_any_path(self) -> None:
+        for stage in ("nothing installed", "one provider", "drifted", "unusable registry"):
+            with self.subTest(stage=stage):
+                if stage == "one provider":
+                    self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+                if stage == "drifted":
+                    data = self._read()
+                    data[lifecycle.STATUS_LINE_KEY]["command"] = "/somewhere/else.sh"
+                    self.write(data)
+                if stage == "unusable registry":
+                    lifecycle.read_registry(self.home).path.write_bytes(b"{ truncated")
+                before = self.settings.read_bytes()
+                registry = lifecycle.read_registry(self.home)
+                registry_before = registry.path.read_bytes() if registry.present else None
+
+                self.explain()
+
+                self.assertEqual(self.settings.read_bytes(), before)
+                after = lifecycle.read_registry(self.home)
+                self.assertEqual(after.path.read_bytes() if after.present else None, registry_before)
+
+    def test_running_it_before_anything_is_installed_creates_no_state(self) -> None:
+        report = self.explain()
+
+        # Same reason `doctor` may not: a surface you run to find out whether the
+        # product is installed must not install part of it in the process.
+        self.assertFalse(self.home.exists())
+        self.assertTrue(report["legend"])
+        notes = " ".join(report["notes"])
+        self.assertIn("not Horonom-owned", notes)
+        self.assertIn("no providers are registered", notes)
+
+    def test_the_legend_alone_asks_no_provider_anything(self) -> None:
+        # `--legend` is for a reader who wants the vocabulary, not a reading. It
+        # should cost nothing, and a provider is a subprocess.
+        marker = self.root / "probed"
+        script = self.root / "provider.sh"
+        script.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(marker))}\nexit 1\n")
+        script.chmod(0o755)
+        self.enable("fornax", argv=(str(script),), timeout_ms=2000)
+
+        report = self.explain(legend_only=True)
+
+        self.assertFalse(marker.exists())
+        self.assertTrue(report["legend"])
+        self.assertEqual(report["providers"], [])
+
+    def test_an_unusable_registry_still_yields_the_key(self) -> None:
+        # The key is built from the host's own rendering tables, so it is correct
+        # before anything is measured -- and a reader whose registry is broken is
+        # exactly a reader looking at a line they cannot read.
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+        lifecycle.read_registry(self.home).path.write_bytes(b"{ truncated")
+
+        report = self.explain()
+
+        self.assertTrue(report["legend"])
+        self.assertEqual(report["providers"], [])
+        self.assertIn("the key itself is still correct", " ".join(report["notes"]))
+
+    def test_an_unreadable_settings_file_does_not_stop_the_decode(self) -> None:
+        # What is on the line cannot be confirmed without the settings file, but
+        # what the providers say can still be decoded, and saying so is more use
+        # than refusing to answer at all.
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+
+        with self.deny_reads(self.settings):
+            report = self.explain()
+
+        self.assertIn("could not be read", " ".join(report["notes"]))
+        self.assertEqual([p["provider"] for p in report["providers"]], ["fornax"])
+        self.assertTrue(report["providers"][0]["readings"])
+
+    def test_it_says_when_nothing_of_ours_is_on_the_line(self) -> None:
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+        data = self._read()
+        data[lifecycle.STATUS_LINE_KEY]["command"] = "/Users/founder/.claude/i-changed-my-mind.sh"
+        self.write(data)
+
+        notes = " ".join(self.explain()["notes"])
+
+        self.assertIn("not Horonom-owned", notes)
+        self.assertIn("statusline doctor", notes)
+
+    def test_it_prints_no_value_out_of_the_settings_file(self) -> None:
+        # The file it reads holds an API-key-shaped env var, an internal URL and
+        # the user's home path. None of them is this command's business, and the
+        # reason it can promise that is that it reads the file to classify the
+        # slot and never to print from it.
+        data = self._read()
+        data["env"]["ANTHROPIC_AUTH_TOKEN"] = "sk-ant-notarealkey-0123456789"
+        data["env"]["FOUNDER_BIN"] = "/Users/founder/private/bin"
+        self.write(data)
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+
+        printed = self.printed()
+
+        for secret in (
+            "sk-ant-notarealkey-0123456789",
+            "ANTHROPIC_AUTH_TOKEN",
+            "api.example.invalid",
+            "/Users/founder/private/bin",
+            "managed-settings.json",
+        ):
+            with self.subTest(secret=secret):
+                self.assertNotIn(secret, printed)
+
+        # The user's own statusline path is not in the settings file any more --
+        # it moved into the registry when the slot was taken over -- so assert
+        # against the place it actually lives, or the line above would be proving
+        # the absence of something that was never there to leak.
+        upstream = lifecycle.read_registry(self.home).data["upstream"]["command"]
+        self.assertIn("/Users/founder", upstream)
+        self.assertNotIn(upstream, printed)
+
+
 class CommandLineTest(LifecycleCase):
     """The CLI exists so that nobody has to hand-edit JSON, so it is tested as the surface."""
 
