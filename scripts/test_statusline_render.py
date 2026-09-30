@@ -2279,6 +2279,19 @@ class TestDetailLayoutUnderPressure(DetailLayoutCase):
             "no budget in the sweep wrapped a product",
         )
 
+    def test_a_style_that_cannot_be_laid_out_is_narrowed_before_anything_drops(self):
+        # Between the width that wraps and the width that gives up there is a band
+        # where the rows only survive by spending the icons instead. Asserted as a
+        # property of the sweep rather than at a pinned width, so a reading gaining
+        # a word moves the band without falsifying the claim: somewhere, a glyph
+        # style produced a row-per-product block with no glyph in it.
+        narrowed = [
+            (mode.value, budget)
+            for mode, budget, rows in self.vertical()
+            if mode.uses_glyphs and all(row.isascii() for row in rows)
+        ]
+        self.assertTrue(narrowed, "no width in the sweep traded the icons to keep the rows")
+
     def test_the_fallback_to_the_shared_line_is_actually_reached(self):
         # And non-vacuity for the regime split itself: some budget is too narrow
         # for any vertical layout, and there the ladder takes over.

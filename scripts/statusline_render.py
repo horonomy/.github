@@ -1403,12 +1403,14 @@ def _detail_rows(
     mode: PresentationMode,
     width_budget: int | None,
 ) -> str | None:
-    """One provider per row, at the widest allowed style that fits.
+    """One provider per row, in the first allowed style that can be laid out.
 
-    The mode ladder is walked here as well as below because a narrower style is
-    the cheaper concession: dropping the icons costs a reader some scanning speed,
-    while wrapping costs them a row, and only when neither is enough does anything
-    get dropped. `None` means no style could lay these providers out in rows.
+    The requested style is tried first and wraps if it must, because a row is the
+    cheaper concession at this depth: the reader asked for the icons and asked for
+    the detail, and there are rows to spend. A narrower style is reached only when
+    the requested one cannot be laid out at all — a single reading wider than the
+    whole terminal — and `None`, meaning nothing gets dropped here, only when none
+    of them can.
     """
     for candidate in _mode_candidates(mode):
         block = _detail_block(ordered, candidate, width_budget)
