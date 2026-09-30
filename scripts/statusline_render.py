@@ -793,6 +793,44 @@ def _worst_index(segments: tuple, indices: list) -> int:
     )
 
 
+def _unavailability_index(segments: tuple) -> int:
+    """The one reading an unavailable provider is allowed to show.
+
+    Deliberately *not* the highest-severity one. That was this function's first
+    form and it was wrong in the exact way the rule exists to prevent: a wedged
+    Circinus reporting `unknown "Not responding"` beside a cached
+    `warn "Would have blocked"` renders the would-have-blocked, because `warn`
+    outranks `unknown` on severity. The daemon that would do the blocking is not
+    answering, and the line just implied it evaluated something.
+
+    So, in order:
+
+    1. The first segment in contract order that is not `hypothetical`. Contract
+       order rather than severity, because the provider's own ordering is what
+       this module defers to everywhere else, and because a provider whose config
+       is invalid should lead with *that* rather than with a vaguer "could not
+       determine". Excluding the hypothetical is the actual fix: a would-have is
+       the one reading that cannot be a current statement about a product that is
+       not running.
+    2. Failing that, the first segment whose state is `unknown` — the contract's
+       word for "the provider could not determine its own state", and so the
+       reading that is certainly about now.
+    3. Failing that, the first segment, so this always returns something.
+
+    Rule 1 makes `Segment.hypothetical` load-bearing here rather than decorative:
+    a provider that reports a shadow outcome without marking it has already
+    broken the contract, and there is no second signal the host could use to
+    recognise it.
+    """
+    for index, segment in enumerate(segments):
+        if not getattr(segment, "hypothetical", False):
+            return index
+    for index, segment in enumerate(segments):
+        if _enum_value(segment.state) == UNKNOWN_STATE:
+            return index
+    return 0
+
+
 def clear_roles(status: object) -> tuple:
     """The Clear-mode part each of this provider's segments plays, in contract order.
 
@@ -868,7 +906,7 @@ def clear_readings(status: object) -> tuple:
         return ()
     everything = list(range(len(segments)))
     if not _has_live_readings(status):
-        kept = {_worst_index(segments, everything)}
+        kept = {_unavailability_index(segments)}
     else:
         roles = clear_roles(status)
         exceptions = [
