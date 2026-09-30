@@ -54,3 +54,43 @@ descriptions and prior DogFood notes were used to decide *what to check*, never 
 the evidence itself — two of the three standing hypotheses turned out to be true
 for a different and deeper reason than the one recorded, which is why the
 distinction matters.
+
+## Products — `SUPPORTED`, already shipped
+
+Three providers exist and are merged. Each is listed with the criterion that was
+hardest for it, because that is the part a future change is most likely to break.
+
+### Fornax — `SUPPORTED`
+
+Provider shipped under HORO-1567 (`horonomy/fornax-core`, `crates/fornax-cli/src/statusline.rs`,
+merged as `f626b01`). Scope `host`, order hint 300.
+
+Hardest criterion was **6**. Fornax's verdict vocabulary already distinguishes
+`UNVERIFIED` from `UNAVAILABLE`, and the pre-existing rule that an `UNVERIFIED`
+claim does not become healthy because a daemon has events is the same rule
+criterion 6 states. The provider inherited it rather than re-deriving it.
+
+### Circinus — `SUPPORTED`
+
+Provider shipped under HORO-1568 (`horonomy/circinus`, `src/circinus/statusline/`,
+merged as `a7ec15b`). Scope `host`, order hint 400.
+
+Hardest criterion was **7**, in an unusual direction: Circinus's shadow-mode
+would-block is genuinely useful *and* is the single most dangerous thing in this
+audit to render badly, because a hypothetical block that reads as an actual
+enforcement block would make the operator believe work was stopped when it was
+not. The host carries that weight — `HYPOTHETICAL_TEXT` is welded to the label
+rather than left to the provider — which is why the segment is admissible.
+
+### Libra Governor — `SUPPORTED`
+
+Provider shipped under HORO-1569 (`horonomy/libra-governor`,
+`crates/cli/src/statusline_provider.rs`, merged as `2d59977`). Scope `host`,
+order hint 500.
+
+Hardest criterion was **3**. Libra's daemon holds one `current_task` machine-wide,
+so `host` is the only honest scope; a `session` scope would have implied per-session
+governance that does not exist. Criterion 5 also bit harder here than elsewhere: the
+estimator's free-text reason is exactly the kind of field that leaks, and it is
+excluded from both the document and the explain surface by a test whose fixture
+deliberately carries a path and a secret-shaped token.
