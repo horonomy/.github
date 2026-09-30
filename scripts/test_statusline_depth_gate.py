@@ -45,6 +45,7 @@ import unittest
 
 import statusline_contract as contract
 import statusline_render as render
+from test_statusline_render import detail_atoms
 
 CLEAR = render.InformationDepth.CLEAR
 DETAIL = render.InformationDepth.DETAIL
@@ -1037,3 +1038,145 @@ class MatrixCoverageTest(unittest.TestCase):
             with self.subTest(klass=klass.__name__):
                 providers = {case.snapshot.provider for case in klass.CASES}
                 self.assertEqual(len(providers), 1, providers)
+
+
+def row(cases: tuple[Case, ...], name: str) -> Case:
+    return next(case for case in cases if case.name == name)
+
+
+# Whole hosts, assembled from one row per product. The per-product classes above
+# read one product in isolation, which is the right unit for "does this state read
+# correctly"; it is the wrong unit for "do three products on one line still each
+# say what they said", and the switching and performance cases need a host rather
+# than a segment anyway.
+HOSTS = (
+    ("calm", ("verified", "healthy_enforce", "idle")),
+    ("shadow", ("observing", "healthy_shadow", "active_high_confidence")),
+    ("wedged", ("unverified_no_reason", "unreachable_with_cached_posture", "unavailable")),
+    (
+        "escalated",
+        ("contradicted", "executed_block_while_enforcing", "awaiting_approval"),
+    ),
+)
+
+
+def host(names: tuple[str, str, str]) -> tuple[contract.ProviderStatus, ...]:
+    fornax_name, circinus_name, libra_name = names
+    return (
+        row(FORNAX, fornax_name).snapshot,
+        row(CIRCINUS, circinus_name).snapshot,
+        row(LIBRA, libra_name).snapshot,
+    )
+
+
+class CrossDepthInvariantTest(unittest.TestCase):
+    """One snapshot, two depths, and the parts of the reading that may not differ.
+
+    This is the claim that makes clear and detail two views of one state engine
+    rather than two renderers that happen to agree on today's fixtures. Stated
+    three ways, because each catches a different way of breaking it: the primary
+    state is identical; the supporting material is a subset; and the projection is
+    idempotent, so a second application somewhere in the pipeline cannot quietly
+    summarise a summary.
+    """
+
+    def test_the_primary_state_reads_identically_at_both_depths(self) -> None:
+        """The state marker and the label, adjacent, in both renderings.
+
+        The marker comes from `render.state_marker` rather than from a table
+        written here: a copy of the mapping in this file would keep agreeing with
+        itself while the renderer moved underneath it, which is the failure mode
+        this campaign has already hit twice.
+        """
+        for case in MATRIX:
+            primary = primary_of(case.snapshot)
+            if primary is None:
+                continue
+            for mode in MODES:
+                marker = render.state_marker(primary.state.value, mode)
+                pair = f"{marker} {primary.label}"
+                for depth in DEPTHS:
+                    with self.subTest(case=case.name, mode=mode.value, depth=depth.value):
+                        text = render.render_provider(case.snapshot, mode, depth)
+                        self.assertIn(pair, text, text)
+
+    def test_the_summary_supporting_material_is_a_subset_of_detail(self) -> None:
+        # The privacy statement in surface form, over this module's own states:
+        # clear cannot carry a field detail does not, so switching to clear can
+        # never widen the reviewed surface. `detail_atoms` is the render suite's
+        # own reader, imported rather than re-implemented.
+        for case in MATRIX:
+            for part in case.snapshot.segments:
+                for mode in MODES:
+                    with self.subTest(case=case.name, key=part.key, mode=mode.value):
+                        self.assertLessEqual(
+                            detail_atoms(render.render_segment(part, mode, CLEAR)),
+                            detail_atoms(render.render_segment(part, mode, DETAIL)),
+                        )
+
+    def test_the_summary_stays_within_its_editorial_bound(self) -> None:
+        for case in MATRIX:
+            with self.subTest(case=case.name):
+                readings = render.clear_readings(case.snapshot)
+                self.assertLessEqual(len(readings), render.MAX_CLEAR_READINGS)
+                self.assertLessEqual(len(readings), len(case.snapshot.segments))
+
+    def test_summarising_a_summary_changes_nothing(self) -> None:
+        # `compose` projects to account for width and `render_provider` projects
+        # to produce output. If the projection were not idempotent, those two would
+        # disagree about what the line contains, and the disagreement would show up
+        # as a `[+N more]` counting readings clear was never going to show.
+        for name, names in HOSTS:
+            once = render.project_to_depth(host(names), CLEAR)
+            with self.subTest(host=name):
+                self.assertEqual(render.project_to_depth(once, CLEAR), once)
+
+    def test_every_product_on_the_summary_line_is_on_the_detail_line(self) -> None:
+        for name, names in HOSTS:
+            statuses = host(names)
+            for mode in MODES:
+                summary = render.compose(UPSTREAM, statuses, mode=mode, depth=CLEAR)
+                detail = render.compose(UPSTREAM, statuses, mode=mode, depth=DETAIL)
+                for status in statuses:
+                    display = render.provider_display_name(status.provider)
+                    with self.subTest(host=name, mode=mode.value, provider=display):
+                        self.assertIn(display, summary)
+                        self.assertIn(display, detail)
+
+    def test_no_reading_on_the_summary_line_is_missing_from_the_detail_line(self) -> None:
+        for name, names in HOSTS:
+            statuses = host(names)
+            for mode in MODES:
+                detail = render.compose(UPSTREAM, statuses, mode=mode, depth=DETAIL)
+                for status in statuses:
+                    for part in render.clear_readings(status):
+                        with self.subTest(host=name, mode=mode.value, key=part.key):
+                            self.assertIn(part.label, detail, detail)
+
+    def test_only_the_depth_changes_the_shape_of_the_line(self) -> None:
+        """The HORO-1628 layout, restated as a property of the depth axis.
+
+        Included here rather than left to the render suite because it is the
+        no-regression half of this ticket: a depth change is the only thing that
+        may turn one row into several, and it must do so for *every* rendering
+        style rather than only the default one.
+        """
+        for name, names in HOSTS:
+            statuses = host(names)
+            for mode in MODES:
+                with self.subTest(host=name, mode=mode.value):
+                    summary = render.compose(UPSTREAM, statuses, mode=mode, depth=CLEAR)
+                    detail = render.compose(UPSTREAM, statuses, mode=mode, depth=DETAIL)
+                    self.assertEqual(summary.count("\n"), 0, summary)
+                    self.assertEqual(detail.count("\n"), len(statuses), detail)
+                    self.assertTrue(summary.startswith(UPSTREAM))
+                    self.assertEqual(detail.split("\n")[0], UPSTREAM)
+
+    def test_the_reader_line_is_untouched_by_either_depth(self) -> None:
+        for name, names in HOSTS:
+            statuses = host(names)
+            for mode in MODES:
+                for depth in DEPTHS:
+                    with self.subTest(host=name, mode=mode.value, depth=depth.value):
+                        line = render.compose(UPSTREAM, statuses, mode=mode, depth=depth)
+                        self.assertTrue(line.startswith(UPSTREAM), line)
