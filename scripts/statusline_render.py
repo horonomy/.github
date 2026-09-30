@@ -329,8 +329,8 @@ STATE_SEVERITY = {
     "critical": 4,
 }
 
-# States that keep their word even in COMPACT, because an exception must become
-# *more* explicit under pressure, not less. `unknown` is in here deliberately:
+# States that keep their word even in a compact mode, because an exception must
+# become *more* explicit under pressure, not less. `unknown` is here deliberately:
 # a provider that could not read its own state is the case a reader is most
 # likely to misread as fine.
 EMPHATIC_STATES = frozenset({"unknown", "attention", "warn", "critical"})
@@ -345,7 +345,7 @@ def state_marker(state: str, mode: PresentationMode) -> str:
     label is rendered beside it and is the human-readable carrier of meaning —
     `<check> Verified` says everything `<check> OK Verified` says.
 
-    The exception is COMPACT, which shortens and may drop labels: there an
+    The exception is a compact mode, which shortens and may drop labels: there an
     emphatic state carries its own word, so an exception never depends on a
     reader decoding a glyph. An unrecognised state degrades to `unknown` rather
     than rendering blank, matching the provider contract's degradation rule —
@@ -459,8 +459,8 @@ CONFIDENCE_SUBJECT_TEXT = {
     "unspecified": "confidence",
 }
 
-# COMPACT still names the subject, just shorter. It never degrades to the bare
-# value, because "high" alone is the ambiguity this field was added to remove.
+# A compact mode still names the subject, just shorter. It never degrades to the
+# bare value, because "high" alone is the ambiguity this field was added to remove.
 CONFIDENCE_SUBJECT_TEXT_COMPACT = {
     "preflight_estimate": "preflight",
     # Not "verified": `verified low` reads as a verdict about the subject rather
@@ -593,9 +593,9 @@ def render_segment(segment: object, mode: PresentationMode) -> str:
         details.append(format_confidence(confidence, _enum_value(segment.confidence_of), mode))
 
     reason = format_reason(segment.reason_code, segment.reason_label)
-    # COMPACT spends its remaining columns on exceptions only: a reason for an
-    # `ok` segment is the least useful thing on the line, and a reason for a
-    # `critical` one is the most.
+    # A compact mode spends its remaining columns on exceptions only: a reason
+    # for an `ok` segment is the least useful thing on the line, and a reason for
+    # a `critical` one is the most.
     if reason and (not mode.is_compact or state in EMPHATIC_STATES):
         details.append(reason)
     if segment.age_seconds is not None:
