@@ -55,6 +55,27 @@ the evidence itself. Of the two standing DogFood hypotheses, one held exactly as
 recorded and one held for a different and deeper reason than the one recorded —
 which is why the distinction matters.
 
+## Product verdicts
+
+| Product | Verdict | Owner or blocker |
+|---|---|---|
+| Fornax | `SUPPORTED` | Shipped, HORO-1567 |
+| Circinus | `SUPPORTED` | Shipped, HORO-1568 |
+| Libra Governor | `SUPPORTED` | Shipped, HORO-1569 |
+| Glomeris | `SUPPORTED` | HORO-1577 |
+| Ophiuchus | `BLOCKED` | No persisted relay activity record — criterion 1 |
+| Eltanin | `BLOCKED` | Status surface returns liveness, not state, by protocol design — criterion 1 |
+| Eridanus | `BLOCKED` | No local read-only projection over the Edge buffer — criteria 1 and 4 |
+| Horologium | `NOT_APPLICABLE` | Server-side; state is review-time, not session-time |
+| AASM | `NOT_APPLICABLE` | Separate organization; not a Horonom product |
+
+No entry is `UNKNOWN`. That is an outcome, not a target — four verdicts exist so
+that an unexamined product cannot pass as a decided one, and had any product
+resisted examination it would be sitting in that row.
+
+Four of nine products contribute a segment. That ratio is the audit working
+correctly, not a gap to close.
+
 ## Products — `SUPPORTED`, already shipped
 
 Three providers exist and are merged. Each is listed with the criterion that was
