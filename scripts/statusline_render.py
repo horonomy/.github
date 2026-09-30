@@ -61,8 +61,28 @@ class PresentationMode(enum.Enum):
         return default
 
     @property
+    def is_compact(self) -> bool:
+        """Whether to spend fewer columns: shorter phrasings, exceptions only."""
+        return _MODE_AXES[self][0]
+
+    @property
     def uses_glyphs(self) -> bool:
-        return self is not PresentationMode.PLAIN
+        return _MODE_AXES[self][1]
+
+
+# `(is_compact, uses_glyphs)` per member. A table rather than identity
+# comparisons scattered through the module, because density and icon style are
+# two independent reader constraints -- a narrow terminal and an unreliable
+# emoji font are different problems with different answers. Written as
+# `mode is COMPACT`, a density decision silently also asserts "and glyphs are
+# fine", so every such site would quietly take the wrong branch for any mode
+# that combined the axes differently. Asking the mode which axis is being
+# consulted makes that impossible rather than merely unlikely.
+_MODE_AXES = {
+    PresentationMode.BALANCED: (False, True),
+    PresentationMode.COMPACT: (True, True),
+    PresentationMode.PLAIN: (False, False),
+}
 
 
 _ZWJ = "\u200d"  # ZERO WIDTH JOINER
@@ -307,7 +327,7 @@ def state_marker(state: str, mode: PresentationMode) -> str:
     if not mode.uses_glyphs:
         return STATE_TEXT[state]
     glyph = STATE_GLYPHS[state]
-    if mode is PresentationMode.COMPACT and state in EMPHATIC_STATES:
+    if mode.is_compact and state in EMPHATIC_STATES:
         return f"{glyph} {STATE_TEXT[state]}"
     return glyph
 
@@ -330,7 +350,7 @@ def format_age(age_seconds: int, mode: PresentationMode) -> str:
     else:
         value, unit = age_seconds // 86400, "d"
     token = f"{value}{unit}"
-    return token if mode is PresentationMode.COMPACT else f"{token} ago"
+    return token if mode.is_compact else f"{token} ago"
 
 
 # Descending, and each entry's divisor is the next one's unit, so the pair
@@ -393,7 +413,7 @@ def format_count(count: int, total: int | None, count_label: str, mode: Presenta
     """
     if total is None:
         quantity = str(count)
-    elif mode is PresentationMode.COMPACT:
+    elif mode.is_compact:
         quantity = f"{count}/{total}"
     else:
         quantity = f"{count} of {total}"
@@ -429,11 +449,7 @@ def format_confidence(confidence: str, confidence_of: str, mode: PresentationMod
     omitted: dropping the subject would leave the bare value this function
     exists to qualify.
     """
-    table = (
-        CONFIDENCE_SUBJECT_TEXT_COMPACT
-        if mode is PresentationMode.COMPACT
-        else CONFIDENCE_SUBJECT_TEXT
-    )
+    table = CONFIDENCE_SUBJECT_TEXT_COMPACT if mode.is_compact else CONFIDENCE_SUBJECT_TEXT
     subject = table.get(confidence_of) or table["unspecified"]
     return f"{subject} {confidence}"
 
@@ -543,7 +559,7 @@ def render_segment(segment: object, mode: PresentationMode) -> str:
     # COMPACT spends its remaining columns on exceptions only: a reason for an
     # `ok` segment is the least useful thing on the line, and a reason for a
     # `critical` one is the most.
-    if reason and (mode is not PresentationMode.COMPACT or state in EMPHATIC_STATES):
+    if reason and (not mode.is_compact or state in EMPHATIC_STATES):
         details.append(reason)
     if segment.age_seconds is not None:
         details.append(format_age(segment.age_seconds, mode))
