@@ -712,14 +712,13 @@ class DisableTest(LifecycleCase):
         self.assertEqual(self.settings.read_bytes(), settings_before)
 
 
-class PresentationTest(LifecycleCase):
-    """The reader's own rendering preference, which lives in our registry.
+class PresentationCase(LifecycleCase):
+    """Shared ground for the two axes of the reader's presentation preference.
 
-    Two properties carry the weight here. It must survive every other operation,
-    since a preference that is quietly reset by the next `enable` is not a
-    preference; and the value written must be one the compositor honours, which
-    the compositor's deliberate fall-back on an unrecognised mode would otherwise
-    hide behind a line that renders perfectly in the wrong style.
+    Both axes live in the same registry object and are written by the same
+    operation, so they are exercised against one fixture -- but in separate
+    classes, because a subclass would re-run the other axis's cases without
+    asserting anything new about its own.
     """
 
     def plan_presentation(self, **kwargs) -> lifecycle.Plan:
@@ -734,6 +733,21 @@ class PresentationTest(LifecycleCase):
     def effective(self) -> render.PresentationMode:
         """The mode the compositor will actually render in."""
         return compositor.load_registry(lifecycle.read_registry(self.home).path).mode
+
+    def effective_depth(self) -> render.InformationDepth:
+        """The depth the compositor will actually render at."""
+        return compositor.load_registry(lifecycle.read_registry(self.home).path).depth
+
+
+class PresentationTest(PresentationCase):
+    """The reader's own rendering preference, which lives in our registry.
+
+    Two properties carry the weight here. It must survive every other operation,
+    since a preference that is quietly reset by the next `enable` is not a
+    preference; and the value written must be one the compositor honours, which
+    the compositor's deliberate fall-back on an unrecognised mode would otherwise
+    hide behind a line that renders perfectly in the wrong style.
+    """
 
     def test_every_preference_this_can_write_is_one_the_compositor_honours(self) -> None:
         self.enable("fornax")
@@ -879,18 +893,14 @@ class PresentationTest(LifecycleCase):
         self.assertEqual(self._read(), self.original)
 
 
-class PresentationDepthTest(PresentationTest):
+class PresentationDepthTest(PresentationCase):
     """The information-depth half of the same preference.
 
-    Inherits the fixture above deliberately: depth is stored in the same object,
+    Shares the fixture above deliberately: depth is stored in the same object,
     written by the same operation and must survive the same events, so anything
-    that is true of the mode has to be shown true of this beside it rather than in
-    a fixture where only depth exists.
+    that is true of the mode is shown true of this beside it rather than in a
+    fixture where only depth exists.
     """
-
-    def effective_depth(self) -> render.InformationDepth:
-        """The depth the compositor will actually render at."""
-        return compositor.load_registry(lifecycle.read_registry(self.home).path).depth
 
     def test_every_depth_this_can_write_is_one_the_compositor_honours(self) -> None:
         self.enable("fornax")
