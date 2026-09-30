@@ -94,3 +94,34 @@ governance that does not exist. Criterion 5 also bit harder here than elsewhere:
 estimator's free-text reason is exactly the kind of field that leaks, and it is
 excluded from both the document and the explain surface by a test whose fixture
 deliberately carries a path and a secret-shaped token.
+
+## Products — `SUPPORTED`, not yet shipped
+
+### Glomeris — `SUPPORTED`, owning ticket HORO-1577
+
+The only product outside the three above that passes all seven criteria.
+
+`glomeris status --json` is statfs-based and daemon-independent, and answered in
+0.00–0.01 s over five consecutive runs — criterion 4 with very large headroom
+against the host's 250 ms per-provider default, without starting anything. Its
+health field is a closed enum (`HEALTHY` / `WARN` / `PRESSURED` / `CRITICAL` /
+`EMERGENCY`) that maps onto the contract's `SegmentState` without inventing a
+vocabulary, which is what makes criterion 6 satisfiable. `glomeris daemon status
+--json` separately reports `loaded` and `heartbeat_age_secs`, a real freshness
+cue rather than an inferred one. Criteria 2 and 7 hold on merit: disk pressure
+changes during a session and is the kind of state that silently ruins a long
+agent run.
+
+Two constraints are load-bearing and are written into HORO-1577 rather than left
+to the implementer to rediscover:
+
+- The provider must read `status`, never `detect`. `detect` runs unbounded probes
+  and can write through a version-manager shim, so it fails criterion 4 outright
+  and is not merely slower.
+- `plist_path` must not appear in the document. It is the one field in the
+  product's own output that criterion 5 excludes.
+
+HORO-1577 exists because criterion 2 of *this audit's* acceptance — every
+`SUPPORTED` product names a shipped provider or an owning ticket — is not
+satisfied by a verdict alone. A `SUPPORTED` row with no owner is how an audit
+turns into a wish list.
