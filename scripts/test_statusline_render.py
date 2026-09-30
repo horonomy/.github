@@ -1437,10 +1437,16 @@ class TestLegendTokens(unittest.TestCase):
         for mode in MODES:
             if mode.uses_glyphs:
                 continue
+            # Titles included, not just rows. They are the part most easily
+            # forgotten, being prose rather than a token, and a heading that
+            # renders as a replacement character is no more readable than a glyph
+            # that does.
             printed = "\n".join(
-                f"{row.token} {row.name} {row.meaning}"
+                "\n".join(
+                    [section.title]
+                    + [f"{row.token} {row.name} {row.meaning}" for row in section.entries]
+                )
                 for section in render.legend(mode)
-                for row in section.entries
             )
             with self.subTest(mode=mode):
                 self.assertTrue(printed.isascii(), printed)
