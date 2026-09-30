@@ -73,8 +73,8 @@ No entry is `UNKNOWN`. That is an outcome, not a target — four verdicts exist 
 that an unexamined product cannot pass as a decided one, and had any product
 resisted examination it would be sitting in that row.
 
-Four of nine products contribute a segment. That ratio is the audit working
-correctly, not a gap to close.
+Four of the nine surfaces audited contribute a segment. That ratio is the audit
+working correctly, not a gap to close.
 
 ## Products — `SUPPORTED`, already shipped
 
