@@ -996,6 +996,42 @@ def scope_marker(scope: str, mode: PresentationMode) -> str:
 NO_SEGMENTS_LABEL = "No status reported"
 
 
+def provider_parts(
+    status: object,
+    mode: PresentationMode,
+    depth: InformationDepth = InformationDepth.DETAIL,
+) -> tuple[str, str, tuple[str, ...]]:
+    """One provider split into who is speaking and what they said.
+
+    Returns `(name, scope marker, readings)`. The two layouts this module
+    supports — every provider on one shared line, and every provider on a
+    physical line of its own — are the same rendering assembled differently, so
+    they both build a provider from here rather than each walking the contract.
+    A second assembler is how the vertical layout would eventually lose a scope
+    marker that the horizontal one kept, or apply the Clear projection once where
+    the other applies it twice.
+
+    `readings` is never empty. A provider that reported no segments gets one
+    reading saying so, because silence on a status line reads as all-clear; see
+    `render_provider` for why the host states that rather than trusting the
+    provider to.
+    """
+    segments = statusline_contract.order_segments(status)
+    if segments and not depth.shows_supporting_detail:
+        segments = clear_readings(status)
+    if segments:
+        readings = tuple(render_segment(segment, mode, depth) for segment in segments)
+    elif getattr(status, "fallback_text", None):
+        readings = (f"{state_marker(UNKNOWN_STATE, mode)} {status.fallback_text}",)
+    else:
+        readings = (f"{state_marker(UNKNOWN_STATE, mode)} {NO_SEGMENTS_LABEL}",)
+    return (
+        provider_display_name(status.provider),
+        scope_marker(_enum_value(status.scope), mode),
+        readings,
+    )
+
+
 def render_provider(
     status: object,
     mode: PresentationMode,
@@ -1025,19 +1061,8 @@ def render_provider(
     used for that only when present — it is a convenience rendering, never the
     primary one.
     """
-    segments = statusline_contract.order_segments(status)
-    if segments and not depth.shows_supporting_detail:
-        segments = clear_readings(status)
-    if segments:
-        body = SEGMENT_SEPARATORS[mode].join(render_segment(s, mode, depth) for s in segments)
-    elif getattr(status, "fallback_text", None):
-        body = f"{state_marker(UNKNOWN_STATE, mode)} {status.fallback_text}"
-    else:
-        body = f"{state_marker(UNKNOWN_STATE, mode)} {NO_SEGMENTS_LABEL}"
-
-    name = provider_display_name(status.provider)
-    scope = scope_marker(_enum_value(status.scope), mode)
-    return f"{name} {scope} {body}"
+    name, scope, readings = provider_parts(status, mode, depth)
+    return f"{name} {scope} {SEGMENT_SEPARATORS[mode].join(readings)}"
 
 
 def provider_severity(status: object) -> int:
