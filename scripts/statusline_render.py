@@ -82,6 +82,21 @@ class PresentationMode(enum.Enum):
                 return _MODE_ALIASES[name]
         return default
 
+    @classmethod
+    def for_axes(cls, *, compact: bool, glyphs: bool) -> "PresentationMode":
+        """The one mode with exactly these two properties.
+
+        Exists so that a surface offering density and icon style as separate
+        choices resolves them by inverting the axis table rather than by naming
+        members. Naming members is where the two can disagree with what was
+        asked for -- and a user who asked for text and was handed a glyph mode
+        gets exactly the broken output the text modes exist to avoid.
+
+        Total by construction: every combination of the two booleans is a
+        member, which is what the fourth member was added to guarantee.
+        """
+        return _MODE_BY_AXES[(compact, glyphs)]
+
     @property
     def is_compact(self) -> bool:
         """Whether to spend fewer columns: shorter phrasings, exceptions only."""
@@ -106,6 +121,12 @@ _MODE_AXES = {
     PresentationMode.PLAIN: (False, False),
     PresentationMode.COMPACT_PLAIN: (True, False),
 }
+
+# The same table read the other way, for `for_axes`. Derived rather than written
+# out so the two directions cannot disagree; a test asserts it is still a
+# bijection, which is the property that would break if a future member claimed
+# an axis pair some existing member already has.
+_MODE_BY_AXES = {axes: mode for mode, axes in _MODE_AXES.items()}
 
 # Names that are not wire values but mean one. `balanced_plain` is what naming
 # the two axes independently produces for the mode whose value is historically

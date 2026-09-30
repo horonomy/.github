@@ -192,6 +192,25 @@ class TestPresentationModeParse(unittest.TestCase):
             {(False, True), (True, True), (False, False), (True, False)},
         )
 
+    def test_a_mode_can_be_looked_up_by_its_two_axes(self):
+        # Round-trips for every member, which is what a surface offering the two
+        # axes as separate choices needs: whatever the user asked for, the mode it
+        # resolves to reports back exactly that.
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertIs(
+                    render.PresentationMode.for_axes(
+                        compact=mode.is_compact, glyphs=mode.uses_glyphs
+                    ),
+                    mode,
+                )
+
+    def test_no_two_modes_claim_the_same_pair_of_axes(self):
+        # The round trip above would still pass if a future member shadowed an
+        # existing one -- the survivor would answer for both. Then a user asking
+        # for one would silently get the other.
+        self.assertEqual(len(render._MODE_BY_AXES), len(MODES))
+
 
 class TestGraphemeClusters(unittest.TestCase):
     def test_ascii_is_one_cluster_per_character(self):
