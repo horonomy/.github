@@ -1532,3 +1532,140 @@ class DepthSwitchTest(RenderingCase, PresentationCase):
         self.switch(case)
 
         self.assertEqual(self.asked(), before)
+
+
+# --------------------------------------------------------------------------- #
+# Reading it without the glyphs
+# --------------------------------------------------------------------------- #
+
+PLAIN_MODES = tuple(mode for mode in MODES if not mode.uses_glyphs)
+GLYPH_MODES = tuple(mode for mode in MODES if mode.uses_glyphs)
+
+
+def ascii_only(text: str) -> str:
+    """The line as a reader sees it when every glyph fails to render.
+
+    Not a hypothetical: an SSH session in a terminal without an emoji font, a
+    screen reader, a CI log, a terminal multiplexer that mangles wide characters.
+    Whatever survives this is the part of the line that is carrying meaning
+    reliably.
+    """
+    return "".join(character if character.isascii() else " " for character in text)
+
+
+class PlainTextTest(unittest.TestCase):
+    """Accessibility as a property of the depth axis, over every product state.
+
+    The readability suite checks the glyph vocabulary at the one depth its module
+    renders. The question here is narrower and belongs to this ticket: whether
+    *summarising* costs a reader who cannot see glyphs anything. A summary that
+    dropped the word beside the icon would still pass every test in this module
+    that reads a rendered fragment, because the icon would still be there.
+
+    Two claims, deliberately different in strength. In the plain modes every
+    reading is words, including the state and the scope. In the glyph modes the
+    icon is additional rather than load-bearing: strip every non-ASCII character
+    and the product and its primary reading are still legible. The state *word*
+    is not asserted to survive that, because in a glyph mode the state is an icon
+    by design — what must survive is the label, which is why a bare glyph with no
+    word beside it is unacceptable.
+    """
+
+    def test_a_plain_rendering_has_nothing_in_it_a_terminal_can_break(self) -> None:
+        for case in MATRIX:
+            for mode in PLAIN_MODES:
+                for depth in DEPTHS:
+                    line = render.render_provider(case.snapshot, mode, depth=depth)
+                    with self.subTest(case=case.name, mode=mode.value, depth=depth.value):
+                        self.assertTrue(line.isascii(), line)
+
+    def test_a_plain_rendering_names_the_state_in_words_at_both_depths(self) -> None:
+        for case in MATRIX:
+            primary = primary_of(case.snapshot)
+            if primary is None:
+                continue
+            for mode in PLAIN_MODES:
+                for depth in DEPTHS:
+                    line = render.render_provider(case.snapshot, mode, depth=depth)
+                    with self.subTest(case=case.name, mode=mode.value, depth=depth.value):
+                        self.assertIn(render.STATE_TEXT[primary.state.value], line, line)
+
+    def test_a_plain_rendering_names_the_scope_in_words_at_both_depths(self) -> None:
+        # The one reading with no word beside its icon in a glyph mode, which is
+        # why the plain modes exist -- and therefore the one a depth change must
+        # not be allowed to drop, since there is nothing else to infer it from.
+        for case in MATRIX:
+            for mode in PLAIN_MODES:
+                for depth in DEPTHS:
+                    line = render.render_provider(case.snapshot, mode, depth=depth)
+                    with self.subTest(case=case.name, mode=mode.value, depth=depth.value):
+                        self.assertIn(render.SCOPE_TEXT[case.snapshot.scope.value], line, line)
+
+    def test_a_recorded_reason_reaches_a_plain_reader_at_detail(self) -> None:
+        for case in MATRIX:
+            reasons = [part.reason_label for part in case.snapshot.segments if part.reason_label]
+            if not reasons:
+                continue
+            for mode in PLAIN_MODES:
+                line = render.render_provider(case.snapshot, mode, depth=DETAIL)
+                with self.subTest(case=case.name, mode=mode.value):
+                    for reason in reasons:
+                        self.assertIn(reason, line, line)
+
+    def test_freshness_reaches_a_plain_reader_at_detail(self) -> None:
+        # Elapsed time rather than a clock reading, and asked for through the
+        # renderer's own formatter rather than a literal: the density modes
+        # legitimately shorten "2m ago" to "2m", and a test that demanded the word
+        # would be asserting a preference this ticket has no stake in.
+        for case in MATRIX:
+            ages = [
+                part.age_seconds for part in case.snapshot.segments if part.age_seconds is not None
+            ]
+            for mode in PLAIN_MODES:
+                line = render.render_provider(case.snapshot, mode, depth=DETAIL)
+                with self.subTest(case=case.name, mode=mode.value):
+                    for age in ages:
+                        self.assertIn(render.format_age(age, mode), line, line)
+
+    def test_no_glyph_is_the_only_thing_saying_what_a_product_is(self) -> None:
+        for case in MATRIX:
+            display = render.provider_display_name(case.snapshot.provider)
+            for mode in GLYPH_MODES:
+                for depth in DEPTHS:
+                    line = ascii_only(render.render_provider(case.snapshot, mode, depth=depth))
+                    with self.subTest(case=case.name, mode=mode.value, depth=depth.value):
+                        self.assertIn(display, line, line)
+
+    def test_no_glyph_is_the_only_thing_saying_what_a_product_is_reporting(self) -> None:
+        """The rule against a bare icon, checked where summarising could break it.
+
+        `clear` is the depth under pressure -- it is the one with a width budget
+        and a reason to drop something -- so the reading it keeps is the one most
+        likely to be reduced to its icon.
+        """
+        for case in MATRIX:
+            primary = primary_of(case.snapshot)
+            if primary is None:
+                continue
+            for mode in GLYPH_MODES:
+                for depth in DEPTHS:
+                    line = ascii_only(render.render_provider(case.snapshot, mode, depth=depth))
+                    with self.subTest(case=case.name, mode=mode.value, depth=depth.value):
+                        self.assertIn(primary.label, line, line)
+
+    def test_a_product_that_could_not_be_read_says_so_in_words(self) -> None:
+        # The state most easily lost to a stripped glyph: an unknown reading whose
+        # icon is the only thing distinguishing it from a calm one.
+        for case in MATRIX:
+            if case.snapshot.availability.has_live_readings:
+                continue
+            for mode in MODES:
+                for depth in DEPTHS:
+                    line = ascii_only(render.render_provider(case.snapshot, mode, depth=depth))
+                    with self.subTest(case=case.name, mode=mode.value, depth=depth.value):
+                        self.assertNotEqual(line.split(), [], line)
+                        self.assertTrue(
+                            any(part.label in line for part in case.snapshot.segments)
+                            or (case.snapshot.fallback_text or "") in line,
+                            line,
+                        )
