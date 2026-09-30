@@ -1558,6 +1558,113 @@ class DepthSwitchTest(DepthHost, RenderingCase, PresentationCase):
         self.assertEqual(self.asked(), before)
 
 
+class ProviderChurnTest(DepthHost, RenderingCase, PresentationCase):
+    """What happens *to* a host while a depth is already in force.
+
+    The switching matrix above walks depth changes across a fixed installation.
+    The ticket also enumerates the reverse -- the installation changing while the
+    depth stays put -- and names three: a product disabled mid-detail, the same
+    product re-enabled afterwards, and the reader's own statusline failing.
+
+    None of the three is a presentation operation, which is the reason they are
+    worth asserting separately. "Do not silently change an explicit existing
+    presentation preference" is a claim about every *other* operation, so a rule
+    that only held while nothing else happened would not be the rule.
+    """
+
+    def install_all(self, depth: render.InformationDepth = DETAIL) -> tuple[Case, ...]:
+        """Three calm products, each a real executable, at one depth."""
+        products = tuple(
+            row(cases, name) for cases, name in zip((FORNAX, CIRCINUS, LIBRA), HOSTS[0][1])
+        )
+        for product in products:
+            self.enable(
+                product.snapshot.provider,
+                argv=(str(self.provider_of(product)),),
+                timeout_ms=2000,
+            )
+        self.presentation(depth=depth)
+        self.assertIs(self.effective_depth(), depth)
+        return products
+
+    def rows_naming(self, line: str, product: Case) -> int:
+        """How many physical rows of the rendered line name this product.
+
+        Counted rather than tested for presence, because at detail the answer has
+        to be exactly one: a product that lost its row and a product that acquired
+        a second one are both defects, and `assertIn` cannot tell either from the
+        state the ticket asks for.
+        """
+        name = render.provider_display_name(product.snapshot.provider)
+        return len([text for text in line.splitlines() if name in text])
+
+    def test_disabling_a_product_at_detail_takes_nothing_else_with_it(self) -> None:
+        products = self.install_all()
+        before = self.rendered()
+        for product in products:
+            self.assertEqual(self.rows_naming(before, product), 1, before)
+
+        result = self.remove(products[0].snapshot.provider, operation="disable")
+
+        # A disable is a provider operation. It has no business reading the
+        # presentation preference, let alone restating it.
+        self.assertFalse(result.settings_written, "a disable wrote the host settings file")
+        self.assertIs(self.effective_depth(), DETAIL)
+        after = self.rendered()
+        self.assertEqual(self.rows_naming(after, products[0]), 0, after)
+        for product in products[1:]:
+            self.assertEqual(self.rows_naming(after, product), 1, after)
+        self.assertTrue(after.startswith("MY OWN LINE"), after)
+
+    def test_re_enabling_it_gives_its_row_back_at_the_depth_still_in_force(self) -> None:
+        products = self.install_all()
+        product = products[0]
+        self.remove(product.snapshot.provider, operation="disable")
+
+        self.enable(
+            product.snapshot.provider,
+            argv=(str(self.provider_of(product)),),
+            timeout_ms=2000,
+        )
+
+        # The re-enable half of the same rule: the depth a reader chose before
+        # they took a product out is the depth they get back when they put it in.
+        self.assertIs(self.effective_depth(), DETAIL)
+        after = self.rendered()
+        self.assertEqual(self.rows_naming(after, product), 1, after)
+        for other in products[1:]:
+            self.assertEqual(self.rows_naming(after, other), 1, after)
+
+    # Two ways for the reader's own command to fail, because they degrade
+    # differently: one printed a line before failing and that line is still
+    # theirs, the other printed nothing and there is nothing to preserve.
+    FAILING_UPSTREAMS = (
+        ("prints_then_fails", 'cat >/dev/null\nprintf "MY OWN LINE"\nexit 9\n', True),
+        ("says_nothing_and_fails", "cat >/dev/null\nexit 9\n", False),
+    )
+
+    def test_a_reader_line_that_fails_leaves_both_depths_intact(self) -> None:
+        """Their failure is not ours to propagate, at either depth.
+
+        The compositor still exits zero -- `render()` asserts that -- and every
+        product still reports what it reported, including at detail where each one
+        owns a row and a missing upstream row could plausibly have taken a product
+        row with it.
+        """
+        products = self.install_all(CLEAR)
+        for name, body, keeps_line in self.FAILING_UPSTREAMS:
+            self.upstream.write_text(f"#!/bin/sh\n{body}")
+            for depth in DEPTHS:
+                self.presentation(depth=depth)
+                line = self.rendered()
+                with self.subTest(upstream=name, depth=depth.value):
+                    self.assertEqual(line.startswith("MY OWN LINE"), keeps_line, line)
+                    for product in products:
+                        primary = primary_of(product.snapshot)
+                        marker = render.state_marker(primary.state.value, self.effective())
+                        self.assertIn(f"{marker} {primary.label}", line, line)
+
+
 # --------------------------------------------------------------------------- #
 # Reading it without the glyphs
 # --------------------------------------------------------------------------- #
