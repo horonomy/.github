@@ -1236,6 +1236,34 @@ def _verify(plan: Plan) -> None:
             raise VerificationError(f"{path} still exists after it was removed")
 
 
+def _reread_or_refuse(plan: Plan) -> SettingsDocument | None:
+    """Re-read both files and refuse if either moved since the plan was formed.
+
+    Returns the freshly read settings document, because the write that follows
+    needs its indentation, trailing newline and mode -- reading it twice would
+    open a window between the check and the values used.
+
+    `None` for a plan that carries no settings fingerprint, which is a plan that
+    never read the file. Re-reading it anyway would make an unparseable settings
+    file fail an operation that does not depend on it -- and the user whose
+    settings file is broken is the one most likely to need to change how the line
+    renders.
+    """
+    current = None
+    if plan.fingerprint is not None:
+        current = read_settings(plan.settings_path)
+        if current.fingerprint != plan.fingerprint:
+            raise ConcurrentModificationError(
+                f"{plan.settings_path} changed after this plan was formed; nothing was written"
+            )
+    if plan.registry_path is not None and plan.registry_fingerprint is not None:
+        if read_registry_at(plan.registry_path).fingerprint != plan.registry_fingerprint:
+            raise ConcurrentModificationError(
+                f"{plan.registry_path} changed after this plan was formed; nothing was written"
+            )
+    return current
+
+
 def apply(plan: Plan) -> ApplyResult:
     """Carry out a plan, or refuse to.
 
@@ -1255,23 +1283,7 @@ def apply(plan: Plan) -> ApplyResult:
     if not plan.mutates:
         return ApplyResult(plan=plan, settings_written=False, registry_written=False, verified=True)
 
-    # Skipped entirely for a plan that carries no settings fingerprint, which is
-    # a plan that never read the file. Re-reading it anyway would make an
-    # unparseable settings file fail an operation that does not depend on it --
-    # and the user whose settings file is broken is the one most likely to need
-    # to change how the line renders.
-    current = None
-    if plan.fingerprint is not None:
-        current = read_settings(plan.settings_path)
-        if current.fingerprint != plan.fingerprint:
-            raise ConcurrentModificationError(
-                f"{plan.settings_path} changed after this plan was formed; nothing was written"
-            )
-    if plan.registry_path is not None and plan.registry_fingerprint is not None:
-        if read_registry_at(plan.registry_path).fingerprint != plan.registry_fingerprint:
-            raise ConcurrentModificationError(
-                f"{plan.registry_path} changed after this plan was formed; nothing was written"
-            )
+    current = _reread_or_refuse(plan)
 
     settings_write = None
     if plan.settings_after is not None:
