@@ -1,0 +1,37 @@
+# Public Release Surface Contract evidence for Libra Governor (HORO-512).
+#
+# claimed_lifecycle reflects the repo's own README ("v0.0.2 Developer
+# Preview") — a developer-preview stage, not generally available.
+#
+# KNOWN OPEN FINDING (reconciled 2026-10-01, not resolved by this file):
+# `scripts/public_release_reconcile.py` reports `tags_releases: REQUIRED`
+# for this config — the repo is PUBLIC and already carries 6 Pre-release
+# tags (latest v0.0.2, 0 assets), and per this contract's own logic a
+# public repo with any release must claim `beta`/`release_candidate`/
+# `available`, not `experimental`. Claiming a higher tier here to force
+# VERIFIED would violate `governance/releases/public-surfaces.md`'s "never
+# publish to make a gate green" — the README's own claim is
+# `claimed_lifecycle: experimental` here on purpose, and this REQUIRED
+# result is left as a genuine, owner-visible finding rather than silently
+# resolved. Reconciliation: either the product owner reclassifies these
+# GitHub Releases as drafts (not public Pre-releases), or explicitly
+# raises the claimed maturity — both are product decisions, not something
+# this evidence file should decide unilaterally.
+#
+# The README and `scripts/install.sh` are explicit that no binary is
+# published anywhere ("no `curl | sh` binary-download path to offer,
+# because no such binary exists") — a deliberate honesty position, kept
+# as-is here.
+#
+# No company.yaml catalog entry and no org_profile mention exist yet,
+# which is DEFERRED (not REQUIRED) at this maturity per the contract's
+# three-way logic for `experimental`. No dedicated website, docs host, or
+# hosted service exists outside this repo.
+product: libra-governor
+claimed_lifecycle: experimental
+github:
+  org: horonomy
+  repo: libra-governor
+website: null
+docs: null
+hosted_service: null

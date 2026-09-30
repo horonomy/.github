@@ -1,0 +1,34 @@
+# Public Release Surface Contract evidence for Eltanin (HORO-512).
+#
+# claimed_lifecycle reflects Eltanin's own repo description ("MVP 1.0")
+# and README ("MVP 1.0 — Authorization Happy Path (in progress)") — an
+# intentionally narrow, in-progress security vertical slice, not a
+# generally available product.
+#
+# KNOWN OPEN FINDING (reconciled 2026-10-01, not resolved by this file):
+# `scripts/public_release_reconcile.py` reports `tags_releases: REQUIRED`
+# for this config — the repo is PUBLIC and already carries a Pre-release
+# tag (v0.2.0-preview, 0 assets), and per this contract's own logic a
+# public repo with any release must claim `beta`/`release_candidate`/
+# `available`, not `experimental`. Claiming a higher tier here to force
+# VERIFIED would violate `governance/releases/public-surfaces.md`'s "never
+# publish to make a gate green" — the README's own maturity claim is
+# `claimed_lifecycle: experimental` here on purpose, and this REQUIRED
+# result is left as a genuine, owner-visible finding rather than silently
+# resolved. Reconciliation: either the product owner reclassifies the
+# GitHub Release as a draft (not a public Pre-release), or explicitly
+# raises the claimed maturity — both are product decisions, not something
+# this evidence file should decide unilaterally.
+#
+# No company.yaml catalog entry and no org_profile mention exist yet,
+# which is DEFERRED (not REQUIRED) at this maturity per the contract's
+# three-way logic for `experimental`. No dedicated website or docs host
+# exists outside this repo.
+product: eltanin
+claimed_lifecycle: experimental
+github:
+  org: horonomy
+  repo: eltanin
+website: null
+docs: null
+hosted_service: null
