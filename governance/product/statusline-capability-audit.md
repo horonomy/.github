@@ -189,3 +189,30 @@ refresh).
 There is no read-only projection over the Edge buffer to read instead. If one is
 added and is genuinely local, Eridanus becomes reassessable — the buffer's depth
 and lag are exactly the kind of state criterion 2 wants.
+
+## Products — `NOT_APPLICABLE`
+
+### Horologium — `NOT_APPLICABLE`
+
+A server-side product backed by Postgres, with no local status CLI. Its state is
+*review-time* rather than session-time, so it fails criterion 2 by nature rather
+than by omission: nothing it knows changes in a way the operator needs to see
+while coding.
+
+What would change the answer: Horologium acquiring a local per-developer surface
+whose state moves during a working session. Adding a network call to a shared
+server so the statusline can show shared review state would not qualify — that is
+criterion 4, and the segment would be showing other people's work, not this
+session's.
+
+### AASM — `NOT_APPLICABLE`
+
+AASM lives in a separate organization and is not a Horonom product. That alone
+settles it, so the remaining observation is offered as evidence rather than as a
+verdict: `aasm status` renders an uptime of 0 s, 0 connections and 0 ms lag
+alongside an unreachable health verdict.
+
+That is precisely the `UNAVAILABLE != ZERO` antipattern criterion 6 exists to keep
+out of the statusline. It is recorded here because it is the most concrete
+demonstration available of what criterion 6 prevents, and because a reader
+reasonably asks whether the criterion is theoretical. It is not.
