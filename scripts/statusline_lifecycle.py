@@ -1956,19 +1956,19 @@ def explain(
     except LifecycleError as exc:
         report["notes"].append(
             f"the settings file could not be read ({exc}), so what is on your line cannot be "
-            "confirmed from here; the readings below are what the providers answer when asked"
+            "confirmed from here; what follows is what the registered providers answer when asked"
         )
     else:
         if classify(document) is not Ownership.HORONOM_OWNED:
             report["notes"].append(
-                "the statusline slot is not Horonom-owned, so none of the readings below are "
-                "on your line; `statusline doctor` says who owns it"
+                "the statusline slot is not Horonom-owned, so nothing Horonom renders is on "
+                "your line right now; `statusline doctor` says who owns it"
             )
 
     if not registry.usable:
         report["notes"].append(
             f"the provider registry is unusable ({registry.problem}), so there is nothing to "
-            "decode; the key above is still correct"
+            "decode; the key itself is still correct"
         )
         return report
 
@@ -2064,6 +2064,104 @@ def _describe_doctor(report: dict) -> str:
             f"{outlook['disabling_one_provider_changes_settings']}"
         )
     lines.extend(f"next: {step}" for step in report["remediation"])
+    return "\n".join(lines)
+
+
+def _legend_lines(section: dict) -> list[str]:
+    """One section of the key, as an aligned three-column block.
+
+    The token column is padded by `display_width`, not by `len`. A glyph occupies
+    two terminal columns and one Python character, so padding by length is
+    precisely how a key drawn in emoji arrives with a ragged second column --
+    which is the same class of bug the width machinery exists for on the line
+    itself.
+    """
+    entries = section["entries"]
+    tokens = max((render.display_width(entry["token"]) for entry in entries), default=0)
+    names = max((len(entry["name"]) for entry in entries), default=0)
+    lines = [f"  {section['title']}"]
+    for entry in entries:
+        pad = " " * (tokens - render.display_width(entry["token"]))
+        lines.append(
+            f"    {entry['token']}{pad}  {entry['name']:<{names}}  {entry['meaning']}"
+        )
+    return lines
+
+
+def _reading_lines(reading: dict) -> list[str]:
+    """One decoded reading: the fragment, then a labelled line per thing in it.
+
+    One fact per line, each with the word for what it is. The alternative is a
+    paragraph, and a reader who came here confused by a compressed line is not
+    helped by a denser one.
+    """
+    lines = [f"    {reading['rendered']}"]
+    lines.append(f"      state: {reading['state']} -- {reading['state_means']}")
+    if "reason" in reading:
+        lines.append(f"      why: {reading['reason']}")
+    if "freshness" in reading:
+        lines.append(f"      as of: {reading['freshness']}")
+    if "confidence" in reading:
+        confidence = reading["confidence"]
+        lines.append(f"      {confidence['rendered']} -- {confidence['means']}")
+    if "hypothetical" in reading:
+        lines.append(f"      {render.HYPOTHETICAL_TEXT}: {reading['hypothetical']}")
+    if "explain_key" in reading:
+        lines.append(f"      the product calls this: {reading['explain_key']}")
+    return lines
+
+
+# Every line prefixed, not merely the block indented. This is another program's
+# output: it may be blank in places, it may be indented already, and it may
+# contain something shaped exactly like one of the host's own labelled lines. A
+# per-line marker makes the extent of the quotation unambiguous, so a product can
+# never appear to be the host talking.
+_QUOTE_PREFIX = "      > "
+
+
+def _detail_lines(provider: dict) -> list[str]:
+    """The owning product's own explanation, attributed, or why there is none."""
+    detail = provider["detail"]
+    if not detail["available"]:
+        return [f"      no deeper explanation: {detail['problem']}"]
+    heading = f"      {provider['display_name']}'s own explanation ({detail['command_name']}):"
+    return [heading] + [
+        f"{_QUOTE_PREFIX}{line}".rstrip() for line in detail["text"].splitlines()
+    ]
+
+
+def _describe_explain(report: dict) -> str:
+    """The explain report as prose: the key first, then the line it decodes.
+
+    The key comes first deliberately. A reader who already knows the vocabulary
+    scrolls past it once; a reader who does not is the entire reason this command
+    exists, and putting the decode first would hand them the tokens again before
+    the words for them.
+    """
+    presentation = report["presentation"]
+    lines = [f"presentation: {presentation['mode']} ({presentation['source']})", ""]
+    lines.append("how to read the line")
+    for section in report["legend"]:
+        lines.extend(_legend_lines(section))
+    for note in report["notes"]:
+        lines.extend(["", f"note: {note}"])
+    if not report["providers"]:
+        return "\n".join(lines)
+
+    lines.extend(["", "what the line says right now"])
+    for provider in report["providers"]:
+        lines.append(f"  {provider['rendered']}")
+        lines.append(
+            f"    reporting on: {provider['scope']} -- {provider['scope_means']}"
+        )
+        # Printed for every provider, including the healthy ones. An availability
+        # that only appears when it is bad is one a reader cannot distinguish from
+        # a missing field, and `unavailable` reading as zero is the specific
+        # confusion this whole contract was shaped to prevent.
+        lines.append(f"    availability: {provider['availability']}")
+        for reading in provider["readings"]:
+            lines.extend(_reading_lines(reading))
+        lines.extend(_detail_lines(provider))
     return "\n".join(lines)
 
 
