@@ -1387,18 +1387,22 @@ class RenderingCase(LifecycleCase):
         }
     ).encode("utf-8")
 
-    def script(self, name: str, body: str) -> pathlib.Path:
+    def script(self, name: str, body: str, *, warm: bool = True) -> pathlib.Path:
         """Write an executable script and pay its first-execution cost up front.
 
         A freshly written executable costs a large one-time evaluation on macOS,
         easily more than a provider's whole timeout budget. Warming it here means a
         timeout later is a real finding rather than the operating system doing
         first-run bookkeeping.
+
+        `warm=False` for a script written never to finish -- warming one of those
+        would hang this call instead of the test that is supposed to time out.
         """
         path = self.root / name
         path.write_text(body)
         path.chmod(0o755)
-        subprocess.run([str(path)], capture_output=True, input=b"{}", timeout=30, check=False)
+        if warm:
+            subprocess.run([str(path)], capture_output=True, input=b"{}", timeout=30, check=False)
         return path
 
     def provider_script(self, name: str, provider: str, label: str) -> pathlib.Path:
