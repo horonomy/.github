@@ -496,9 +496,12 @@ class CaseNCrashDuringAtomicUpdateTest(GateCase):
 
     def test_a_crash_before_the_first_publication_changes_nothing(self) -> None:
         before = self.settings.read_bytes()
+        # Written before the failure is armed, so the only call inside the block
+        # is the one whose failure is being asserted.
+        argv = (str(self.fornax()),)
         with self.failing_replace(0):
             with self.assertRaises(lifecycle.LifecycleError):
-                self.enable("fornax", argv=(str(self.fornax()),), timeout_ms=2000)
+                self.enable("fornax", argv=argv, timeout_ms=2000)
         self.assertEqual(self.settings.read_bytes(), before)
         self.assertFalse(lifecycle.read_registry(self.home).present)
         self.invariants(providers=())
@@ -515,9 +518,10 @@ class CaseNCrashDuringAtomicUpdateTest(GateCase):
         behind it, which is the state that renders nothing.
         """
         before = self.settings.read_bytes()
+        argv = (str(self.fornax()),)
         with self.failing_replace(1):
             with self.assertRaises(lifecycle.LifecycleError):
-                self.enable("fornax", argv=(str(self.fornax()),), timeout_ms=2000)
+                self.enable("fornax", argv=argv, timeout_ms=2000)
 
         self.assertEqual(self.settings.read_bytes(), before)
         self.assertTrue(lifecycle.read_registry(self.home).present)

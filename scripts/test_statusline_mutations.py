@@ -262,7 +262,8 @@ def a_child_environment_that_does_not_count() -> object:
 
 
 def a_self_reference_check_that_never_matches() -> object:
-    """The second recursion guard, answering no to everything."""
+    """The second recursion guard, answering no to everything.
+    """
     return unittest.mock.patch.object(compositor, "names_this_command", lambda command: False)
 
 
@@ -391,18 +392,18 @@ class HarnessTest(MutationCase):
     GUARD = (compositor_tests.TestSelfReferenceDetection, "test_this_very_file_is_recognised")
 
     def test_a_mutation_that_changes_nothing_is_reported_as_vacuous(self) -> None:
+        # Built outside the block, so the failure it catches can only have come
+        # from the assertion under test and not from the setup.
+        no_mutation = contextlib.nullcontext()
         with self.assertRaises(AssertionError) as caught:
-            self.assert_guard_catches(
-                *self.GUARD, contextlib.nullcontext(), expect="False is not true"
-            )
+            self.assert_guard_catches(*self.GUARD, no_mutation, expect="False is not true")
         self.assertIn("passed with the defect in place", str(caught.exception))
 
     def test_a_guard_failing_for_the_wrong_reason_is_not_accepted(self) -> None:
+        mutation = a_self_reference_check_that_never_matches()
         with self.assertRaises(AssertionError) as caught:
             self.assert_guard_catches(
-                *self.GUARD,
-                a_self_reference_check_that_never_matches(),
-                expect="a reason this failure does not have",
+                *self.GUARD, mutation, expect="a reason this failure does not have"
             )
         self.assertIn("not at the assertion this defect is supposed to trip", str(caught.exception))
 
