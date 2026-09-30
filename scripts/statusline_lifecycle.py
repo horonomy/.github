@@ -2151,8 +2151,11 @@ def _describe_explain(report: dict) -> str:
     the words for them.
     """
     presentation = report["presentation"]
-    lines = [f"presentation: {presentation['mode']} ({presentation['source']})", ""]
-    lines.append("how to read the line")
+    lines = [
+        f"presentation: {presentation['mode']} ({presentation['source']})",
+        "",
+        "how to read the line",
+    ]
     for section in report["legend"]:
         lines.extend(_legend_lines(section))
     for note in report["notes"]:
@@ -2162,15 +2165,17 @@ def _describe_explain(report: dict) -> str:
 
     lines.extend(["", "what the line says right now"])
     for provider in report["providers"]:
-        lines.append(f"  {provider['rendered']}")
-        lines.append(
-            f"    reporting on: {provider['scope']} -- {provider['scope_means']}"
-        )
-        # Printed for every provider, including the healthy ones. An availability
-        # that only appears when it is bad is one a reader cannot distinguish from
-        # a missing field, and `unavailable` reading as zero is the specific
+        # Availability is printed for every provider, including the healthy ones.
+        # One that only appears when it is bad is one a reader cannot distinguish
+        # from a missing field, and `unavailable` reading as zero is the specific
         # confusion this whole contract was shaped to prevent.
-        lines.append(f"    availability: {provider['availability']}")
+        lines.extend(
+            [
+                f"  {provider['rendered']}",
+                f"    reporting on: {provider['scope']} -- {provider['scope_means']}",
+                f"    availability: {provider['availability']}",
+            ]
+        )
         for reading in provider["readings"]:
             lines.extend(_reading_lines(reading))
         lines.extend(_detail_lines(provider))
