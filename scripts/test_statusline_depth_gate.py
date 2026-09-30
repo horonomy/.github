@@ -1413,8 +1413,19 @@ class DepthSwitchTest(RenderingCase, PresentationCase):
         plan = self.plan_presentation(depth=case.target)
         with self.no_processes():
             result = lifecycle.apply(plan)
-        self.assertFalse(result.settings_written)
-        self.assertEqual(result.registry_written, not case.is_noop)
+        # Messages on both, because these two are the assertions a switching
+        # defect trips first and `False is not true` says nothing about which
+        # prohibition was broken.
+        self.assertFalse(
+            result.settings_written, "a depth switch wrote the host settings file"
+        )
+        self.assertEqual(
+            result.registry_written,
+            not case.is_noop,
+            "a depth switch wrote the registry when it had nothing to change"
+            if case.is_noop
+            else "a depth switch did not record the depth it switched to",
+        )
         self.assert_untouched(before)
         self.assertIs(self.effective_depth(), case.target)
         return plan
