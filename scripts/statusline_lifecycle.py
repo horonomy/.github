@@ -542,12 +542,23 @@ class ProviderRegistration:
     the user's and must be reproduced exactly; a provider's command is supplied
     by a product that knows its own arguments, so there is no reason to involve a
     shell -- and therefore no shell to quote for.
+
+    `explain_argv` is the product's own long-form surface, recorded so the shared
+    `explain` command can hand over to it instead of paraphrasing it. Supplied by
+    the product rather than derived from `argv`, because the three first products
+    spell it three ways -- `fornax statusline explain`, `libra-governor statusline
+    explain`, `circinus statusline --explain` -- and a host that guessed would run
+    the wrong thing or, worse, the provider command again. Optional, because a
+    product without one is a supported state that `explain` reports plainly; the
+    alternative is the host inventing the deeper explanation itself, which is how
+    a shared host starts carrying product knowledge it cannot keep current.
     """
 
     provider: str
     argv: tuple[str, ...]
     scope: str
     timeout_ms: int | None = None
+    explain_argv: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         contract.require_provider_id(self.provider)
@@ -555,6 +566,8 @@ class ProviderRegistration:
         # at registration, instead of at the first render.
         contract.Scope(self.scope)
         _validated_argv(self.argv, "a provider command")
+        if self.explain_argv is not None:
+            _validated_argv(self.explain_argv, "a provider explain command")
         if self.timeout_ms is not None and not (
             0 < self.timeout_ms <= compositor.MAX_PROVIDER_TIMEOUT_MS
         ):
@@ -572,6 +585,12 @@ class ProviderRegistration:
         }
         if self.timeout_ms is not None:
             entry["timeout_ms"] = self.timeout_ms
+        if self.explain_argv is not None:
+            # A key the compositor does not read, deliberately. It has no use for
+            # this command and must never be tempted to run it: `explain` is a
+            # thing a person asks for, and the render path has a budget measured
+            # in milliseconds.
+            entry["explain_command"] = list(self.explain_argv)
         return entry
 
 
