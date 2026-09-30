@@ -32,6 +32,7 @@ import unittest.mock
 import statusline_compositor as compositor
 import statusline_contract as contract
 import statusline_lifecycle as lifecycle
+import statusline_render as render
 
 
 def rich_settings() -> dict:
@@ -708,6 +709,173 @@ class DisableTest(LifecycleCase):
         self.assertIn("circinus is not registered; nothing to remove", plan.notes)
         self.assertEqual(lifecycle.read_registry(self.home).path.read_bytes(), registry_before)
         self.assertEqual(self.settings.read_bytes(), settings_before)
+
+
+class PresentationTest(LifecycleCase):
+    """The reader's own rendering preference, which lives in our registry.
+
+    Two properties carry the weight here. It must survive every other operation,
+    since a preference that is quietly reset by the next `enable` is not a
+    preference; and the value written must be one the compositor honours, which
+    the compositor's deliberate fall-back on an unrecognised mode would otherwise
+    hide behind a line that renders perfectly in the wrong style.
+    """
+
+    def plan_presentation(self, **kwargs) -> lifecycle.Plan:
+        return lifecycle.plan_presentation(lifecycle.read_registry(self.home), **kwargs)
+
+    def presentation(self, **kwargs) -> lifecycle.ApplyResult:
+        return lifecycle.apply(self.plan_presentation(**kwargs))
+
+    def stored(self) -> dict:
+        return self._registry()[lifecycle.PRESENTATION_KEY]
+
+    def effective(self) -> render.PresentationMode:
+        """The mode the compositor will actually render in."""
+        return compositor.load_registry(lifecycle.read_registry(self.home).path).mode
+
+    def test_every_preference_this_can_write_is_one_the_compositor_honours(self) -> None:
+        self.enable("fornax")
+        for compact in (False, True):
+            for glyphs in (False, True):
+                with self.subTest(compact=compact, glyphs=glyphs):
+                    self.presentation(compact=compact, glyphs=glyphs)
+                    # Read back through the compositor's own parser, not ours. It
+                    # falls back to the default on an unrecognised mode name
+                    # rather than failing, so a value only this module understands
+                    # would produce a line that renders correctly in the style the
+                    # user did not ask for -- and nothing would report it.
+                    self.assertEqual(
+                        (self.effective().is_compact, self.effective().uses_glyphs),
+                        (compact, glyphs),
+                    )
+
+    def test_either_axis_can_be_set_without_stating_the_other(self) -> None:
+        self.enable("fornax")
+        self.presentation(glyphs=False)
+        self.assertFalse(self.effective().uses_glyphs)
+        self.assertFalse(self.effective().is_compact)
+
+        # The terminal got narrower. The font did not get better.
+        self.presentation(compact=True)
+        self.assertTrue(self.effective().is_compact)
+        self.assertFalse(self.effective().uses_glyphs)
+
+    def test_other_keys_in_the_preference_object_are_left_alone(self) -> None:
+        self.enable("fornax")
+        registry = self._registry()
+        registry[lifecycle.PRESENTATION_KEY] = {
+            "width_budget": 96,
+            "futureUnknownKey": "keep-me",
+        }
+        lifecycle.read_registry(self.home).path.write_bytes(lifecycle.serialize(registry))
+
+        self.presentation(glyphs=False)
+
+        # A preference object is ours as a whole, but `mode` is the only key in it
+        # this operation owns -- the same rule the settings file gets.
+        self.assertEqual(self.stored()["width_budget"], 96)
+        self.assertEqual(self.stored()["futureUnknownKey"], "keep-me")
+        self.assertEqual(self.stored()["mode"], render.PresentationMode.PLAIN.value)
+
+    def test_setting_a_preference_that_is_already_set_writes_nothing(self) -> None:
+        self.enable("fornax")
+        self.presentation(compact=True, glyphs=False)
+        before = lifecycle.read_registry(self.home).path.read_bytes()
+
+        plan = self.plan_presentation(compact=True, glyphs=False)
+        result = lifecycle.apply(plan)
+
+        self.assertFalse(plan.mutates)
+        self.assertFalse(result.registry_written)
+        self.assertEqual(lifecycle.read_registry(self.home).path.read_bytes(), before)
+        # Reported rather than silently succeeding, so that running it to ask
+        # "what is set" answers the question.
+        self.assertIn("already density compact, icons text only", str(plan.to_json()))
+
+    def test_a_preference_change_does_not_read_the_settings_file_at_all(self) -> None:
+        self.enable("fornax")
+        with self.deny_reads(self.settings):
+            self.presentation(glyphs=False)
+        self.assertFalse(self.effective().uses_glyphs)
+
+    def test_an_unparseable_settings_file_does_not_block_a_preference(self) -> None:
+        self.enable("fornax")
+        self.settings.write_bytes(b'{"model": "claude-opus-4",')
+        broken = self.settings.read_bytes()
+
+        self.presentation(glyphs=False)
+
+        # Fail-closed exists to stop us writing a configuration we do not
+        # understand. It must not stop a user whose configuration is already
+        # broken from making the line legible -- that user is the likeliest one to
+        # need it, and this operation cannot touch their file.
+        self.assertFalse(self.effective().uses_glyphs)
+        self.assertEqual(self.settings.read_bytes(), broken)
+
+    def test_a_missing_registry_is_refused_rather_than_created(self) -> None:
+        plan = self.plan_presentation(glyphs=False)
+
+        # Creating one here would clear `enable`'s refusal for the case where the
+        # compositor owns the slot and the registry -- the only record of the
+        # user's original command -- has gone missing.
+        self.assertIsNotNone(plan.refusal)
+        self.assertFalse(lifecycle.read_registry(self.home).present)
+        with self.assertRaises(lifecycle.OwnershipError):
+            lifecycle.apply(plan)
+
+    def test_an_unusable_registry_is_not_overwritten_for_a_preference(self) -> None:
+        self.enable("fornax")
+        registry_path = lifecycle.read_registry(self.home).path
+        registry_path.write_bytes(b'{"registry_version": 1, "providers": "not a list"}')
+        before = registry_path.read_bytes()
+
+        plan = self.plan_presentation(glyphs=False)
+
+        # MALFORMED_OR_UNSUPPORTED_CONFIG_FAILS_WITH_ZERO_MUTATION, applied to our
+        # own file: the providers and the recorded original are in it, and a
+        # rendering preference is not worth either of them.
+        self.assertIsNotNone(plan.refusal)
+        self.assertEqual(registry_path.read_bytes(), before)
+
+    def test_enabling_another_provider_preserves_the_preference(self) -> None:
+        self.enable("fornax")
+        self.presentation(compact=True, glyphs=False)
+
+        self.enable("circinus")
+
+        # "Do not auto-rewrite user preferences on upgrade" -- which in code means
+        # no operation but this one may change the stored mode.
+        self.assertEqual(self.effective(), render.PresentationMode.COMPACT_PLAIN)
+
+    def test_re_enabling_the_same_provider_preserves_the_preference(self) -> None:
+        self.enable("fornax")
+        self.presentation(glyphs=False)
+        self.enable("fornax", timeout_ms=400)
+        self.assertFalse(self.effective().uses_glyphs)
+
+    def test_disabling_one_provider_preserves_the_preference(self) -> None:
+        self.enable("fornax")
+        self.enable("circinus")
+        self.presentation(glyphs=False)
+
+        self.remove("circinus")
+
+        self.assertFalse(self.effective().uses_glyphs)
+
+    def test_the_last_provider_leaving_takes_the_preference_with_it(self) -> None:
+        self.enable("fornax")
+        self.presentation(glyphs=False)
+
+        self._uninstall()
+
+        # Deliberate, and the one place the preference does not survive: the
+        # preference is our state, and uninstall removes our state. What must
+        # survive is the user's, and it does -- their settings file comes back
+        # whole. Leaving a preferences file behind after an uninstall would be
+        # litter, not a courtesy.
+        self.assertFalse(lifecycle.read_registry(self.home).present)
+        self.assertEqual(self._read(), self.original)
 
 
 class RestorationTest(LifecycleCase):
