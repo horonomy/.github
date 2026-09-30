@@ -253,9 +253,22 @@ A host is `SUPPORTED` only if it can be configured to run an operator-supplied
 command and render its output. That is a narrow capability, and deliberately so:
 the compositor's whole design depends on owning one configured command slot.
 
-`UNSUPPORTED` and `UNKNOWN` are kept apart here for the reason the vocabulary
-section gives. A host with no such feature is a settled fact; a host nobody could
-examine is not.
+Three states must stay apart here, and the table carries them in two columns
+rather than collapsing them into one verdict:
+
+- **Unsupported** — the host has no such mechanism. A settled fact about the
+  version examined, recorded in the verdict column.
+- **Unavailable** — the host was not available to examine directly, so the verdict
+  rests on weaker evidence than a live run. Recorded in the version column, which
+  is why that column says *installed* or *not installed* rather than a bare
+  version string. OpenCode is `UNSUPPORTED` **and** was unavailable: the schema
+  genuinely has no such key, and the evidence is source rather than a running
+  binary. Both facts are true and neither substitutes for the other.
+- **Unknown** — not established at all. No host sits here, and none is being
+  quietly filed as unsupported to empty the row.
+
+Collapsing any pair of these would let a weaker claim wear a stronger claim's
+label.
 
 | Host | Version assessed | Verdict | Basis |
 |---|---|---|---|
