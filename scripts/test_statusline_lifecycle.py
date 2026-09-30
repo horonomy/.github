@@ -1714,11 +1714,19 @@ class ExplainCase(LifecycleCase):
         subprocess.run([str(path)], capture_output=True, timeout=30, check=False)
         return path
 
-    def detail_script(self, name: str, body: str) -> pathlib.Path:
+    def detail_script(self, name: str, body: str, *, warm: bool = True) -> pathlib.Path:
+        """A stand-in for a product's own explain surface.
+
+        `warm=False` for a script that is not meant to finish -- warming one of
+        those would hang the fixture rather than the thing under test. Safe to
+        skip there precisely because those tests assert on a timeout, and the
+        first-exec cost can only make a slow script slower.
+        """
         path = self.root / f"{name}.sh"
         path.write_text(f"#!/bin/sh\n{body}")
         path.chmod(0o755)
-        subprocess.run([str(path)], capture_output=True, timeout=30, check=False)
+        if warm:
+            subprocess.run([str(path)], capture_output=True, timeout=30, check=False)
         return path
 
     def status(
