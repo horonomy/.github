@@ -104,7 +104,11 @@ see [`engineering/security.md`](./engineering/security.md).
   `scripts/statusline_render.py`, HORO-1565), and the lifecycle by which that
   host takes the user's single statusline slot and gives it back unchanged
   ([`product/statusline-lifecycle.md`](./product/statusline-lifecycle.md);
-  implementation at `scripts/statusline_lifecycle.py`, HORO-1566).
+  implementation at `scripts/statusline_lifecycle.py`, HORO-1566), and the
+  audit recording which products and host tools can carry a statusline
+  segment at all, and the exact reason for every one that cannot
+  ([`product/statusline-capability-audit.md`](./product/statusline-capability-audit.md);
+  HORO-1570).
 - [`releases/`](./releases/) — release and public-surface invariants, plus
   the [Public Release Surface Contract](./releases/public-release-contract.md)
   (7-state model, per-surface derivation rules; implementation at
