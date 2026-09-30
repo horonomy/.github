@@ -1827,6 +1827,170 @@ def _reading(segment: object, mode: render.PresentationMode) -> dict:
     return reading
 
 
+def _mode_is_recognised(stored: object) -> bool:
+    """Whether `parse` resolved the stored preference or fell back to its default.
+
+    `PresentationMode.parse` deliberately never says which it did -- it exists to
+    always yield a renderable mode -- so ask it twice with two different
+    defaults. A value it recognises answers the same both times; one it does not
+    answers with whichever default it was handed. Asked rather than reimplemented
+    here, because a second copy of the accepted spellings is a second copy to
+    forget an alias in.
+    """
+    balanced = render.PresentationMode.parse(stored, render.PresentationMode.BALANCED)
+    plain = render.PresentationMode.parse(stored, render.PresentationMode.COMPACT_PLAIN)
+    return balanced is plain
+
+
+def _presentation_in_force(registry: RegistryDocument) -> tuple[render.PresentationMode, str]:
+    """The mode the line is rendered in, and where that came from.
+
+    The source matters to a reader being shown a key: a legend drawn in glyphs
+    for someone who asked for text would explain tokens they are not looking at,
+    and the likeliest cause of that is a stored preference this version cannot
+    read. So an unrecognised value is reported as one, rather than silently
+    appearing as the default it resolves to.
+    """
+    stored = _presentation_of(registry).get("mode")
+    mode = render.PresentationMode.parse(stored)
+    if stored is None:
+        return mode, "the default"
+    if not _mode_is_recognised(stored):
+        return mode, "the default; the saved preference is not a mode this version knows"
+    return mode, "your saved preference"
+
+
+def _explain_provider(
+    entry: object,
+    explain_argv: tuple[str, ...] | None,
+    mode: render.PresentationMode,
+    home: pathlib.Path | None,
+) -> dict:
+    """One provider: its live group as rendered, decoded, then its own words.
+
+    The group is rendered from the same status the readings are decoded from, so
+    the fragment shown and the explanation of it cannot describe different
+    moments. That status may come from Horonom's own provider cache, which is the
+    honest thing to decode -- it is what the line is showing.
+    """
+    status = compositor.run_provider(entry, entry.timeout_ms, home)
+    scope = _wire_value(status.scope) or entry.scope.value
+    report = {
+        "provider": status.provider,
+        "display_name": render.provider_display_name(status.provider),
+        "scope": scope,
+        "scope_token": render.scope_marker(scope, mode),
+        "scope_means": render.SCOPE_MEANINGS.get(scope, "a scope this version does not know"),
+        "availability": _wire_value(status.availability),
+        "rendered": render.render_provider(status, mode),
+        "readings": [
+            _reading(segment, mode) for segment in contract.order_segments(status)
+        ],
+    }
+    if explain_argv is None:
+        report["detail"] = {
+            "available": False,
+            "command_name": None,
+            "text": None,
+            # Said plainly rather than filled in. The host could write a paragraph
+            # about any of these products, and it would be a paragraph nobody
+            # maintains alongside the product it describes.
+            "problem": "this product registered no explain command, so the readings above are "
+            "all the host has to show",
+        }
+    else:
+        report["detail"] = _product_detail(explain_argv)
+    return report
+
+
+def explain(
+    settings_path: str | os.PathLike | None = None,
+    home: pathlib.Path | None = None,
+    *,
+    provider: str | None = None,
+    legend_only: bool = False,
+) -> dict:
+    """The key to the line, and what the line is saying right now.
+
+    Read-only on every path, like `doctor`, and for the same reason: this is the
+    command a reader runs when the line is confusing, which is exactly the moment
+    a surface must not be changing anything. It does run each provider, because a
+    decode of a remembered reading is a decode of nothing -- but running a
+    provider is what the statusline itself does several times a minute, and it
+    reaches no host configuration.
+
+    Two layers, in the order a reader needs them. The key comes from the host's
+    own rendering tables, so it is complete before anything is measured. The
+    decode pairs each token in each live reading with that key, and then hands
+    over to the owning product's own explain surface where one was registered.
+    The host does not paraphrase that deeper layer: a shared surface that
+    explained Fornax's verification states in its own words would be a second,
+    staler copy of Fornax's documentation.
+
+    Prints no configuration value, exactly as `doctor` does not. What reaches the
+    output is the provider's own rendered text -- which has already passed the
+    contract's privacy allowlist -- the host's fixed prose, and each command's
+    basename.
+    """
+    path = pathlib.Path(settings_path or DEFAULT_SETTINGS_PATH).expanduser()
+    registry = read_registry(home)
+    mode, mode_source = _presentation_in_force(registry)
+    report: dict = {
+        "registry_path": str(registry.path),
+        "presentation": {"mode": mode.value, "source": mode_source},
+        "legend": [
+            {
+                "title": section.title,
+                "entries": [dataclasses.asdict(entry) for entry in section.entries],
+            }
+            for section in render.legend(mode)
+        ],
+        "providers": [],
+        "notes": [],
+    }
+    if legend_only:
+        return report
+
+    try:
+        document = read_settings(path)
+    except LifecycleError as exc:
+        report["notes"].append(
+            f"the settings file could not be read ({exc}), so what is on your line cannot be "
+            "confirmed from here; the readings below are what the providers answer when asked"
+        )
+    else:
+        if classify(document) is not Ownership.HORONOM_OWNED:
+            report["notes"].append(
+                "the statusline slot is not Horonom-owned, so none of the readings below are "
+                "on your line; `statusline doctor` says who owns it"
+            )
+
+    if not registry.usable:
+        report["notes"].append(
+            f"the provider registry is unusable ({registry.problem}), so there is nothing to "
+            "decode; the key above is still correct"
+        )
+        return report
+
+    parsed = compositor.parse_registry(registry.data or empty_registry())
+    details = _explain_commands(registry)
+    for entry in parsed.providers:
+        if provider is not None and entry.provider != provider:
+            continue
+        report["providers"].append(
+            _explain_provider(entry, details.get(entry.provider), mode, home)
+        )
+    if provider is not None and not report["providers"]:
+        report["notes"].append(
+            f"no provider named {provider!r} is registered; `statusline list` shows which are"
+        )
+    elif not parsed.providers:
+        report["notes"].append(
+            "no providers are registered, so the line shows only your own statusline"
+        )
+    return report
+
+
 EXIT_OK = 0
 EXIT_REFUSED = 1
 EXIT_FAILED = 3
