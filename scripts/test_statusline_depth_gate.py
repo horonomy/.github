@@ -40,11 +40,20 @@ gate. Every state below is a state the product's own contract says it can report
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
+import json
+import pathlib
+import shlex
+import subprocess
 import unittest
+import unittest.mock
 
+import statusline_compositor as compositor
 import statusline_contract as contract
+import statusline_lifecycle as lifecycle
 import statusline_render as render
+from test_statusline_lifecycle import PresentationCase, RenderingCase
 from test_statusline_render import detail_atoms
 
 CLEAR = render.InformationDepth.CLEAR
@@ -1180,3 +1189,346 @@ class CrossDepthInvariantTest(unittest.TestCase):
                     with self.subTest(host=name, mode=mode.value, depth=depth.value):
                         line = render.compose(UPSTREAM, statuses, mode=mode, depth=depth)
                         self.assertTrue(line.startswith(UPSTREAM), line)
+
+
+# --------------------------------------------------------------------------- #
+# The switching matrix
+# --------------------------------------------------------------------------- #
+
+
+@dataclasses.dataclass(frozen=True)
+class SwitchCase:
+    """One walk across the depth axis, in one installation shape.
+
+    `products` are matrix rows from above, turned into real provider executables,
+    so the states a switch is checked against are the same states the semantic
+    matrices assert — rather than a second, friendlier set of fixtures that only
+    the switching tests ever see.
+    """
+
+    name: str
+    products: tuple[Case, ...]
+    rendering: tuple[bool, bool] | None
+    start: render.InformationDepth
+    target: render.InformationDepth
+
+    @property
+    def is_noop(self) -> bool:
+        return self.start is self.target
+
+
+def _one() -> tuple[Case, ...]:
+    return (row(FORNAX, "verified"),)
+
+
+def _wedged() -> tuple[Case, ...]:
+    """Three products, two of which cannot be read.
+
+    The shape most likely to lose a product on the way across: a switch that
+    rebuilt the enabled set from whatever answered would silently drop these two.
+    """
+    return tuple(row(cases, name) for cases, name in zip((FORNAX, CIRCINUS, LIBRA), HOSTS[2][1]))
+
+
+def _escalated() -> tuple[Case, ...]:
+    """Three products all demanding attention, rendered in text-only compact.
+
+    Carries the rendering preference so that the orthogonality claim is checked
+    under a switch rather than only in the planner: asking for supporting context
+    must not quietly restore glyphs or loosen the density.
+    """
+    return tuple(row(cases, name) for cases, name in zip((FORNAX, CIRCINUS, LIBRA), HOSTS[3][1]))
+
+
+# Four transitions -- both directions, and both no-ops, because "set the depth you
+# are already at" is how a script re-asserts a preference and it must not write --
+# in each of three installation shapes.
+SWITCHES = tuple(
+    SwitchCase(
+        name=f"{shape}/{start.value}_to_{target.value}",
+        products=products(),
+        rendering=rendering,
+        start=start,
+        target=target,
+    )
+    for shape, products, rendering in (
+        ("one_product", _one, None),
+        ("three_products", _wedged, None),
+        ("three_products_text_compact", _escalated, (True, False)),
+    )
+    for start, target in ((CLEAR, DETAIL), (DETAIL, CLEAR), (CLEAR, CLEAR), (DETAIL, DETAIL))
+)
+
+
+def switch(name: str) -> SwitchCase:
+    return next(case for case in SWITCHES if case.name == name)
+
+
+@dataclasses.dataclass(frozen=True)
+class Untouched:
+    """Everything a depth switch must leave exactly as it found it.
+
+    Modes as well as bytes: a switch that rewrote the reader's script by copying
+    it back without its executable bit would compare equal on content and leave
+    the host unable to run it.
+    """
+
+    settings: bytes
+    upstream: bytes
+    upstream_mode: int
+    registry: dict
+    mode: render.PresentationMode
+    providers: tuple[str, ...]
+    files: dict[str, bytes]
+    modes: dict[str, int]
+
+
+class DepthSwitchTest(RenderingCase, PresentationCase):
+    """Moving between depths, checked for everything it must not take with it.
+
+    Composed from the two existing lifecycle fixtures rather than given a new one:
+    `RenderingCase` runs the configured statusline the way Claude Code does, and
+    `PresentationCase` drives the real planner. A third harness here would let
+    this gate pass against a switching path and a rendering path no user has.
+    """
+
+    @property
+    def counter(self) -> pathlib.Path:
+        """Where the provider fixtures record that they were asked."""
+        return self.root / "provider-runs"
+
+    def asked(self) -> int:
+        """How many times any provider has been executed so far."""
+        return len(self.counter.read_bytes()) if self.counter.exists() else 0
+
+    def provider_of(self, case: Case) -> pathlib.Path:
+        """A real executable emitting one matrix row, as the wire document.
+
+        It records each execution, so "no extra provider request" can be counted
+        rather than inferred. The counter is read as a delta at each measurement
+        point, never assumed to start at zero: writing an executable warms it by
+        running it once, and a test that assumed otherwise would be measuring the
+        fixture's own setup.
+        """
+        payload = json.dumps(case.snapshot.to_wire())
+        return self.script(
+            f"{case.snapshot.provider}-provider.sh",
+            f"#!/bin/sh\ncat >/dev/null\nprintf 'x' >> {shlex.quote(str(self.counter))}\n"
+            f"printf '%s' {shlex.quote(payload)}\n",
+        )
+
+    def rendered(self) -> str:
+        """The line as the host receives it, without the terminating newline.
+
+        The trailing newline is the compositor being a well-behaved command, not
+        part of the line's shape -- and the shape is what the depth owns.
+        """
+        return self.render().rstrip("\n")
+
+    def install(self, case: SwitchCase) -> None:
+        for product in case.products:
+            argv = (str(self.provider_of(product)),)
+            self.enable(product.snapshot.provider, argv=argv, timeout_ms=2000)
+        if case.rendering is not None:
+            compact, glyphs = case.rendering
+            self.presentation(compact=compact, glyphs=glyphs)
+        self.presentation(depth=case.start)
+        self.assertIs(self.effective_depth(), case.start)
+
+    def capture(self) -> Untouched:
+        registry_path = lifecycle.read_registry(self.home).path
+        files = {
+            str(path): path.read_bytes()
+            for path in sorted(self.root.rglob("*"))
+            if path.is_file() and path != registry_path
+        }
+        return Untouched(
+            settings=self.settings.read_bytes(),
+            upstream=self.upstream.read_bytes(),
+            upstream_mode=self.upstream.stat().st_mode,
+            registry=self._registry(),
+            mode=self.effective(),
+            providers=tuple(entry["provider"] for entry in self._registry()["providers"]),
+            files=files,
+            modes={path: pathlib.Path(path).stat().st_mode for path in files},
+        )
+
+    def assert_untouched(self, before: Untouched) -> None:
+        """The six things a depth switch must not disturb, checked together.
+
+        Together rather than as six tests over one shared switch, because the
+        interesting failure is a switch that gets one of them right and takes
+        something else with it in the same step.
+        """
+        after = self.capture()
+
+        self.assertEqual(after.settings, before.settings)
+        self.assertEqual(after.upstream, before.upstream)
+        self.assertEqual(after.upstream_mode, before.upstream_mode)
+        # Path set as well as contents, so a lock file, a marker or a queued job
+        # appearing counts as a change.
+        self.assertEqual(sorted(after.files), sorted(before.files))
+        self.assertEqual(after.files, before.files)
+        self.assertEqual(after.modes, before.modes)
+        self.assertEqual(after.providers, before.providers)
+        self.assertEqual(after.mode, before.mode)
+
+        outside = {key: value for key, value in after.registry.items() if key != lifecycle.PRESENTATION_KEY}
+        self.assertEqual(
+            outside,
+            {key: value for key, value in before.registry.items() if key != lifecycle.PRESENTATION_KEY},
+        )
+        moved = {
+            key
+            for key in set(after.registry.get(lifecycle.PRESENTATION_KEY, {}))
+            | set(before.registry.get(lifecycle.PRESENTATION_KEY, {}))
+            if after.registry.get(lifecycle.PRESENTATION_KEY, {}).get(key)
+            != before.registry.get(lifecycle.PRESENTATION_KEY, {}).get(key)
+        }
+        # `mode` is in the owned set because the planner resolves and restates it on
+        # every write; what must not move is the mode actually in force, asserted
+        # above through the compositor's own parser.
+        self.assertLessEqual(moved, set(lifecycle._OWNED_PRESENTATION_KEYS), moved)
+
+    @contextlib.contextmanager
+    def no_processes(self):
+        """No process may start while the depth is changing.
+
+        One assertion covering four of the ticket's prohibitions at once — no
+        provider re-run, no daemon start, no reinstall, no rebuild — because all
+        four have to start a process to happen. Patched on `subprocess` itself
+        rather than on the compositor, so a switch that grew its own spawn path
+        somewhere else is caught too.
+        """
+
+        def refuse(*args, **kwargs):
+            raise AssertionError(f"a depth switch started a process: {args[:1]}")
+
+        with unittest.mock.patch.object(subprocess, "Popen", refuse):
+            with unittest.mock.patch.object(subprocess, "run", refuse):
+                yield
+
+    def switch(self, case: SwitchCase) -> lifecycle.Plan:
+        before = self.capture()
+        plan = self.plan_presentation(depth=case.target)
+        with self.no_processes():
+            result = lifecycle.apply(plan)
+        self.assertFalse(result.settings_written)
+        self.assertEqual(result.registry_written, not case.is_noop)
+        self.assert_untouched(before)
+        self.assertIs(self.effective_depth(), case.target)
+        return plan
+
+    def test_every_case_is_a_distinct_walk(self) -> None:
+        self.assertEqual(len({case.name for case in SWITCHES}), len(SWITCHES))
+        self.assertEqual(len(SWITCHES), 12)
+
+    def test_the_matrix_covers_both_directions_both_noops_and_a_stated_rendering(self) -> None:
+        # Guards the matrix itself: a comprehension that quietly lost a transition
+        # would still produce twelve names.
+        walks = {(case.start, case.target) for case in SWITCHES}
+        self.assertEqual(walks, {(CLEAR, DETAIL), (DETAIL, CLEAR), (CLEAR, CLEAR), (DETAIL, DETAIL)})
+        self.assertEqual(len({case.rendering for case in SWITCHES}), 2)
+        self.assertEqual({len(case.products) for case in SWITCHES}, {1, 3})
+
+    def test_a_switch_takes_nothing_else_with_it(self) -> None:
+        for case in SWITCHES:
+            with self.subTest(case=case.name):
+                self.setUp()
+                self.install(case)
+                self.switch(case)
+
+    def test_a_depth_already_in_force_writes_nothing_at_all(self) -> None:
+        for case in SWITCHES:
+            if not case.is_noop:
+                continue
+            with self.subTest(case=case.name):
+                self.setUp()
+                self.install(case)
+                registry_path = lifecycle.read_registry(self.home).path
+                before = registry_path.read_bytes()
+                plan = self.switch(case)
+                # Byte-identical, not merely equivalent: re-serialising our own file
+                # to record a change that is not happening is still a write, and a
+                # user reading file timestamps to see what a command did deserves
+                # the honest answer.
+                self.assertFalse(plan.mutates)
+                self.assertEqual(registry_path.read_bytes(), before)
+
+    def test_the_products_still_render_after_every_switch(self) -> None:
+        for case in SWITCHES:
+            with self.subTest(case=case.name):
+                self.setUp()
+                self.install(case)
+                self.switch(case)
+                line = self.rendered()
+                self.assertTrue(line.startswith("MY OWN LINE"), line)
+                for product in case.products:
+                    display = render.provider_display_name(product.snapshot.provider)
+                    # Exactly once. A switch that left the previous rendering in
+                    # place and appended the new one would still contain every
+                    # product, and the reader would see each of them twice.
+                    self.assertEqual(line.count(display), 1, line)
+
+    def test_the_depth_switched_to_is_the_depth_rendered_at(self) -> None:
+        # The claim the stored preference exists to make. Checked through the
+        # rendered line rather than the registry, because a preference the
+        # compositor does not honour is not a preference.
+        for case in SWITCHES:
+            with self.subTest(case=case.name):
+                self.setUp()
+                self.install(case)
+                self.switch(case)
+                line = self.rendered()
+                rows = 0 if case.target is CLEAR else len(case.products)
+                self.assertEqual(line.count("\n"), rows, line)
+                if rows:
+                    # The reader's own line keeps a row to itself rather than
+                    # becoming the first product's prefix.
+                    self.assertEqual(line.split("\n")[0], "MY OWN LINE")
+
+    def test_no_product_changes_what_it_says_on_the_way_across(self) -> None:
+        """The cross-depth invariant, through the real switch rather than the API.
+
+        `CrossDepthInvariantTest` proves the renderer projects one snapshot two
+        ways. This proves the thing a reader actually does — change the setting and
+        look again — does not change the answer, with the states coming from real
+        provider processes and the depth from the real registry.
+        """
+        for case in SWITCHES:
+            with self.subTest(case=case.name):
+                self.setUp()
+                self.install(case)
+                before = self.rendered()
+                self.switch(case)
+                after = self.rendered()
+                for product in case.products:
+                    primary = primary_of(product.snapshot)
+                    if primary is None:
+                        continue
+                    marker = render.state_marker(primary.state.value, self.effective())
+                    with self.subTest(provider=product.snapshot.provider):
+                        for line in (before, after):
+                            self.assertIn(f"{marker} {primary.label}", line, line)
+
+    def test_a_switch_does_not_ask_the_products_anything(self) -> None:
+        """No extra provider request, counted rather than inferred.
+
+        `no_processes` already forbids starting one, but that is an assertion about
+        mechanism. This is the assertion about observable effect, which is what the
+        ticket asks for: the fixtures count their own executions, and the count
+        does not move across a switch that is rendering three of them.
+        """
+        case = switch("three_products/clear_to_detail")
+        self.install(case)
+        warmed = self.asked()
+        self.rendered()
+        before = self.asked()
+        # The control: a render does ask, once per product. Without it, a switch
+        # asking nothing would be indistinguishable from a counter that never
+        # records anything.
+        self.assertEqual(before - warmed, len(case.products))
+
+        self.switch(case)
+
+        self.assertEqual(self.asked(), before)
