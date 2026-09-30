@@ -1970,7 +1970,9 @@ def _explain_provider(
     return report
 
 
-def _provider_behind(asked: str, registered: frozenset[str] | set[str]) -> tuple[str, str | None]:
+def _provider_behind(
+    asked: str | None, registered: frozenset[str] | set[str]
+) -> tuple[str | None, tuple[str, ...]]:
     """The provider a reader meant, given what they had in front of them.
 
     What they have is the line, and the line advertises segment keys like
@@ -1978,17 +1980,20 @@ def _provider_behind(asked: str, registered: frozenset[str] | set[str]) -> tuple
     called after a whole key -- sent them to `list` to work out a name they had
     never been shown. The provider half of a segment key is the answer.
 
-    Returns the name to decode and, when it is not the one asked for, the note
-    saying so. Nothing is guessed: the half before the first dot has to be a
-    registered provider, or the original name is handed back untouched to be
-    refused where every other unknown name is.
+    Returns the name to decode and any notes explaining a name that is not the one
+    asked for, so the caller can hand both on without a branch of its own. Nothing
+    is guessed: the half before the first dot has to be a registered provider, or
+    the original name is handed back untouched to be refused where every other
+    unknown name is. `None` in means no provider was asked for, and `None` out.
     """
-    if asked in registered or "." not in asked:
-        return asked, None
+    if asked is None or asked in registered or "." not in asked:
+        return asked, ()
     head = asked.split(".", 1)[0]
     if head not in registered:
-        return asked, None
-    return head, f"{asked!r} is a segment key, not a provider; decoding {head!r}, which owns it"
+        return asked, ()
+    return head, (
+        f"{asked!r} is a segment key, not a provider; decoding {head!r}, which owns it",
+    )
 
 
 def explain(
@@ -2062,12 +2067,8 @@ def explain(
 
     parsed = compositor.parse_registry(registry.data or empty_registry())
     details = _explain_commands(registry)
-    if provider is not None:
-        provider, decoded = _provider_behind(
-            provider, {entry.provider for entry in parsed.providers}
-        )
-        if decoded is not None:
-            report["notes"].append(decoded)
+    provider, decoded = _provider_behind(provider, {entry.provider for entry in parsed.providers})
+    report["notes"].extend(decoded)
     for entry in parsed.providers:
         if provider is not None and entry.provider != provider:
             continue
