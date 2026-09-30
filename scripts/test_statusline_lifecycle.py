@@ -948,6 +948,96 @@ class RestorationTest(LifecycleCase):
             plan.notes,
         )
 
+    def test_a_plan_does_not_claim_to_remove_a_marker_that_is_not_there(self) -> None:
+        """A plan is what the user consents to, so its changes have to be real.
+
+        Note this is not the `DRIFTED` fixture above. There the marker survives
+        because only the command was edited, so the removal it discloses does
+        happen. The phantom case needs the marker gone as well -- a user who took
+        their statusline back by hand -- which is also the state the founder's
+        own workstation was in after earlier per-ticket testing left a registry
+        behind. Announcing a removal there described an edit to a key that did
+        not exist, in the one output a user reads before authorizing a write.
+        """
+        self.enable("fornax")
+        theirs = dict(self._read())
+        theirs[lifecycle.STATUS_LINE_KEY] = {"type": "command", "command": "/bin/true", "padding": 1}
+        self.write(theirs)
+        self.assertIs(
+            lifecycle.classify(lifecycle.read_settings(self.settings)),
+            lifecycle.Ownership.USER_OWNED,
+        )
+
+        plan = self.plan_remove("fornax", operation="uninstall")
+
+        marker_claims = [
+            change
+            for change in plan.changes
+            if change.target == f"{lifecycle.STATUS_LINE_KEY}.{lifecycle.MARKER_KEY}"
+        ]
+        self.assertEqual(marker_claims, [], "the plan claimed a marker removal with no marker")
+        # The rest of the plan is unaffected: it still refuses to touch the
+        # command, and still retires the state it does own.
+        self.assertTrue(any("CONFIG_DRIFT" in change.detail for change in plan.changes))
+        lifecycle.apply(plan)
+        self.assertEqual(self._read(), theirs)
+
+    def test_a_marker_that_is_there_is_still_disclosed(self) -> None:
+        # The other half of the same fix. Suppressing the claim in every case
+        # would pass the test above while hiding a real edit to the user's file.
+        self.enable("fornax")
+        plan = self.plan_remove("fornax", operation="uninstall")
+        self.assertTrue(
+            any(
+                change.target == f"{lifecycle.STATUS_LINE_KEY}.{lifecycle.MARKER_KEY}"
+                for change in plan.changes
+            )
+        )
+
+    def test_the_last_provider_leaving_takes_its_cached_readings_with_it(self) -> None:
+        """The other half of `A+B+C -> A+C`: B has to be able to go away entirely.
+
+        Observed on the DogFood workstation -- a full uninstall restored the
+        founder's statusline byte-for-byte and still left a cached reading on
+        disk, under a state directory whose registry had just been deleted.
+        """
+        self.enable("fornax")
+        cache = compositor.cache_dir(self.home)
+        cache.mkdir(parents=True, exist_ok=True)
+        stale = cache / "fornax.json"
+        stale.write_text('{"cache_version": 1, "expires_at": 0, "source": "x", "wire": {}}')
+
+        result = self._uninstall()
+
+        self.assertFalse(stale.exists(), "a cached reading outlived the product")
+        self.assertIn(stale, result.plan.state_to_remove)
+        # Disclosed by its own path. A plan naming the directory would be
+        # describing a removal that does not happen.
+        self.assertIn(
+            (lifecycle.ChangeKind.REMOVE, str(stale)),
+            [(change.kind, change.target) for change in result.plan.changes],
+        )
+        self.assertNotIn(
+            str(cache), [change.target for change in result.plan.changes], "named the directory"
+        )
+        # The directory stays: nothing here removes directories.
+        self.assertTrue(cache.exists())
+
+    def test_disabling_one_of_several_keeps_every_cached_reading(self) -> None:
+        # Only the *last* provider leaving retires the shared state. Discarding
+        # another product's cached reading because this one was disabled would be
+        # exactly the `C` loss the invariant forbids.
+        self.enable("fornax")
+        self.enable("circinus")
+        cache = compositor.cache_dir(self.home)
+        cache.mkdir(parents=True, exist_ok=True)
+        theirs = cache / "circinus.json"
+        theirs.write_text('{"cache_version": 1, "expires_at": 0, "source": "x", "wire": {}}')
+
+        self.remove("fornax", operation="disable")
+
+        self.assertTrue(theirs.exists())
+
     def test_removal_never_deletes_the_file_it_shares_with_the_host(self) -> None:
         self.settings.unlink()
         self.enable("fornax")
@@ -1098,6 +1188,44 @@ class FailSafeTest(LifecycleCase):
         # the registry says so rather than leaving the field absent and ambiguous.
         self.assertNotIn("upstream", self._registry())
         self.assertIsNone(self._registry()["lifecycle"]["created_status_line"])
+
+    def test_repairing_drift_records_the_command_the_user_chose_most_recently(self) -> None:
+        """The route the drift refusal advertises has to exist, and has to be safe.
+
+        `--adopt` on a drifted configuration is a user saying "take the slot back".
+        The command sitting in the file is one they chose after our marker was
+        written, so it is theirs, and recording it as upstream is the only outcome
+        that neither discards it nor resurrects the older command we remembered.
+        """
+        self.enable("fornax")
+        theirs = "/Users/founder/.claude/a different statusline.sh"
+        drifted = self._read()
+        drifted[lifecycle.STATUS_LINE_KEY]["command"] = theirs
+        self.write(drifted)
+        self.assertIs(
+            lifecycle.classify(lifecycle.read_settings(self.settings)),
+            lifecycle.Ownership.DRIFTED,
+        )
+
+        plan = self.plan_enable("circinus", adopt=True)
+        self.assertIsNone(plan.refusal)
+        lifecycle.apply(plan)
+
+        # Not the command recorded before the drift: that one stopped being their
+        # statusline the moment they changed it.
+        self.assertEqual(self._registry()["upstream"]["command"], theirs)
+        self.assertEqual(
+            lifecycle.classify(lifecycle.read_settings(self.settings)),
+            lifecycle.Ownership.HORONOM_OWNED,
+        )
+        self.assertTrue(
+            any(change.target == "registry.upstream" for change in plan.changes),
+            "replacing the recorded original is a disclosed change, not a silent one",
+        )
+        # And the whole point of repairing rather than refusing forever: uninstall
+        # now puts *their* command back.
+        self._uninstall()
+        self.assertEqual(self._read()[lifecycle.STATUS_LINE_KEY]["command"], theirs)
 
 
 class MalformedConfigTest(LifecycleCase):
@@ -1363,14 +1491,18 @@ class AtomicWriteTest(LifecycleCase):
             lifecycle._verify(tampered)
 
 
-class HostUsabilityTest(LifecycleCase):
-    """The statusline must actually render after every lifecycle step.
+class RenderingCase(LifecycleCase):
+    """A fixture that runs the configured statusline the way Claude Code does.
 
-    Every other test in this file reads the configuration back. None of them
-    prove the host tool can still use it, and the contract is explicit that "a
-    preservation test that 'reads back clean' but breaks the tool doesn't count".
-    So these run the configured command the way Claude Code does -- through a
-    shell, with a Claude-shaped JSON payload on stdin -- and read the line.
+    Every other fixture here reads the configuration back. None of them prove the
+    host tool can still use it, and the contract is explicit that "a preservation
+    test that 'reads back clean' but breaks the tool doesn't count". So this one
+    runs the configured command through a shell, with a Claude-shaped JSON payload
+    on stdin, and reads the line.
+
+    Shared with `test_statusline_release_gate` rather than copied into it: a
+    second render harness that drifted from this one would let the release gate
+    pass against a rendering path no user has.
     """
 
     PAYLOAD = json.dumps(
@@ -1383,18 +1515,22 @@ class HostUsabilityTest(LifecycleCase):
         }
     ).encode("utf-8")
 
-    def script(self, name: str, body: str) -> pathlib.Path:
+    def script(self, name: str, body: str, *, warm: bool = True) -> pathlib.Path:
         """Write an executable script and pay its first-execution cost up front.
 
         A freshly written executable costs a large one-time evaluation on macOS,
         easily more than a provider's whole timeout budget. Warming it here means a
         timeout later is a real finding rather than the operating system doing
         first-run bookkeeping.
+
+        `warm=False` for a script written never to finish -- warming one of those
+        would hang this call instead of the test that is supposed to time out.
         """
         path = self.root / name
         path.write_text(body)
         path.chmod(0o755)
-        subprocess.run([str(path)], capture_output=True, input=b"{}", timeout=30, check=False)
+        if warm:
+            subprocess.run([str(path)], capture_output=True, input=b"{}", timeout=30, check=False)
         return path
 
     def provider_script(self, name: str, provider: str, label: str) -> pathlib.Path:
@@ -1441,6 +1577,10 @@ class HostUsabilityTest(LifecycleCase):
         data = rich_settings()
         data[lifecycle.STATUS_LINE_KEY]["command"] = str(self.upstream)
         self.write(data)
+
+
+class HostUsabilityTest(RenderingCase):
+    """The statusline must actually render after every lifecycle step."""
 
     def test_the_line_renders_at_every_step_of_the_full_lifecycle(self) -> None:
         self.assertEqual(self.render(), "MY OWN LINE")
@@ -2256,6 +2396,30 @@ class ExplainCommandLineTest(ExplainCase):
 
         self.assertEqual(report["providers"], [])
         self.assertIn("no provider named 'eltanin'", " ".join(report["notes"]))
+
+    def test_a_segment_key_off_the_line_decodes_its_provider(self) -> None:
+        """The key a reader actually has is the one the line showed them.
+
+        Segments carry `explain_key` values like `fornax.verification`, so that is
+        what gets typed here. Answering "no provider named 'fornax.verification'"
+        was true and useless: it sent the reader to `list` to discover a name they
+        were never shown, to reach documentation that was already reachable.
+        """
+        self.register(self.status(segments=(segment("verification", "ok", "Verified"),)))
+
+        report = self.explain(provider="fornax.verification")
+
+        self.assertEqual([p["provider"] for p in report["providers"]], ["fornax"])
+        self.assertIn("is a segment key", " ".join(report["notes"]))
+
+    def test_a_dotted_name_with_no_provider_behind_it_is_still_refused(self) -> None:
+        # The split must not become a way to match anything with a dot in it.
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+
+        report = self.explain(provider="eltanin.estimate")
+
+        self.assertEqual(report["providers"], [])
+        self.assertIn("no provider named 'eltanin.estimate'", " ".join(report["notes"]))
 
     def test_the_subcommand_writes_nothing_and_succeeds(self) -> None:
         self.register(self.status(segments=(segment("v", "unknown", "Verification"),)))

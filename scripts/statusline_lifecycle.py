@@ -767,7 +767,7 @@ def _enable_refusal(
                 "upgrade Horonom if this shape is newer than this version",
             ),
         )
-    if ownership is Ownership.DRIFTED:
+    if ownership is Ownership.DRIFTED and not adopt:
         return (
             "CONFIG_DRIFT: the statusLine carries a Horonom ownership marker but its "
             "command is not the compositor, so it was changed outside this lifecycle",
@@ -865,7 +865,14 @@ def _taking_the_slot(
             [Change(ChangeKind.ADD, STATUS_LINE_KEY, "created; no statusline was configured")],
         )
 
-    if ownership is Ownership.USER_OWNED:
+    # Drift joins this branch rather than the one below, and the distinction is
+    # the whole of what repairing drift means. The command on disk is one the user
+    # chose after the marker was written, so it is theirs in exactly the way an
+    # unmarked one is, and it is what must be recorded as upstream. Falling
+    # through to the "no proven record" path instead would take the slot and
+    # remember nothing -- discarding the command they had just chosen, which is
+    # the clobber this whole lifecycle exists to prevent.
+    if ownership in (Ownership.USER_OWNED, Ownership.DRIFTED):
         changes.append(
             Change(
                 ChangeKind.UPDATE,
@@ -874,6 +881,15 @@ def _taking_the_slot(
                 "upstream provider, run first, and its output kept at the front of the line",
             )
         )
+        if ownership is Ownership.DRIFTED and _upstream_of(registry) is not None:
+            changes.append(
+                Change(
+                    ChangeKind.UPDATE,
+                    "registry.upstream",
+                    "the previously recorded original is replaced by the command configured "
+                    "now, which is the one the user chose most recently",
+                )
+            )
         return dict(before), before["command"], False, changes
 
     # Only a proven prior install may hand down a recorded original. An adopted
@@ -1360,8 +1376,15 @@ def _released_status_line(
     remembered command from overwriting a newer one the user chose themselves.
     """
     after = dict(before)
-    after.pop(MARKER_KEY, None)
-    changes = [Change(ChangeKind.REMOVE, f"{STATUS_LINE_KEY}.{MARKER_KEY}", "ownership marker removed")]
+    # Only disclosed when there is one to remove. Announcing it unconditionally
+    # made every drift plan claim a marker removal that could not happen, since
+    # a statusline the compositor does not own has no marker in it -- a plan is
+    # the thing the user consents to, so a change listed in one has to be real.
+    changes: list[Change] = []
+    if after.pop(MARKER_KEY, None) is not None:
+        changes.append(
+            Change(ChangeKind.REMOVE, f"{STATUS_LINE_KEY}.{MARKER_KEY}", "ownership marker removed")
+        )
     notes: list[str] = []
 
     if ownership is not Ownership.HORONOM_OWNED:
@@ -1408,6 +1431,30 @@ def _released_status_line(
     return after, changes, notes
 
 
+def _cached_readings(home: pathlib.Path) -> tuple[pathlib.Path, ...]:
+    """Cached provider answers, so the last provider leaving takes them with it.
+
+    Without this an uninstall left the last readings on disk under a state
+    directory whose registry had just been deleted -- product state outliving the
+    product, which is the half of `A+B+C -> A+C` that says B must be able to go
+    away completely. Harmless to a later install, since the compositor validates
+    every cache entry against a TTL and a source fingerprint, but a product does
+    not get to leave its own residue behind and call the removal done.
+
+    Files only, and only the ones this module's own cache directory holds. The
+    directory itself stays: removing directories is not something any path here
+    does, and an empty one it created is a smaller surprise than an `rmdir` of a
+    path someone else may have put something in.
+    """
+    directory = compositor.cache_dir(home)
+    try:
+        return tuple(sorted(path for path in directory.iterdir() if path.is_file()))
+    except OSError:
+        # An unreadable or absent cache directory is not a reason to refuse the
+        # removal the user asked for; the readings in it are not authority.
+        return ()
+
+
 def _giving_the_slot_back(
     document: SettingsDocument, ownership: Ownership, registry: RegistryDocument
 ) -> tuple[dict | None, tuple[pathlib.Path, ...], list[Change], list[str]]:
@@ -1422,9 +1469,17 @@ def _giving_the_slot_back(
     notes: list[str] = []
     state_to_remove: tuple[pathlib.Path, ...] = ()
     if registry.present:
-        state_to_remove = (registry.path,)
+        readings = _cached_readings(registry.path.parent)
+        state_to_remove = (registry.path, *readings)
         changes.append(
             Change(ChangeKind.REMOVE, str(registry.path), "the last provider is gone with it")
+        )
+        # Named one at a time, because the containing directory is not removed and
+        # a plan that said `REMOVE <cache dir>` would be describing something that
+        # does not happen. At most `MAX_PROVIDERS` of these.
+        changes.extend(
+            Change(ChangeKind.REMOVE, str(reading), "cached reading discarded with it")
+            for reading in readings
         )
 
     before = document.status_line
@@ -1915,6 +1970,32 @@ def _explain_provider(
     return report
 
 
+def _provider_behind(
+    asked: str | None, registered: frozenset[str] | set[str]
+) -> tuple[str | None, tuple[str, ...]]:
+    """The provider a reader meant, given what they had in front of them.
+
+    What they have is the line, and the line advertises segment keys like
+    `libra.estimate`. Refusing that name -- truthfully, because no provider is
+    called after a whole key -- sent them to `list` to work out a name they had
+    never been shown. The provider half of a segment key is the answer.
+
+    Returns the name to decode and any notes explaining a name that is not the one
+    asked for, so the caller can hand both on without a branch of its own. Nothing
+    is guessed: the half before the first dot has to be a registered provider, or
+    the original name is handed back untouched to be refused where every other
+    unknown name is. `None` in means no provider was asked for, and `None` out.
+    """
+    if asked is None or asked in registered or "." not in asked:
+        return asked, ()
+    head = asked.split(".", 1)[0]
+    if head not in registered:
+        return asked, ()
+    return head, (
+        f"{asked!r} is a segment key, not a provider; decoding {head!r}, which owns it",
+    )
+
+
 def explain(
     settings_path: str | os.PathLike | None = None,
     home: pathlib.Path | None = None,
@@ -1986,6 +2067,8 @@ def explain(
 
     parsed = compositor.parse_registry(registry.data or empty_registry())
     details = _explain_commands(registry)
+    provider, decoded = _provider_behind(provider, {entry.provider for entry in parsed.providers})
+    report["notes"].extend(decoded)
     for entry in parsed.providers:
         if provider is not None and entry.provider != provider:
             continue

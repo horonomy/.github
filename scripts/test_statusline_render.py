@@ -1187,6 +1187,94 @@ class TestComposeDegradation(unittest.TestCase):
         self.assertIn("Fornax", block)
 
 
+class TestHypotheticalUnderPressure(unittest.TestCase):
+    """A would-have keeps its disclaimer down to the narrowest rung.
+
+    Its own fixture rather than `TestComposeDegradation.ALL`, deliberately. In
+    that fixture Libra reports `critical`, so the narrowest rung -- which shows
+    the single worst reading -- always picks Libra and never renders the
+    hypothetical segment at all. An assertion about hypotheticals placed there
+    passes because the path is never taken, which is the shape of a guard that
+    reports a safety it cannot see. Here Circinus's `warn` is the worst thing on
+    the line, so the rung has to render it.
+    """
+
+    # Two segments, so the rung must also fit the hidden-segment marker. With
+    # one it would have columns to spare and the interesting case would not arise.
+    STATUSES = (circinus_status(), fornax_status())
+    MAX_BUDGET = 120
+
+    def hypothetical_forms(self) -> set[str]:
+        """Every way the renderer can spell the hypothetical label.
+
+        Taken from the renderer's own truncation helper rather than guessed,
+        because the rung that broke is the one that shortens the label: a check
+        for the full label alone would have missed the defect exactly as the
+        never-rendered-partially check above did.
+        """
+        labels = [s.label for st in self.STATUSES for s in st.segments if s.hypothetical]
+        self.assertTrue(labels, "the fixture no longer exercises a hypothetical segment")
+        forms = set(labels)
+        for label in labels:
+            for columns in range(render.MIN_LABEL_COLUMNS, render.display_width(label) + 1):
+                shortened = render.truncate_to_width(label, columns)
+                if shortened:
+                    forms.add(shortened)
+        return forms
+
+    def test_a_hypothetical_label_never_appears_without_its_marker(self):
+        # The stronger form of `test_the_not_enforced_marker_is_never_rendered_
+        # partially`, and the form that was missing. An absent marker is worse
+        # than a mangled one: `Shadow mode [NOT` is visibly broken and a reader
+        # distrusts it, while `Shadow mo...` with nothing after it is a complete
+        # sentence that happens to be false.
+        forms = self.hypothetical_forms()
+        for mode in MODES:
+            for budget in range(0, self.MAX_BUDGET):
+                block = render.compose(None, self.STATUSES, mode=mode, width_budget=budget)
+                if any(form in block for form in forms):
+                    self.assertIn(
+                        f"[{render.HYPOTHETICAL_TEXT}]",
+                        block,
+                        f"{mode.value}/{budget}: {block}",
+                    )
+
+    def test_the_narrow_rung_is_actually_reached_by_this_fixture(self):
+        # What makes the test above non-vacuous, asserted rather than assumed.
+        # The rung is identified by the hidden marker with a single label, which
+        # only `_fit_minimal` produces for a two-segment fixture.
+        reached = [
+            render.compose(None, self.STATUSES, mode=mode, width_budget=budget)
+            for mode in MODES
+            for budget in range(0, self.MAX_BUDGET)
+        ]
+        forms = self.hypothetical_forms()
+        narrow = [
+            block
+            for block in reached
+            if render._hidden_marker(1) in block
+            and any(form in block for form in forms)
+            and "Verified" not in block
+        ]
+        self.assertTrue(narrow, "no budget in the sweep reaches the single-worst-reading rung")
+
+    def test_the_rung_hands_the_line_back_where_the_marker_cannot_be_afforded(self):
+        # The other half of the fix, and the cost of it. Charging the marker in
+        # full means some budgets can no longer say anything, and those budgets
+        # return nothing rather than a cheaper sentence that is not true. This
+        # asserts the give-up path is real and not just a branch nobody reaches.
+        for mode in MODES:
+            widths = [
+                render.display_width(
+                    render.compose(None, self.STATUSES, mode=mode, width_budget=budget)
+                )
+                for budget in range(0, self.MAX_BUDGET)
+            ]
+            with self.subTest(mode=mode):
+                self.assertIn(0, widths, "every budget rendered something")
+                self.assertTrue(any(width > 0 for width in widths), "no budget rendered anything")
+
+
 class TestComposeDeterminism(unittest.TestCase):
     ALL = (fornax_status(), circinus_status(), libra_status())
 

@@ -847,8 +847,13 @@ def _fit_minimal(statuses: tuple, mode: PresentationMode, budget: int) -> str:
     Reduces to one marker plus one truncated label plus the hidden-segment
     marker. Truncation is applied *only* to the provider's own prose, never to a
     host-owned token, which is why `[NOT ENFORCED]` and `[+3 more]` cannot be
-    mangled here — a hypothetical segment that cannot render its marker in full
-    is not shown at this rung at all.
+    mangled here: both are charged to the budget in full before the label gets
+    what is left, and a rung that cannot afford them renders nothing.
+
+    `[NOT ENFORCED]` is charged even though it costs this rung most of its
+    columns, because the alternative is what this function used to do — render
+    `would have blocked` with the marker dropped, which is not a shortened
+    reading of shadow mode but a different and false one.
 
     Returns `""` when the result would be unreadable or would have to hide
     things without saying so. The caller then emits the upstream line alone.
@@ -868,6 +873,11 @@ def _fit_minimal(statuses: tuple, mode: PresentationMode, budget: int) -> str:
 
     hidden = _segment_count(statuses) - 1
     suffix = f"{SEGMENT_SEPARATORS[mode]}{_hidden_marker(hidden)}" if hidden else ""
+    if getattr(worst, "hypothetical", False):
+        # Welded ahead of the hidden-segment marker so it sits immediately after
+        # the label, exactly where `render_segment` puts it. Nothing may come
+        # between a would-have and its disclaimer.
+        suffix = f" [{HYPOTHETICAL_TEXT}]{suffix}"
     head = f"{state_marker(_enum_value(worst.state), mode)} "
     label_budget = budget - display_width(suffix) - display_width(head)
     if label_budget < MIN_LABEL_COLUMNS:
