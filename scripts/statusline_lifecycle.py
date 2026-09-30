@@ -1842,6 +1842,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="one argument of the provider command; repeat for each argument",
     )
     enable.add_argument("--timeout-ms", type=int, help="per-render budget for this provider")
+    # Omitting it un-records it, exactly as omitting --timeout-ms resets the
+    # budget. `enable` states the whole registration rather than patching it,
+    # because a registration assembled from several past invocations is one no
+    # product could predict the effect of re-running.
+    enable.add_argument(
+        "--explain-command",
+        action="append",
+        metavar="ARG",
+        dest="explain_argv",
+        help="one argument of this product's own long-form explain command; repeat for each",
+    )
     enable.add_argument(
         "--adopt",
         action="store_true",
@@ -1947,6 +1958,7 @@ def main(argv: list[str] | None = None, stdout: object = None) -> int:
                 argv=tuple(options.command_argv),
                 scope=options.scope,
                 timeout_ms=options.timeout_ms,
+                explain_argv=None if options.explain_argv is None else tuple(options.explain_argv),
             )
         except (LifecycleError, ValueError) as exc:
             print(f"enable refused: {exc}", file=stream)
