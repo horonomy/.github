@@ -1357,5 +1357,123 @@ class TestLegendCompleteness(unittest.TestCase):
         self.assertIn("Not a risk level", render.CONFIDENCE_SUBJECT_MEANINGS["preflight_estimate"])
 
 
+class TestLegendTokens(unittest.TestCase):
+    """Each row's token is one the renderer actually emits, in the same mode.
+
+    This is the part that cannot be asserted against the legend alone. The rows
+    are built from the rendering functions, so comparing a row to those functions
+    would restate the implementation; comparing it to *rendered output* is what
+    proves the key describes the line.
+    """
+
+    def rows(self, mode, title_contains):
+        section = next(s for s in render.legend(mode) if title_contains in s.title)
+        return section.entries
+
+    def test_every_state_token_appears_in_a_segment_of_that_state(self):
+        for mode in MODES:
+            for row in self.rows(mode, "state"):
+                with self.subTest(mode=mode, state=row.name):
+                    state = contract.SegmentState(row.name.lower())
+                    rendered = render.render_segment(segment(state=state), mode)
+                    self.assertIn(row.token, rendered)
+
+    def test_every_scope_token_appears_in_a_provider_of_that_scope(self):
+        for mode in MODES:
+            for row in self.rows(mode, "scope"):
+                with self.subTest(mode=mode, scope=row.name):
+                    scope = contract.Scope(row.name.strip("[]"))
+                    rendered = render.render_provider(status(scope=scope), mode)
+                    self.assertIn(row.token, rendered)
+
+    def test_every_confidence_token_appears_in_a_segment_with_that_subject(self):
+        for mode in MODES:
+            for row in self.rows(mode, "confidence"):
+                with self.subTest(mode=mode, subject=row.name):
+                    rendered = render.render_segment(
+                        segment(
+                            confidence=contract.Confidence.HIGH,
+                            confidence_of=contract.ConfidenceSubject(row.name),
+                        ),
+                        mode,
+                    )
+                    self.assertIn(row.token, rendered)
+
+    def test_the_hypothetical_token_appears_in_a_hypothetical_segment(self):
+        for mode in MODES:
+            row = next(r for r in self.rows(mode, "markers") if r.name == "hypothetical")
+            with self.subTest(mode=mode):
+                rendered = render.render_segment(segment(hypothetical=True), mode)
+                self.assertIn(row.token, rendered)
+
+    def test_the_divider_token_appears_between_an_upstream_line_and_the_block(self):
+        for mode in MODES:
+            row = next(r for r in self.rows(mode, "markers") if r.name == "divider")
+            with self.subTest(mode=mode):
+                composed = render.compose("mine", (status(),), mode=mode)
+                self.assertIn(f"mine{render.UPSTREAM_SEPARATORS[mode]}", composed)
+                self.assertIn(row.token, composed)
+
+    def test_the_freshness_token_is_an_age_the_renderer_would_print(self):
+        for mode in MODES:
+            row = next(r for r in self.rows(mode, "markers") if r.name == "freshness")
+            with self.subTest(mode=mode):
+                rendered = render.render_segment(
+                    segment(age_seconds=render._LEGEND_AGE_SECONDS), mode
+                )
+                self.assertIn(row.token, rendered)
+
+    def test_the_freshness_example_demonstrates_rounding_down(self):
+        # A row that rounded to an exact `2m` would teach the reader the opposite
+        # of what `format_age` does, and freshness is the reading they are most
+        # likely to act on.
+        self.assertNotEqual(render._LEGEND_AGE_SECONDS % 60, 0)
+
+    def test_a_text_mode_legend_contains_no_glyph_at_all(self):
+        # The load-bearing one. These modes exist for terminals whose font or
+        # width handling makes emoji unreliable; a key rendered in glyphs would
+        # fail exactly the reader who needed it.
+        glyphs = set(render.STATE_GLYPHS.values()) | set(render.SCOPE_GLYPHS.values())
+        for mode in MODES:
+            if mode.uses_glyphs:
+                continue
+            printed = "\n".join(
+                f"{row.token} {row.name} {row.meaning}"
+                for section in render.legend(mode)
+                for row in section.entries
+            )
+            with self.subTest(mode=mode):
+                self.assertTrue(printed.isascii(), printed)
+                for glyph in glyphs:
+                    self.assertNotIn(glyph, printed)
+
+    def test_a_glyph_mode_legend_does_show_the_glyphs_it_explains(self):
+        # Guards the guard above: if `legend` returned text tokens in every mode,
+        # that test would pass for the wrong reason.
+        printed = " ".join(
+            row.token
+            for section in render.legend(render.PresentationMode.BALANCED)
+            for row in section.entries
+        )
+        for glyph in set(render.STATE_GLYPHS.values()) | set(render.SCOPE_GLYPHS.values()):
+            with self.subTest(glyph=glyph):
+                self.assertIn(glyph, printed)
+
+    def test_row_names_are_unique_within_a_section(self):
+        for mode in MODES:
+            for section in render.legend(mode):
+                with self.subTest(mode=mode, section=section.title):
+                    names = [row.name for row in section.entries]
+                    self.assertEqual(len(set(names)), len(names))
+
+    def test_no_row_is_missing_a_meaning(self):
+        for mode in MODES:
+            for section in render.legend(mode):
+                for row in section.entries:
+                    with self.subTest(mode=mode, name=row.name):
+                        self.assertTrue(row.token)
+                        self.assertTrue(row.meaning.strip())
+
+
 if __name__ == "__main__":
     unittest.main()
