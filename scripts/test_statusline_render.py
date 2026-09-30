@@ -965,6 +965,39 @@ class TestModeLadder(unittest.TestCase):
         )
 
 
+class TestCompactTextMode(unittest.TestCase):
+    """The axis combination that did not exist before HORO-1571.
+
+    Both halves are asserted because either one alone would pass for a mode that
+    merely aliased an existing member: `plain` is already glyph-free, and
+    `compact` is already narrow.
+    """
+
+    ALL = (fornax_status(), circinus_status(), libra_status())
+    GLYPHS = tuple(render.STATE_GLYPHS.values()) + tuple(render.SCOPE_GLYPHS.values())
+
+    def test_it_is_narrower_than_the_balanced_text_mode(self):
+        # The gap this member fills: a text reader on a narrow terminal had no
+        # rung below `plain`, which is in fact the widest mode of the four.
+        for status_ in self.ALL:
+            with self.subTest(provider=status_.provider):
+                self.assertLess(
+                    render.display_width(
+                        render.render_provider(status_, render.PresentationMode.COMPACT_PLAIN)
+                    ),
+                    render.display_width(
+                        render.render_provider(status_, render.PresentationMode.PLAIN)
+                    ),
+                )
+
+    def test_it_emits_no_host_glyph(self):
+        for status_ in self.ALL:
+            out = render.render_provider(status_, render.PresentationMode.COMPACT_PLAIN)
+            for glyph in self.GLYPHS:
+                with self.subTest(provider=status_.provider, glyph=glyph):
+                    self.assertNotIn(glyph, out)
+
+
 class TestComposeUpstreamPreservation(unittest.TestCase):
     """The non-negotiable half: the user's own line is never touched."""
 
