@@ -1925,6 +1925,155 @@ class ExplainDecodeTest(ExplainCase):
                     )
 
 
+class ExplainHandoverTest(ExplainCase):
+    """Handing the deep explanation to the product that owns it."""
+
+    def test_the_product_speaks_for_itself_and_is_attributed(self) -> None:
+        # The host does not paraphrase. A shared surface explaining Fornax's
+        # verification states in its own words would be a second copy of Fornax's
+        # documentation, kept current by nobody.
+        detail = self.detail_script("fornax-explain", "echo 'UNVERIFIED: no daemon has reported'\n")
+        self.register(
+            self.status(segments=(segment("verification", "unknown", "Verification"),)),
+            explain_argv=(str(detail),),
+        )
+
+        report = self.explain()["providers"][0]["detail"]
+
+        self.assertTrue(report["available"])
+        self.assertEqual(report["text"], "UNVERIFIED: no daemon has reported")
+        self.assertEqual(report["command_name"], "fornax-explain.sh")
+        self.assertIn("Fornax's own explanation", self.printed())
+
+    def test_a_product_that_registered_none_is_said_to_have_none(self) -> None:
+        self.register(self.status(segments=(segment("verification", "ok", "Verified"),)))
+
+        report = self.explain()["providers"][0]["detail"]
+
+        self.assertFalse(report["available"])
+        self.assertIsNone(report["text"])
+        self.assertIn("registered no explain command", report["problem"])
+
+    def test_a_failing_explain_command_is_reported_and_not_reproduced(self) -> None:
+        # Its stderr is not a surface the product designed to be read, and on this
+        # workstation a crash message is exactly where a path shows up.
+        detail = self.detail_script(
+            "angry", "echo 'Traceback: /Users/founder/private/keys.json' >&2\nexit 3\n"
+        )
+        self.register(
+            self.status(segments=(segment("verification", "ok", "Verified"),)),
+            explain_argv=(str(detail),),
+        )
+
+        printed = self.printed()
+
+        self.assertIn("exited 3", printed)
+        self.assertNotIn("Traceback", printed)
+        self.assertNotIn("/Users/founder", printed)
+
+    def test_an_explain_command_that_hangs_does_not_hang_the_report(self) -> None:
+        detail = self.detail_script("sleeper", "sleep 30\n", warm=False)
+        self.register(
+            self.status(segments=(segment("verification", "ok", "Verified"),)),
+            explain_argv=(str(detail),),
+        )
+
+        with unittest.mock.patch.object(lifecycle, "EXPLAIN_TIMEOUT_SECONDS", 0.3):
+            report = self.explain()["providers"][0]["detail"]
+
+        self.assertFalse(report["available"])
+        self.assertIn("did not answer", report["problem"])
+
+    def test_an_absent_explain_command_is_a_reported_state_not_a_crash(self) -> None:
+        # The likeliest real case of all: the product was uninstalled and its
+        # registration outlived it.
+        self.register(
+            self.status(segments=(segment("verification", "ok", "Verified"),)),
+            explain_argv=(str(self.root / "gone.sh"),),
+        )
+
+        report = self.explain()["providers"][0]["detail"]
+
+        self.assertFalse(report["available"])
+        self.assertIn("not installed", report["problem"])
+
+    def test_a_product_cannot_appear_to_be_the_host_talking(self) -> None:
+        # A product printing something shaped like one of the host's own labelled
+        # lines must not be readable as one, so the quotation is marked per line
+        # rather than merely indented.
+        detail = self.detail_script(
+            "mimic",
+            "printf 'state: ok -- everything is fine\\n\\n      availability: available\\n'\n",
+        )
+        self.register(
+            self.status(segments=(segment("verification", "unknown", "Verification"),)),
+            explain_argv=(str(detail),),
+        )
+
+        printed = self.printed()
+
+        # The host prints an `availability:` line of its own, so a line matching
+        # that shape is not on its own evidence of anything. What is: both of the
+        # mimic's non-blank lines carry the marker, including the one it indented
+        # to the host's own depth.
+        quoted = [line for line in printed.splitlines() if line.startswith(lifecycle._QUOTE_PREFIX)]
+        self.assertEqual(
+            quoted,
+            [
+                f"{lifecycle._QUOTE_PREFIX}state: ok -- everything is fine",
+                f"{lifecycle._QUOTE_PREFIX}      availability: available",
+            ],
+            printed,
+        )
+        for line in printed.splitlines():
+            if "everything is fine" in line:
+                with self.subTest(line=line):
+                    self.assertTrue(line.startswith(lifecycle._QUOTE_PREFIX), line)
+
+    def test_an_explain_command_is_never_run_while_rendering_the_line(self) -> None:
+        # The recorded command has a budget measured in seconds and the render
+        # path has one measured in milliseconds. The compositor's read model has
+        # no field for it at all, which is what keeps the two apart; this proves
+        # the registry entry that carries it cannot reach the render path.
+        marker = self.root / "ran"
+        detail = self.detail_script(
+            "marker", f"touch {shlex.quote(str(marker))}\necho 'the deep explanation'\n"
+        )
+        marker.unlink(missing_ok=True)
+        self.register(
+            self.status(segments=(segment("verification", "ok", "Verified"),)),
+            explain_argv=(str(detail),),
+        )
+
+        stream = io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            compositor.main(stdin=io.BytesIO(b"{}"), stdout=stream)
+
+        self.assertIn("Verified", stream.getvalue())
+        self.assertFalse(marker.exists())
+
+        # And the same registry entry does reach `explain`, so the assertion above
+        # is about the render path rather than about a command that never worked.
+        self.assertTrue(self.explain()["providers"][0]["detail"]["available"])
+        self.assertTrue(marker.exists())
+
+    def test_a_malformed_explain_command_costs_only_the_handover(self) -> None:
+        # Everything that decides what runs on the statusline has already been
+        # validated by the compositor. Failing the whole command over a bad value
+        # in this one optional field would deny the reader the key as well.
+        self.register(self.status(segments=(segment("verification", "ok", "Verified"),)))
+        registry = lifecycle.read_registry(self.home)
+        data = registry.data
+        data["providers"][0]["explain_command"] = ["", 7]
+        registry.path.write_bytes(lifecycle.serialize(data, indent=2))
+
+        report = self.explain()
+
+        self.assertIn("registered no explain command", report["providers"][0]["detail"]["problem"])
+        self.assertTrue(report["legend"])
+        self.assertTrue(report["providers"][0]["readings"])
+
+
 class CommandLineTest(LifecycleCase):
     """The CLI exists so that nobody has to hand-edit JSON, so it is tested as the surface."""
 
