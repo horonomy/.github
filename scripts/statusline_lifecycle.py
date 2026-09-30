@@ -1720,6 +1720,19 @@ def doctor(
         },
         "registry_path": str(registry.path),
     }
+    # Before the settings file is read, so the unreadable-settings path below
+    # reports it too. The preference lives in our own registry, so a broken
+    # settings file is no reason to be unable to say which depth is in force --
+    # and "why can I not see the reason for this?" is a question that arrives
+    # alongside every other kind of breakage.
+    mode, mode_source = _presentation_in_force(registry)
+    depth, depth_source = _depth_in_force(registry)
+    report["presentation"] = {
+        "mode": mode.value,
+        "source": mode_source,
+        "depth": depth.value,
+        "depth_source": depth_source,
+    }
 
     try:
         document = read_settings(path)
@@ -1883,7 +1896,13 @@ def _wire_value(value: object) -> str | None:
     return getattr(value, "value", value)
 
 
-def _reading(segment: object, mode: render.PresentationMode) -> dict:
+def _reading(
+    segment: object,
+    mode: render.PresentationMode,
+    depth: render.InformationDepth = render.InformationDepth.DETAIL,
+    *,
+    on_line: bool = True,
+) -> dict:
     """One segment, as the line shows it and as the words behind its tokens.
 
     Every value comes either from the segment or from the host's own meaning
@@ -1893,14 +1912,20 @@ def _reading(segment: object, mode: render.PresentationMode) -> dict:
     first is true. Freshness likewise appears only where the provider dated its
     reading.
 
-    `rendered` is produced by the renderer at the same mode as the line, so the
-    fragment quoted back to the reader is the fragment they are looking at rather
-    than a description of it.
+    `rendered` is produced by the renderer at the same mode *and depth* as the
+    line, so the fragment quoted back to the reader is the fragment they are
+    looking at rather than a description of it. The decode around it is always
+    full, though: explain is the rung past `detail`, and a reader whose line is at
+    `clear` came here precisely because the line did not say why. So a field
+    absent from `rendered` may still be reported below it -- and `on_your_line`
+    marks a reading the current depth leaves out altogether, because otherwise
+    that reader would hunt their line for a fragment that is not on it.
     """
     state = _wire_value(segment.state) or render.UNKNOWN_STATE
     reading = {
         "key": segment.key,
-        "rendered": render.render_segment(segment, mode),
+        "rendered": render.render_segment(segment, mode, depth),
+        "on_your_line": on_line,
         "state": state,
         "state_token": render.state_marker(state, mode),
         # An unrecognised state is described as unknown rather than left without
@@ -1965,11 +1990,32 @@ def _presentation_in_force(registry: RegistryDocument) -> tuple[render.Presentat
     return mode, "your saved preference"
 
 
+def _depth_in_force(registry: RegistryDocument) -> tuple[render.InformationDepth, str]:
+    """The information depth the line is rendered at, and where that came from.
+
+    Reported for the same reason as the mode, and it is the more useful of the two
+    to report: someone who cannot see a reason or an age is looking at a line that
+    is working exactly as configured, and the fastest way to tell them so is to say
+    which depth is in force.
+
+    A fresh install has no stored value and reads as `CLEAR`, which is the intended
+    default for someone who did not ask for a diagnostic surface.
+    """
+    stored = _presentation_of(registry).get("depth")
+    depth = render.InformationDepth.parse(stored)
+    if stored is None:
+        return depth, "the default"
+    if depth.value != stored:
+        return depth, "the default; the saved preference is not a depth this version knows"
+    return depth, "your saved preference"
+
+
 def _explain_provider(
     entry: object,
     explain_argv: tuple[str, ...] | None,
     mode: render.PresentationMode,
     home: pathlib.Path | None,
+    depth: render.InformationDepth = render.InformationDepth.DETAIL,
 ) -> dict:
     """One provider: its live group as rendered, decoded, then its own words.
 
@@ -1977,8 +2023,20 @@ def _explain_provider(
     the fragment shown and the explanation of it cannot describe different
     moments. That status may come from Horonom's own provider cache, which is the
     honest thing to decode -- it is what the line is showing.
+
+    Every reading the provider reported is decoded, including the ones the current
+    depth omits from the line. Listing only what is visible would make the deepest
+    rung of disclosure the narrowest view of the snapshot, which is backwards; the
+    omitted ones are marked instead.
     """
     status = compositor.run_provider(entry, entry.timeout_ms, home)
+    # Asked of the renderer rather than recomputed here, so there is no second
+    # opinion about which readings the line is showing.
+    on_line = (
+        contract.order_segments(status)
+        if depth.shows_supporting_detail
+        else render.clear_readings(status)
+    )
     scope = _wire_value(status.scope) or entry.scope.value
     report = {
         "provider": status.provider,
@@ -1987,9 +2045,10 @@ def _explain_provider(
         "scope_token": render.scope_marker(scope, mode),
         "scope_means": render.SCOPE_MEANINGS.get(scope, "a scope this version does not know"),
         "availability": _wire_value(status.availability),
-        "rendered": render.render_provider(status, mode),
+        "rendered": render.render_provider(status, mode, depth),
         "readings": [
-            _reading(segment, mode) for segment in contract.order_segments(status)
+            _reading(segment, mode, depth, on_line=any(shown is segment for shown in on_line))
+            for segment in contract.order_segments(status)
         ],
     }
     if explain_argv is None:
@@ -2066,9 +2125,15 @@ def explain(
     path = pathlib.Path(settings_path or DEFAULT_SETTINGS_PATH).expanduser()
     registry = read_registry(home)
     mode, mode_source = _presentation_in_force(registry)
+    depth, depth_source = _depth_in_force(registry)
     report: dict = {
         "registry_path": str(registry.path),
-        "presentation": {"mode": mode.value, "source": mode_source},
+        "presentation": {
+            "mode": mode.value,
+            "source": mode_source,
+            "depth": depth.value,
+            "depth_source": depth_source,
+        },
         "legend": [
             {
                 "title": section.title,
@@ -2111,7 +2176,7 @@ def explain(
         if provider is not None and entry.provider != provider:
             continue
         report["providers"].append(
-            _explain_provider(entry, details.get(entry.provider), mode, home)
+            _explain_provider(entry, details.get(entry.provider), mode, home, depth)
         )
     if provider is not None and not report["providers"]:
         report["notes"].append(
@@ -2177,6 +2242,12 @@ def _describe_doctor(report: dict) -> str:
     lines.append(
         f"original statusline: recorded={upstream.get('recorded')} name={upstream.get('name')}"
     )
+    presentation = report.get("presentation")
+    if presentation:
+        lines.append(
+            f"presentation: {presentation['mode']} ({presentation['source']}), "
+            f"information depth {presentation['depth']} ({presentation['depth_source']})"
+        )
     providers = report["providers"]
     lines.append(f"providers registered: {len(providers)}")
     for provider in providers:
@@ -2229,6 +2300,12 @@ def _reading_lines(reading: dict) -> list[str]:
     helped by a denser one.
     """
     lines = [f"    {reading['rendered']}"]
+    # Said first, before any of the facts, because it changes what the fact lines
+    # are: for a reading that is not on the line they are an explanation of
+    # something the reader cannot see, and hunting the line for it is the failure
+    # this saves them from.
+    if not reading.get("on_your_line", True):
+        lines.append("      not on your line at this information depth")
     lines.append(f"      state: {reading['state']} -- {reading['state_means']}")
     if "reason" in reading:
         lines.append(f"      why: {reading['reason']}")
@@ -2274,6 +2351,9 @@ def _describe_explain(report: dict) -> str:
     presentation = report["presentation"]
     lines = [
         f"presentation: {presentation['mode']} ({presentation['source']})",
+        # Second because it is the line a reader looking for a missing field needs:
+        # at `clear` a reason or an age is absent by configuration, not by failure.
+        f"information depth: {presentation['depth']} ({presentation['depth_source']})",
         "",
         "how to read the line",
     ]
