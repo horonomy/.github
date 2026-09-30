@@ -495,19 +495,27 @@ HYPOTHETICAL_TEXT = "NOT ENFORCED"
 # boundary the provider never intended.
 DETAIL_SEPARATOR = "; "
 
-# PLAIN drops to ASCII for the same reason it drops glyphs: it exists for
+# A text mode drops to ASCII for the same reason it drops glyphs: it exists for
 # terminals whose character handling cannot be trusted, and U+00B7 is one more
 # thing to get wrong for no gain.
+#
+# Keyed off the icon-style axis and derived for every member, rather than
+# enumerated per mode. The separator has never been a density decision -- it is
+# the same width either way -- so writing it per member would invite a future
+# mode to be given a glyph separator it cannot render, or no separator at all.
+_GLYPH_SEGMENT_SEPARATOR = " · "  # MIDDLE DOT
+_TEXT_SEGMENT_SEPARATOR = " | "
+_GLYPH_UPSTREAM_SEPARATOR = " ┃ "  # BOX DRAWINGS HEAVY VERTICAL
+_TEXT_UPSTREAM_SEPARATOR = " || "
+
 SEGMENT_SEPARATORS = {
-    PresentationMode.BALANCED: " · ",  # MIDDLE DOT
-    PresentationMode.COMPACT: " · ",
-    PresentationMode.PLAIN: " | ",
+    mode: _GLYPH_SEGMENT_SEPARATOR if mode.uses_glyphs else _TEXT_SEGMENT_SEPARATOR
+    for mode in PresentationMode
 }
 
 UPSTREAM_SEPARATORS = {
-    PresentationMode.BALANCED: " ┃ ",  # BOX DRAWINGS HEAVY VERTICAL
-    PresentationMode.COMPACT: " ┃ ",
-    PresentationMode.PLAIN: " || ",
+    mode: _GLYPH_UPSTREAM_SEPARATOR if mode.uses_glyphs else _TEXT_UPSTREAM_SEPARATOR
+    for mode in PresentationMode
 }
 
 
