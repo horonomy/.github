@@ -422,6 +422,74 @@ class HostShapeTest(unittest.TestCase):
         self.assertEqual(sc.assert_privacy_safe("Unverified", "label"), "Unverified")
 
 
+class PercentageAxisTest(unittest.TestCase):
+    """A percentage must say what it is a percentage *of*."""
+
+    def test_a_bare_percentage_is_refused(self) -> None:
+        # The defect in its purest form: the reader cannot tell whether 62
+        # percent has been used or 62 percent remains, and those are opposite
+        # readings of the same glanced-at number.
+        for value in ("62%", "0%", "100%", "62% 38%", "1 %"):
+            with self.subTest(value=value):
+                with self.assertRaises(sc.ContractViolation):
+                    sc.require_percentage_axis(value, "segment.label")
+
+    def test_a_named_axis_is_accepted(self) -> None:
+        for value in ("38% budget left", "62% budget used", "97% verified"):
+            with self.subTest(value=value):
+                self.assertEqual(sc.require_percentage_axis(value, "label"), value)
+
+    def test_both_directions_of_the_same_number_are_expressible(self) -> None:
+        # The rule must not push a product towards one phrasing: a product that
+        # thinks in headroom and one that thinks in consumption are both right.
+        for value in ("38% budget left", "62% budget used"):
+            with self.subTest(value=value):
+                self.assertEqual(sc.require_percentage_axis(value, "label"), value)
+
+    def test_a_label_with_no_percentage_is_untouched(self) -> None:
+        for value in ("Unverified", "P90 5d4h", "Shadow mode", "113 of 705"):
+            with self.subTest(value=value):
+                self.assertEqual(sc.require_percentage_axis(value, "label"), value)
+
+    def test_a_single_letter_does_not_count_as_the_missing_noun(self) -> None:
+        # Otherwise `62% B` would satisfy the validator while telling the reader
+        # nothing, which is the outcome this rule exists to prevent.
+        with self.assertRaises(sc.ContractViolation):
+            sc.require_percentage_axis("62% B", "segment.label")
+
+    def test_the_rule_is_not_an_allowlist_of_approved_axis_words(self) -> None:
+        # An allowlist would have rejected `97% verified`, and every such
+        # rejection pushes a product towards phrasing that satisfies the
+        # validator rather than the reader.
+        for value in ("44% indexed", "12% sampled", "5% flaky"):
+            with self.subTest(value=value):
+                self.assertEqual(sc.require_percentage_axis(value, "label"), value)
+
+    def test_the_error_names_the_field_and_never_quotes_the_value(self) -> None:
+        with self.assertRaises(sc.ContractViolation) as caught:
+            sc.require_percentage_axis("62%", "segment.count_label")
+        message = str(caught.exception)
+        self.assertIn("segment.count_label", message)
+
+    def test_every_provider_emitted_string_is_covered_not_just_the_label(self) -> None:
+        # Applied inside `require_safe_label`, so a bare percentage cannot reach
+        # the line through a reason or a convenience rendering instead.
+        for field in ("label", "reason_label", "count_label", "duration_label"):
+            with self.subTest(field=field):
+                with self.assertRaises(sc.ContractViolation):
+                    sc.require_safe_label("62%", f"segment.{field}")
+
+    def test_a_segment_cannot_be_built_with_a_bare_percentage(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            sc.Segment(key="budget", state=sc.SegmentState.NEUTRAL, label="62%")
+
+    def test_a_segment_with_a_named_axis_can_be_built(self) -> None:
+        segment = sc.Segment(
+            key="budget", state=sc.SegmentState.NEUTRAL, label="38% budget left"
+        )
+        self.assertEqual(segment.label, "38% budget left")
+
+
 class SegmentTest(unittest.TestCase):
     def test_a_minimal_segment_is_valid(self) -> None:
         segment = sc.Segment(

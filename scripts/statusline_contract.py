@@ -405,6 +405,42 @@ MAX_LABEL_CHARS = 48
 _LABEL_EXTRA_CHARS = frozenset(" .,'-—()%+?!≤≥")
 
 
+# A digit immediately before a percent sign, optionally spaced as some locales
+# write it. Matched on the label as a whole rather than on tokens, because the
+# defect is about the label having no noun anywhere, not about adjacency.
+_PERCENTAGE_RE = re.compile(r"\d\s*%")
+
+# Any run of letters long enough to be a word. Two rather than one, so a stray
+# initial or a unit letter does not pass as the missing noun.
+_LABEL_WORD_RE = re.compile(r"[A-Za-z]{2,}")
+
+
+def require_percentage_axis(value: str, field: str) -> str:
+    """Refuse a percentage that never says what it is a percentage *of*.
+
+    `62%` is the budget-display defect in its purest form: the reader cannot
+    tell whether 62 percent has been used or 62 percent remains, and those are
+    opposite readings of the same glanced-at number. The fix is not a longer
+    label but a named axis — `62% budget used` or `38% budget left` — and this
+    is the same rule as `count` needing `count_label` and `duration_seconds`
+    needing `duration_label`, applied to the one quantity that can be embedded
+    in a label instead of carried in its own field.
+
+    Deliberately a "has a word" test rather than an allowlist of axis words. An
+    allowlist would have rejected `97% verified`, which is a perfectly
+    unambiguous label, and every such rejection pushes a product towards
+    phrasing that satisfies the validator instead of the reader. What cannot be
+    tolerated is a number with no noun at all, and that is exactly what this
+    catches.
+    """
+    if _PERCENTAGE_RE.search(value) and not _LABEL_WORD_RE.search(value):
+        raise ContractViolation(
+            f"{field} contains a percentage with no word saying what it measures; "
+            "a bare 62% could mean used or left, which are opposite readings"
+        )
+    return value
+
+
 def require_label(
     value: object, field: str = "label", max_chars: int = MAX_LABEL_CHARS
 ) -> str:
@@ -562,8 +598,16 @@ def assert_privacy_safe(value: str, field: str) -> str:
 def require_safe_label(
     value: object, field: str, max_chars: int = MAX_LABEL_CHARS
 ) -> str:
-    """Validate a human label for both shape and privacy."""
-    return assert_privacy_safe(require_label(value, field, max_chars), field)
+    """Validate a human label for shape, privacy, and unit honesty.
+
+    The percentage rule is applied here rather than only to `segment.label`
+    because a bare number is ambiguous wherever it is rendered, and this is the
+    one function every provider-emitted human string passes through. Adding it
+    to a single field would have left the same defect reachable via a reason or
+    a fallback rendering.
+    """
+    checked = assert_privacy_safe(require_label(value, field, max_chars), field)
+    return require_percentage_axis(checked, field)
 
 
 # A segment is one fact. A provider showing more than a handful of them is
