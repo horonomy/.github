@@ -129,6 +129,7 @@ class Registry:
     upstream_timeout_ms: int
     providers: tuple[ProviderEntry, ...]
     mode: render.PresentationMode
+    depth: render.InformationDepth
     width_budget: int | None
     deadline_ms: int
 
@@ -237,11 +238,11 @@ def _parse_upstream_command(upstream: object) -> str | None:
     return command
 
 
-def _parse_presentation(presentation: object) -> tuple[object, int | None]:
-    """The raw mode preference and the validated width budget.
+def _parse_presentation(presentation: object) -> tuple[object, object, int | None]:
+    """The raw mode and depth preferences, and the validated width budget.
 
-    Returns the mode unvalidated on purpose — `parse_registry` hands it to a
-    parser that falls back rather than refuses, for the reason given there. The
+    Returns mode and depth unvalidated on purpose — `parse_registry` hands them
+    to parsers that fall back rather than refuse, for the reason given there. The
     width is validated here because a nonsensical budget is not a cosmetic
     problem: it decides how much gets dropped from the line.
     """
@@ -250,7 +251,7 @@ def _parse_presentation(presentation: object) -> tuple[object, int | None]:
     width = presentation.get("width_budget")
     if width is not None and (isinstance(width, bool) or not isinstance(width, int) or width < 1):
         raise RegistryError("presentation.width_budget must be a positive integer or absent")
-    return presentation.get("mode"), width
+    return presentation.get("mode"), presentation.get("depth"), width
 
 
 def parse_registry(payload: object) -> Registry:
@@ -291,7 +292,7 @@ def parse_registry(payload: object) -> Registry:
     if len(identifiers) != len(set(identifiers)):
         raise RegistryError("provider ids must be unique in the registry")
 
-    mode, width = _parse_presentation(payload.get("presentation", {}))
+    mode, depth, width = _parse_presentation(payload.get("presentation", {}))
 
     return Registry(
         upstream_command=upstream_command,
@@ -304,6 +305,10 @@ def parse_registry(payload: object) -> Registry:
         # losing the whole statusline over a typo in a cosmetic preference is a
         # worse outcome than rendering it in the default style.
         mode=render.PresentationMode.parse(mode),
+        # Same fallback reasoning, with one difference that matters: an
+        # unrecognised depth resolves to the *narrower* of the two, so a typo can
+        # never answer with more information than the reader asked for.
+        depth=render.InformationDepth.parse(depth),
         width_budget=width,
         deadline_ms=_bounded_ms(payload, "deadline_ms", DEFAULT_DEADLINE_MS, MAX_DEADLINE_MS),
     )
@@ -714,6 +719,7 @@ def _render(reader: object, writer: object) -> None:
             statuses,
             mode=registry.mode,
             width_budget=registry.width_budget,
+            depth=registry.depth,
         )
     except Exception as exc:  # noqa: BLE001
         # The broadest catch in this module, and deliberately so: the first
