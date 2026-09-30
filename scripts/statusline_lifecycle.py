@@ -1446,7 +1446,7 @@ def _cached_readings(home: pathlib.Path) -> tuple[pathlib.Path, ...]:
     does, and an empty one it created is a smaller surprise than an `rmdir` of a
     path someone else may have put something in.
     """
-    directory = home / compositor.CACHE_DIRNAME
+    directory = compositor.cache_dir(home)
     try:
         return tuple(sorted(path for path in directory.iterdir() if path.is_file()))
     except OSError:
@@ -1469,18 +1469,18 @@ def _giving_the_slot_back(
     notes: list[str] = []
     state_to_remove: tuple[pathlib.Path, ...] = ()
     if registry.present:
-        state_to_remove = (registry.path, *_cached_readings(registry.path.parent))
+        readings = _cached_readings(registry.path.parent)
+        state_to_remove = (registry.path, *readings)
         changes.append(
             Change(ChangeKind.REMOVE, str(registry.path), "the last provider is gone with it")
         )
-        if len(state_to_remove) > 1:
-            changes.append(
-                Change(
-                    ChangeKind.REMOVE,
-                    str(registry.path.parent / compositor.CACHE_DIRNAME),
-                    f"{len(state_to_remove) - 1} cached reading(s) discarded with it",
-                )
-            )
+        # Named one at a time, because the containing directory is not removed and
+        # a plan that said `REMOVE <cache dir>` would be describing something that
+        # does not happen. At most `MAX_PROVIDERS` of these.
+        changes.extend(
+            Change(ChangeKind.REMOVE, str(reading), "cached reading discarded with it")
+            for reading in readings
+        )
 
     before = document.status_line
     if not isinstance(before, dict):

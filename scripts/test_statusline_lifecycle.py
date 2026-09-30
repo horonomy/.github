@@ -1011,9 +1011,14 @@ class RestorationTest(LifecycleCase):
 
         self.assertFalse(stale.exists(), "a cached reading outlived the product")
         self.assertIn(stale, result.plan.state_to_remove)
-        self.assertTrue(
-            any("cached reading" in change.detail for change in result.plan.changes),
-            "the discarded readings were not disclosed",
+        # Disclosed by its own path. A plan naming the directory would be
+        # describing a removal that does not happen.
+        self.assertIn(
+            (lifecycle.ChangeKind.REMOVE, str(stale)),
+            [(change.kind, change.target) for change in result.plan.changes],
+        )
+        self.assertNotIn(
+            str(cache), [change.target for change in result.plan.changes], "named the directory"
         )
         # The directory stays: nothing here removes directories.
         self.assertTrue(cache.exists())
