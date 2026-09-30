@@ -1431,6 +1431,14 @@ def compose(
     toward `DETAIL` here also makes a caller that forgets the argument verbose
     rather than quiet.
 
+    Depth also chooses the layout. At `DETAIL` each provider is given a physical
+    row of its own, wrapping onto indented continuation rows where one row will
+    not hold it, so `width_budget` bounds each row rather than the block as a
+    whole. `CLEAR` stays the single row its summary is meant to be. Only when no
+    row-per-provider layout exists at all — a single reading wider than the entire
+    budget — does `DETAIL` fall through to the rendering below, which is the one
+    that sheds readings and the only way `DETAIL` ever hides anything.
+
     Degradation, in order, and only when a budget is set: try each allowed mode
     and take the first that measures within budget; then shed the least
     important provider groups, saying how many segments went; then fall back to
