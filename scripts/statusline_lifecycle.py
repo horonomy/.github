@@ -2305,6 +2305,24 @@ def build_parser() -> argparse.ArgumentParser:
     listing = subcommands.add_parser("list", help="show what is registered")
     shared(listing, mutating=False)
 
+    # A positional provider rather than `--provider`, unlike the mutating
+    # subcommands: there the name selects what gets changed and being explicit is
+    # worth the typing, whereas here it only narrows a report, and `explain
+    # fornax` is what a reader reaches for.
+    explaining = subcommands.add_parser(
+        "explain", help="show the key to the line and what it is saying now"
+    )
+    explaining.add_argument(
+        "provider", nargs="?", help="narrow the decode to one provider (all of them by default)"
+    )
+    explaining.add_argument(
+        "--legend",
+        action="store_true",
+        dest="legend_only",
+        help="print only the key, asking no provider anything",
+    )
+    shared(explaining, mutating=False)
+
     diagnose = subcommands.add_parser("doctor", help="explain who owns the statusline")
     diagnose.add_argument(
         "--probe", action="store_true", help="also run each provider and report what it answered"
@@ -2314,12 +2332,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run_report(options: argparse.Namespace, path: pathlib.Path, stream: object) -> int:
-    """The two read-only commands, which answer without reading a plan at all.
+    """The read-only commands, which answer without reading a plan at all.
 
-    Kept apart from the mutating commands because the whole point of `doctor`
-    and `list` is that they cannot reach a write, and a shared prologue is how
-    that stops being obvious.
+    Kept apart from the mutating commands because the whole point of `doctor`,
+    `list` and `explain` is that they cannot reach a write, and a shared prologue
+    is how that stops being obvious.
     """
+    if options.command == "explain":
+        report = explain(path, provider=options.provider, legend_only=options.legend_only)
+        print(
+            json.dumps(report, indent=2) if options.json else _describe_explain(report),
+            file=stream,
+        )
+        # A note is not a refusal. Every state `explain` can report is one it was
+        # asked to describe, including "nothing of ours is on your line" -- which
+        # is an answer, not a failure to give one.
+        return EXIT_OK
     report = doctor(path, probe=getattr(options, "probe", False))
     if options.command == "list":
         # `.get`, because an unparseable settings file yields a report with no
@@ -2350,7 +2378,7 @@ def main(argv: list[str] | None = None, stdout: object = None) -> int:
 
     path = _settings_path(options.settings)
 
-    if options.command in ("doctor", "list"):
+    if options.command in ("doctor", "list", "explain"):
         return _run_report(options, path, stream)
 
     try:
