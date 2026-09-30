@@ -981,6 +981,20 @@ _ICON_WORDS = {False: "text only", True: "emoji"}
 _DENSITY_FLAG = {"balanced": False, "compact": True}
 _ICON_FLAG = {"emoji": True, "text": False}
 
+# How much of each provider's snapshot one reading shows. A third axis rather
+# than more modes, because it answers a different question from the two above:
+# those are about how much room a reading may spend, this is about how much there
+# is to say. Every combination is reachable.
+_DEPTH_WORDS = {
+    render.InformationDepth.CLEAR: "clear (one summary per product)",
+    render.InformationDepth.DETAIL: "detail (supporting context as well)",
+}
+
+# The keys inside the presentation object this module owns and will rewrite.
+# Anything else a later version or another reader put there is preserved, same
+# rule as the settings file.
+_OWNED_PRESENTATION_KEYS = ("mode", "depth")
+
 
 def _presentation_refusal(registry: RegistryDocument) -> tuple[str | None, tuple[str, ...]]:
     """Why a preference change must not proceed, or `(None, ())` if it may.
@@ -1012,19 +1026,52 @@ def _presentation_refusal(registry: RegistryDocument) -> tuple[str | None, tuple
     return (None, ())
 
 
+def _presentation_change(stored: dict, key: str, value: str, wording: str) -> Change:
+    """One axis of the preference, said the way it actually turned out.
+
+    Running the command with no flags, or with flags already in effect, is a
+    legitimate way to ask what the current setting is. Reporting that as a change
+    which is not happening is the honest answer to that question, and it is why
+    this returns `PRESERVED_USER` rather than nothing at all.
+    """
+    if stored.get(key) == value:
+        return Change(
+            ChangeKind.PRESERVED_USER,
+            f"registry.{PRESENTATION_KEY}.{key}",
+            f"already {wording}",
+        )
+    return Change(
+        ChangeKind.UPDATE if key in stored else ChangeKind.ADD,
+        f"registry.{PRESENTATION_KEY}.{key}",
+        wording,
+    )
+
+
 def plan_presentation(
-    registry: RegistryDocument, *, compact: bool | None = None, glyphs: bool | None = None
+    registry: RegistryDocument,
+    *,
+    compact: bool | None = None,
+    glyphs: bool | None = None,
+    depth: render.InformationDepth | None = None,
 ) -> Plan:
     """What changing the reader's presentation preference would do, without doing it.
 
     `None` means leave that axis alone, so one knob can be set without stating
-    the other -- a user who only knows that their font renders emoji badly should
-    not have to decide about density to say so.
+    the others -- a user who only knows that their font renders emoji badly should
+    not have to decide about density or information depth to say so.
 
-    The two axes are resolved here into the single `mode` the compositor already
-    reads, rather than stored as two fields beside it: fields that must agree are
-    fields that can disagree, and the one that loses would be deciding how the
-    line renders.
+    The two *rendering* axes are resolved here into the single `mode` the
+    compositor already reads, rather than stored as two fields beside it: fields
+    that must agree are fields that can disagree, and the one that loses would be
+    deciding how the line renders. Information depth is stored separately because
+    it is genuinely independent of those two -- it changes what there is to say,
+    not how much room a reading may spend saying it.
+
+    Writes to our own registry and nothing else. In particular it does not go near
+    the host's settings file: which fields of a reader's status line are visible is
+    not a fact about how the host launches the command, so there is nothing there
+    to change. That also means switching takes effect on the next render, with no
+    daemon restarted, no provider reinstalled and no binary rebuilt.
 
     Nothing else calls this. Upgrades in particular do not, which is what "do not
     auto-rewrite user preferences on upgrade" amounts to in code: a stored
@@ -1050,37 +1097,28 @@ def plan_presentation(
         compact=before.is_compact if compact is None else compact,
         glyphs=before.uses_glyphs if glyphs is None else glyphs,
     )
+    before_depth = render.InformationDepth.parse(stored.get("depth"))
+    after_depth = before_depth if depth is None else depth
     # Copied and updated rather than rebuilt, so `width_budget` and anything a
     # later version puts here survive a change to a neighbouring key. Same rule
-    # as the settings file: we own `mode` and nothing else in this object.
+    # as the settings file: we own the two keys below and nothing else here.
     presentation = dict(stored)
     presentation["mode"] = after.value
+    presentation["depth"] = after_depth.value
     registry_after = dict(registry.data)
     registry_after[PRESENTATION_KEY] = presentation
 
     setting = (
         f"density {_DENSITY_WORDS[after.is_compact]}, icons {_ICON_WORDS[after.uses_glyphs]}"
     )
-    if stored.get("mode") == after.value:
-        # Running this with no flags, or with the flags already in effect, is a
-        # legitimate way to ask what the current setting is. Reporting it as a
-        # change that is not happening is the honest answer to that question.
-        changes = [
-            Change(
-                ChangeKind.PRESERVED_USER,
-                f"registry.{PRESENTATION_KEY}.mode",
-                f"already {setting}",
-            )
-        ]
-    else:
-        changes = [
-            Change(
-                ChangeKind.UPDATE if "mode" in stored else ChangeKind.ADD,
-                f"registry.{PRESENTATION_KEY}.mode",
-                setting,
-            )
-        ]
-    kept = [key for key in stored if key != "mode"]
+    # Reported per axis rather than as one line, because the axes are set
+    # independently and a user who changed only the depth should not have to read
+    # a density they did not touch to find out whether it moved.
+    changes = [
+        _presentation_change(stored, "mode", after.value, setting),
+        _presentation_change(stored, "depth", after_depth.value, _DEPTH_WORDS[after_depth]),
+    ]
+    kept = [key for key in stored if key not in _OWNED_PRESENTATION_KEYS]
     if kept:
         changes.append(
             Change(
