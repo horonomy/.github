@@ -257,12 +257,20 @@ def a_child_environment_that_does_not_count() -> object:
 
     Which is to say the marker never increments, so a compositor invoked below a
     compositor cannot tell it is the second one.
+
+    A lambda rather than `return_value=`, deliberately: this reads the environment
+    when the mutated function is called, as the real one does, where a
+    `return_value` would snapshot it when the patch was installed.
     """
     return unittest.mock.patch.object(compositor, "child_env", lambda: dict(os.environ))
 
 
 def a_self_reference_check_that_never_matches() -> object:
     """The second recursion guard, answering no to everything.
+
+    A lambda rather than `return_value=False` so the substitute still takes
+    exactly one argument. A mock would accept any call at all, and a defect that
+    changed how this guard is called would then go unnoticed here.
     """
     return unittest.mock.patch.object(compositor, "names_this_command", lambda command: False)
 
