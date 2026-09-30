@@ -1672,6 +1672,251 @@ class DoctorTest(LifecycleCase):
         self.assertEqual(self.settings.read_bytes(), before)
 
 
+def segment(key: str, state: str, label: str, **fields) -> contract.Segment:
+    """A segment built from wire values, the way a provider's output arrives.
+
+    Strings rather than enum members, because that is what comes off a
+    provider's stdout and the decode has to cope with the same input the
+    renderer does.
+    """
+    return contract.Segment(
+        key=key,
+        state=contract.SegmentState(state),
+        label=label,
+        confidence=contract.Confidence(fields.pop("confidence"))
+        if "confidence" in fields
+        else None,
+        confidence_of=contract.ConfidenceSubject(fields.pop("confidence_of"))
+        if "confidence_of" in fields
+        else None,
+        **fields,
+    )
+
+
+class ExplainCase(LifecycleCase):
+    """A registered provider that really answers, plus a real explain command.
+
+    The provider is a script rather than a patched function: `explain` decodes
+    what a provider actually said, so a test that handed it a status object
+    directly would skip the part where the answer crosses a process boundary and
+    is validated -- which is where a decode of something that is not there would
+    otherwise pass.
+    """
+
+    def provider_script(self, status: contract.ProviderStatus) -> pathlib.Path:
+        path = self.root / f"{status.provider}-provider.sh"
+        path.write_text(f"#!/bin/sh\nprintf '%s' {shlex.quote(json.dumps(status.to_wire()))}\n")
+        path.chmod(0o755)
+        # Run once before it is ever timed. A freshly written executable pays a
+        # one-time evaluation cost on macOS that comfortably exceeds a provider's
+        # render budget, and a test asserting on a decode must not be measuring
+        # that instead.
+        subprocess.run([str(path)], capture_output=True, timeout=30, check=False)
+        return path
+
+    def detail_script(self, name: str, body: str) -> pathlib.Path:
+        path = self.root / f"{name}.sh"
+        path.write_text(f"#!/bin/sh\n{body}")
+        path.chmod(0o755)
+        subprocess.run([str(path)], capture_output=True, timeout=30, check=False)
+        return path
+
+    def status(
+        self,
+        provider: str = "fornax",
+        *,
+        availability: str = "available",
+        scope: str = "host",
+        segments: tuple[contract.Segment, ...] = (),
+    ) -> contract.ProviderStatus:
+        return contract.ProviderStatus(
+            provider=provider,
+            provider_version="1.0.0",
+            scope=contract.Scope(scope),
+            availability=contract.Availability(availability),
+            segments=segments,
+        )
+
+    def register(self, status: contract.ProviderStatus, **kwargs) -> None:
+        self.enable(
+            status.provider,
+            argv=(str(self.provider_script(status)),),
+            scope=status.scope.value,
+            timeout_ms=2000,
+            **kwargs,
+        )
+
+    def explain(self, **kwargs) -> dict:
+        return lifecycle.explain(self.settings, self.home, **kwargs)
+
+    def printed(self, **kwargs) -> str:
+        return lifecycle._describe_explain(self.explain(**kwargs))
+
+
+class ExplainDecodeTest(ExplainCase):
+    """What the decode says about a reading, against what the line shows."""
+
+    def test_it_quotes_the_fragment_the_compositor_really_renders(self) -> None:
+        # The tie that makes every other assertion here about the user's line
+        # rather than about a second renderer. `explain` is asked for its
+        # fragment, the compositor is then asked for the whole line, and the
+        # fragment has to be in it verbatim.
+        self.register(
+            self.status(
+                segments=(
+                    segment("verification", "unknown", "Verification", reason_code="no_daemon"),
+                )
+            )
+        )
+
+        reading = self.explain()["providers"][0]["readings"][0]
+
+        stream = io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            compositor.main(stdin=io.BytesIO(b"{}"), stdout=stream)
+        self.assertIn(reading["rendered"], stream.getvalue())
+
+    def test_an_unknown_reading_carries_its_reason_and_its_freshness(self) -> None:
+        # Fornax's UNVERIFIED case, which is the one the readability pass was
+        # filed about: the state alone left a reader with no idea why.
+        self.register(
+            self.status(
+                segments=(
+                    segment(
+                        "verification",
+                        "unknown",
+                        "Verification",
+                        reason_code="daemon_not_running",
+                        age_seconds=135,
+                        explain_key="fornax.verification",
+                    ),
+                )
+            )
+        )
+
+        reading = self.explain()["providers"][0]["readings"][0]
+
+        self.assertEqual(reading["reason"], "daemon not running")
+        self.assertEqual(reading["freshness"], "2m ago")
+        self.assertEqual(reading["explain_key"], "fornax.verification")
+        # UNKNOWN != HEALTHY, said in words rather than left to the icon.
+        self.assertIn("all clear", reading["state_means"])
+
+    def test_no_reason_is_invented_for_a_provider_that_gave_none(self) -> None:
+        # The host does not infer a reason, and specifically does not infer one
+        # from a count: "the provider did not say why" is a different claim from
+        # any reason the host could construct, and only the first one is true.
+        self.register(
+            self.status(
+                segments=(
+                    segment("tasks", "neutral", "Tasks", count=3, total=9, count_label="running"),
+                )
+            )
+        )
+
+        reading = self.explain()["providers"][0]["readings"][0]
+
+        self.assertNotIn("reason", reading)
+        self.assertNotIn("freshness", reading)
+        self.assertNotIn("why:", self.printed())
+
+    def test_a_would_block_reading_stays_hypothetical_all_the_way_down(self) -> None:
+        # Circinus shadow mode. A reader who concludes from this that their agent
+        # was stopped has been told something false, so the marker survives into
+        # the decode with the denial spelled out rather than just the token.
+        self.register(
+            self.status(
+                provider="circinus",
+                segments=(segment("decision", "warn", "Would block", hypothetical=True),),
+            )
+        )
+
+        reading = self.explain()["providers"][0]["readings"][0]
+        printed = self.printed()
+
+        self.assertEqual(reading["hypothetical"], render.HYPOTHETICAL_MEANING)
+        self.assertIn(render.HYPOTHETICAL_TEXT, printed)
+        self.assertIn("Nothing was blocked", printed)
+
+    def test_a_preflight_confidence_is_decoded_as_a_confidence_not_a_risk(self) -> None:
+        # Libra's `pf:high`, which read as "high risk" to the one reader it was
+        # built for. The subject is carried into the decode and the meaning says
+        # what it is not.
+        self.register(
+            self.status(
+                provider="libra",
+                segments=(
+                    segment(
+                        "preflight",
+                        "attention",
+                        "Preflight",
+                        confidence="high",
+                        confidence_of="preflight_estimate",
+                    ),
+                ),
+            )
+        )
+
+        confidence = self.explain()["providers"][0]["readings"][0]["confidence"]
+
+        self.assertEqual(confidence["rendered"], "preflight confidence high")
+        self.assertIn("Not a risk level", confidence["means"])
+
+    def test_an_unavailable_provider_is_not_decoded_as_a_healthy_zero(self) -> None:
+        self.register(self.status(availability="unavailable"))
+
+        provider = self.explain()["providers"][0]
+
+        self.assertEqual(provider["availability"], "unavailable")
+        self.assertNotIn("ok", [reading["state"] for reading in provider["readings"]])
+        # Named on the line as well, because an availability that only appears
+        # when it is bad cannot be told apart from a field nobody filled in.
+        self.assertIn("availability: unavailable", self.printed())
+
+    def test_every_token_in_a_decode_has_a_row_in_the_key(self) -> None:
+        # The key is generated from the rendering tables and the decode is
+        # generated from the same ones, so this is the assertion that catches the
+        # two drifting: a reading whose token nothing explains.
+        self.register(
+            self.status(
+                scope="session",
+                segments=(
+                    segment("a", "critical", "Blocked"),
+                    segment(
+                        "b",
+                        "attention",
+                        "Waiting",
+                        confidence="medium",
+                        confidence_of="policy_decision",
+                    ),
+                    segment("c", "ok", "Checked", age_seconds=30),
+                ),
+            )
+        )
+
+        report = self.explain()
+        tokens = {
+            entry["token"] for section in report["legend"] for entry in section["entries"]
+        }
+        provider = report["providers"][0]
+
+        self.assertIn(provider["scope_token"], tokens)
+        for reading in provider["readings"]:
+            with self.subTest(key=reading["key"]):
+                self.assertIn(reading["state_token"], tokens)
+                if "confidence" in reading:
+                    # The confidence rows carry an example value, so the row for a
+                    # subject is the one that ends in the same subject phrasing.
+                    self.assertTrue(
+                        any(
+                            reading["confidence"]["rendered"].rsplit(" ", 1)[0]
+                            == token.rsplit(" ", 1)[0]
+                            for token in tokens
+                        ),
+                        reading["confidence"],
+                    )
+
+
 class CommandLineTest(LifecycleCase):
     """The CLI exists so that nobody has to hand-edit JSON, so it is tested as the surface."""
 
