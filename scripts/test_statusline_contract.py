@@ -917,6 +917,7 @@ class WireParsingTest(unittest.TestCase):
                     "hypothetical": True,
                     "explain_key": "fornax.latest_finding",
                     "order_hint": 3,
+                    "clear_role": "posture",
                 }
             ],
         )
@@ -931,6 +932,76 @@ class WireParsingTest(unittest.TestCase):
         covered = set(self._rich()["segments"][0])
         declared = {f.name for f in dataclasses.fields(sc.Segment)}
         self.assertEqual(declared - covered, set())
+
+
+class ClearRoleTest(unittest.TestCase):
+    """The provider's editorial judgement about its own one-line summary."""
+
+    def _segment(self, **overrides) -> sc.Segment:
+        fields = {
+            "key": "estimate",
+            "state": sc.SegmentState.NEUTRAL,
+            "label": "Remaining work",
+        }
+        fields.update(overrides)
+        return sc.Segment(**fields)
+
+    def test_a_segment_may_leave_its_role_undeclared(self) -> None:
+        # The first three providers shipped before this field existed, so
+        # undeclared has to stay a valid, renderable state rather than a defect.
+        self.assertIsNone(self._segment().clear_role)
+
+    def test_every_role_is_accepted(self) -> None:
+        for role in sc.ClearRole:
+            with self.subTest(role=role):
+                self.assertIs(self._segment(clear_role=role).clear_role, role)
+
+    def test_a_role_that_is_not_a_clear_role_is_refused(self) -> None:
+        # Including the wire string: accepting it would make `clear_role.value`
+        # raise deep inside the renderer instead of here, at construction.
+        for value in ("posture", 2, True, sc.SegmentState.OK):
+            with self.subTest(value=repr(value)):
+                with self.assertRaises(sc.ContractViolation):
+                    self._segment(clear_role=value)
+
+    def test_the_role_survives_the_wire_in_both_directions(self) -> None:
+        for role in sc.ClearRole:
+            with self.subTest(role=role):
+                payload = sc._segment_to_wire(self._segment(clear_role=role))
+                self.assertEqual(payload["clear_role"], role.value)
+                self.assertIs(sc._segment_from_wire(payload, 0).clear_role, role)
+
+    def test_an_undeclared_role_is_omitted_from_the_wire(self) -> None:
+        self.assertNotIn("clear_role", sc._segment_to_wire(self._segment()))
+
+    def test_an_unrecognised_role_becomes_undeclared_not_a_guess(self) -> None:
+        # The two wrong answers this is guarding against, in order of how much
+        # they cost: rejecting the whole provider payload would lose a real
+        # health claim over a presentation hint, and inventing a member would
+        # either promote a routine reading to an exception or hide one that
+        # matters. Undeclared is a state the host already handles correctly.
+        payload = sc._segment_to_wire(self._segment())
+        payload["clear_role"] = "headline"
+        self.assertIsNone(sc._segment_from_wire(payload, 0).clear_role)
+
+    def test_an_unrecognised_role_does_not_reject_the_provider(self) -> None:
+        payload = _payload()
+        payload["segments"][0]["clear_role"] = "headline"
+        status = sc.provider_status_from_wire(payload)
+        self.assertIsNone(status.segments[0].clear_role)
+
+    def test_a_role_is_independent_of_state_severity(self) -> None:
+        # The contract must not couple the two, because the whole reason this
+        # field exists is that severity cannot express the judgement: a
+        # warn-state budget posture is still a posture, and every state has to
+        # be able to carry every role for the host ladder to be the only place
+        # that decides what a role means.
+        for state in sc.SegmentState:
+            for role in sc.ClearRole:
+                with self.subTest(state=state, role=role):
+                    built = self._segment(state=state, clear_role=role)
+                    self.assertIs(built.state, state)
+                    self.assertIs(built.clear_role, role)
 
 
 class WireForwardCompatibilityTest(unittest.TestCase):

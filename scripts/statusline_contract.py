@@ -189,6 +189,36 @@ _CONFIDENCE_SUBJECT_LABEL = {
 }
 
 
+class ClearRole(enum.Enum):
+    """What part a segment plays in its product's one-line executive summary.
+
+    A Clear-mode reading is not Detail with fields removed; it is the answer to
+    "if this product gets one short phrase, which of its facts earns it". Only
+    the product knows that. A task id and a delivery estimate are both `neutral`
+    facts of equal severity, but one is an operator's whole reason to look at the
+    line and the other is noise, and no amount of host-side severity arithmetic
+    can tell them apart. So the judgement is declared here rather than inferred,
+    and the host owns only the ladder that consumes it — which keeps Clear a
+    single shared code path instead of one branch per product.
+
+    Declaring it on the *segment* rather than shipping a per-product table in the
+    host is what makes that true for a product the host has never heard of. The
+    host's fallback for an undeclared segment (`statusline_render.clear_role`)
+    exists for providers written before this field, not as the intended path.
+
+    `EXCEPTION` is the top rung and deliberately narrow: the product is broken,
+    unavailable, or genuinely waiting on the operator. It is not "the worst thing
+    currently true" — a warn-state budget posture is still a posture, and
+    promoting it to an exception is how a line starts claiming work is blocked
+    when nothing is.
+    """
+
+    EXCEPTION = "exception"
+    POSTURE = "posture"
+    VITAL = "vital"
+    SUPPORTING = "supporting"
+
+
 class HostCapability(enum.Enum):
     """Whether a given agent host tool can support a composed statusline.
 
@@ -598,6 +628,11 @@ class Segment:
     hypothetical: bool = False
     explain_key: str | None = None
     order_hint: int = 0
+    # Optional because it arrived after the first three providers shipped, and a
+    # segment that does not declare a part still has to render. `None` means "the
+    # provider has not judged this", which the host answers with a documented
+    # default -- not with a guess dressed up as a declaration.
+    clear_role: ClearRole | None = None
 
     def __post_init__(self) -> None:
         require_token(self.key, "segment.key")
@@ -618,6 +653,8 @@ class Segment:
         if self.explain_key is not None:
             require_explain_key(self.explain_key)
         require_bounded_int(self.order_hint, "segment.order_hint", MAX_ORDER_HINT)
+        if self.clear_role is not None and not isinstance(self.clear_role, ClearRole):
+            raise ContractViolation("segment.clear_role must be a ClearRole")
 
     def _validate_confidence(self) -> None:
         """A confidence without its subject reads as risk; forbid the pair split."""
@@ -946,6 +983,8 @@ def _segment_to_wire(segment: Segment) -> dict:
         payload["hypothetical"] = True
     if segment.order_hint:
         payload["order_hint"] = segment.order_hint
+    if segment.clear_role is not None:
+        payload["clear_role"] = segment.clear_role.value
     return payload
 
 
@@ -1021,6 +1060,27 @@ def _parse_enum_lenient(enum_cls: type, value: object, field: str, unknown):
     return unknown
 
 
+def _parse_clear_role(value: object) -> ClearRole | None:
+    """Parse an optional `clear_role`, treating anything unrecognised as undeclared.
+
+    A third parsing policy beside the strict and lenient ones above, because
+    neither is right here. Strict would reject a whole provider payload over a
+    presentation hint, which is a health claim lost to a cosmetic field. Lenient
+    needs an `unknown` member to degrade to, and this enum deliberately has none:
+    every member is a real editorial judgement, so a made-up one would either
+    promote a routine reading to an exception or hide one that matters.
+
+    Undeclared is already a state the host handles correctly, with a documented
+    default, so an unrecognised value resolves to exactly that.
+    """
+    if value is None:
+        return None
+    for member in ClearRole:
+        if member.value == value:
+            return member
+    return None
+
+
 def _segment_from_wire(payload: object, index: int) -> Segment:
     """Parse one segment, ignoring fields this contract version does not know."""
     if not isinstance(payload, dict):
@@ -1061,6 +1121,7 @@ def _segment_from_wire(payload: object, index: int) -> Segment:
         hypothetical=bool(payload.get("hypothetical", False)),
         explain_key=payload.get("explain_key"),
         order_hint=payload.get("order_hint", 0),
+        clear_role=_parse_clear_role(payload.get("clear_role")),
     )
 
 
