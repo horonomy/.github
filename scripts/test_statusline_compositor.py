@@ -433,6 +433,47 @@ class TestRegistryParsing(unittest.TestCase):
                 )
                 self.assertIs(registry.mode, mode)
 
+    def test_every_information_depth_can_be_selected(self):
+        for depth in render.InformationDepth:
+            with self.subTest(depth=depth):
+                registry = compositor.parse_registry(
+                    registry_document(presentation={"depth": depth.value})
+                )
+                self.assertIs(registry.depth, depth)
+
+    def test_an_absent_depth_is_the_clear_summary(self):
+        # What a fresh installation gets, and what someone who has never opened
+        # this preference gets: the summary, not the diagnostic.
+        self.assertIs(
+            compositor.parse_registry(registry_document()).depth,
+            render.InformationDepth.CLEAR,
+        )
+
+    def test_an_unknown_depth_falls_back_to_the_narrower_one(self):
+        # Lenient like the mode beside it, with one asymmetry that matters: the
+        # fallback is the *narrower* depth, so a typo in a preference can never
+        # answer with more information than the reader asked for.
+        for value in ("fancy-nonsense", 7, None, ["detail"]):
+            with self.subTest(value=value):
+                registry = compositor.parse_registry(
+                    registry_document(presentation={"depth": value})
+                )
+                self.assertIs(registry.depth, render.InformationDepth.CLEAR)
+
+    def test_the_depth_and_the_mode_are_independent(self):
+        # Three axes, not eight modes: density and icon style decide how much room
+        # a reading may spend, depth decides how much there is to say.
+        for mode in render.PresentationMode:
+            for depth in render.InformationDepth:
+                with self.subTest(mode=mode, depth=depth):
+                    registry = compositor.parse_registry(
+                        registry_document(
+                            presentation={"mode": mode.value, "depth": depth.value}
+                        )
+                    )
+                    self.assertIs(registry.mode, mode)
+                    self.assertIs(registry.depth, depth)
+
 
 class TestRegistryLoading(FixtureCase):
     def test_a_missing_registry_is_a_registry_error(self):
@@ -1077,6 +1118,88 @@ class TestMain(FixtureCase):
         out = self.run_main()[1]
         self.assertEqual(out.count("\n"), 1)
         self.assertTrue(out.endswith("\n"))
+
+    def diagnostic_wire(self) -> dict:
+        """One provider with more to say than the summary will show."""
+        return wire(
+            segments=[
+                {
+                    "key": "latest_verdict",
+                    "state": "attention",
+                    "label": "Unverified",
+                    "reason_code": "no_evidence",
+                    "order_hint": 10,
+                },
+                {
+                    "key": "events",
+                    "state": "neutral",
+                    "label": "Events",
+                    "count": 42,
+                    "count_label": "seen",
+                    "order_hint": 20,
+                },
+            ]
+        )
+
+    def test_the_stored_information_depth_reaches_the_line(self):
+        # The preference is only a preference if the render honours it. It was
+        # being written and read back by the lifecycle surfaces before this,
+        # which is a setting that appears to work and changes nothing.
+        good = self.answering("depth-probe", self.diagnostic_wire())
+        rendered = {}
+        for depth in render.InformationDepth:
+            self.write_registry(
+                providers=[provider_document("fornax", [good])],
+                presentation={"mode": "plain", "depth": depth.value},
+            )
+            rendered[depth] = self.run_main()[1]
+
+        clear = rendered[render.InformationDepth.CLEAR]
+        detail = rendered[render.InformationDepth.DETAIL]
+        # Same primary state either way -- one state engine -- and only the
+        # supporting context differs.
+        for line in (clear, detail):
+            self.assertIn("Unverified", line)
+        self.assertNotIn("42", clear)
+        self.assertIn("42", detail)
+        self.assertLess(len(clear), len(detail))
+
+    def test_the_summary_is_what_an_unconfigured_installation_renders(self):
+        good = self.answering("depth-default", self.diagnostic_wire())
+        self.write_registry(
+            providers=[provider_document("fornax", [good])], presentation={"mode": "plain"}
+        )
+
+        line = self.run_main()[1]
+
+        self.assertIn("Unverified", line)
+        self.assertNotIn("42", line)
+
+    def test_neither_depth_asks_a_provider_anything_extra(self):
+        # Detail shows more of the same snapshot; it does not go and collect more.
+        # A provider run per reading shown would make the diagnostic depth a
+        # different latency class from the summary one.
+        counter = self.script("depth-counter", "cat <<'EOF'\n" + json.dumps(wire()) + "\nEOF\n")
+        runs = {}
+        for depth in render.InformationDepth:
+            log = self.home / f"{depth.value}-runs"
+            counted = self.script(
+                f"depth-count-{depth.value}",
+                f"printf 'x' >> '{log}'\nexec '{counter}'\n",
+            )
+            self.write_registry(
+                providers=[provider_document("fornax", [counted])],
+                presentation={"depth": depth.value},
+            )
+            # Zeroed after the fixture is built: `script` warms a freshly written
+            # executable by running it once, and counting that would be counting
+            # the fixture rather than the render.
+            log.write_bytes(b"")
+            self.run_main()
+            runs[depth] = log.read_bytes()
+
+        self.assertEqual(runs[render.InformationDepth.CLEAR], b"x")
+        self.assertEqual(runs[render.InformationDepth.DETAIL], b"x")
 
     def test_a_width_budget_is_honoured(self):
         good = self.answering("good7", wire())
