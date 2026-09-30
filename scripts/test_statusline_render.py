@@ -24,6 +24,7 @@ import statusline_contract as contract
 import statusline_render as render
 
 MODES = tuple(render.PresentationMode)
+DEPTHS = tuple(render.InformationDepth)
 
 
 def segment(**overrides) -> contract.Segment:
@@ -210,6 +211,72 @@ class TestPresentationModeParse(unittest.TestCase):
         # existing one -- the survivor would answer for both. Then a user asking
         # for one would silently get the other.
         self.assertEqual(len(render._MODE_BY_AXES), len(MODES))
+
+
+class TestInformationDepth(unittest.TestCase):
+    def test_every_member_round_trips_from_its_value(self):
+        for depth in DEPTHS:
+            with self.subTest(depth=depth):
+                self.assertIs(render.InformationDepth.parse(depth.value), depth)
+
+    def test_a_member_is_returned_unchanged(self):
+        for depth in DEPTHS:
+            self.assertIs(render.InformationDepth.parse(depth), depth)
+
+    def test_case_and_surrounding_space_are_tolerated(self):
+        self.assertIs(
+            render.InformationDepth.parse("  DETAIL "), render.InformationDepth.DETAIL
+        )
+
+    def test_unrecognised_input_falls_back_to_the_narrower_depth(self):
+        # Not merely "falls back": it falls back *downward*. A near-miss on a
+        # depth preference answering with more information than was asked for is
+        # the one failure mode this axis can have that the other two cannot.
+        for value in ("", "verbose", "deatil", None, 7, [], object()):
+            with self.subTest(value=repr(value)):
+                self.assertIs(
+                    render.InformationDepth.parse(value), render.InformationDepth.CLEAR
+                )
+
+    def test_the_fallback_is_overridable(self):
+        self.assertIs(
+            render.InformationDepth.parse("nope", render.InformationDepth.DETAIL),
+            render.InformationDepth.DETAIL,
+        )
+
+    def test_a_fresh_install_defaults_to_clear(self):
+        # A user who has asked for nothing wants to know whether a product needs
+        # them, not to read diagnostics. Detail is an opt-in.
+        self.assertIs(render.DEFAULT_INFORMATION_DEPTH, render.InformationDepth.CLEAR)
+
+    def test_only_detail_shows_supporting_context(self):
+        self.assertEqual(
+            {depth: depth.shows_supporting_detail for depth in DEPTHS},
+            {
+                render.InformationDepth.CLEAR: False,
+                render.InformationDepth.DETAIL: True,
+            },
+        )
+
+    def test_depth_is_not_a_presentation_mode(self):
+        # The axes have to stay separable at the type level, not just by
+        # convention: the moment a depth is accepted where a mode is expected,
+        # `mode.is_compact` starts answering a question nobody asked it.
+        for depth in DEPTHS:
+            with self.subTest(depth=depth):
+                self.assertNotIsInstance(depth, render.PresentationMode)
+                self.assertFalse(hasattr(depth, "is_compact"))
+        self.assertEqual(
+            {mode.value for mode in MODES} & {depth.value for depth in DEPTHS}, set()
+        )
+
+    def test_depth_does_not_change_the_rendering_mode_ladder(self):
+        # The width-pressure ladder is a statement about the two rendering axes.
+        # Depth must not appear in it, or a narrow terminal would start deciding
+        # how much a provider is allowed to report.
+        for candidates in render.MODE_LADDER.values():
+            for candidate in candidates:
+                self.assertIsInstance(candidate, render.PresentationMode)
 
 
 class TestGraphemeClusters(unittest.TestCase):
