@@ -948,6 +948,52 @@ class RestorationTest(LifecycleCase):
             plan.notes,
         )
 
+    def test_a_plan_does_not_claim_to_remove_a_marker_that_is_not_there(self) -> None:
+        """A plan is what the user consents to, so its changes have to be real.
+
+        Note this is not the `DRIFTED` fixture above. There the marker survives
+        because only the command was edited, so the removal it discloses does
+        happen. The phantom case needs the marker gone as well -- a user who took
+        their statusline back by hand -- which is also the state the founder's
+        own workstation was in after earlier per-ticket testing left a registry
+        behind. Announcing a removal there described an edit to a key that did
+        not exist, in the one output a user reads before authorizing a write.
+        """
+        self.enable("fornax")
+        theirs = dict(self._read())
+        theirs[lifecycle.STATUS_LINE_KEY] = {"type": "command", "command": "/bin/true", "padding": 1}
+        self.write(theirs)
+        self.assertIs(
+            lifecycle.classify(lifecycle.read_settings(self.settings)),
+            lifecycle.Ownership.USER_OWNED,
+        )
+
+        plan = self.plan_remove("fornax", operation="uninstall")
+
+        marker_claims = [
+            change
+            for change in plan.changes
+            if change.target == f"{lifecycle.STATUS_LINE_KEY}.{lifecycle.MARKER_KEY}"
+        ]
+        self.assertEqual(marker_claims, [], "the plan claimed a marker removal with no marker")
+        # The rest of the plan is unaffected: it still refuses to touch the
+        # command, and still retires the state it does own.
+        self.assertTrue(any("CONFIG_DRIFT" in change.detail for change in plan.changes))
+        lifecycle.apply(plan)
+        self.assertEqual(self._read(), theirs)
+
+    def test_a_marker_that_is_there_is_still_disclosed(self) -> None:
+        # The other half of the same fix. Suppressing the claim in every case
+        # would pass the test above while hiding a real edit to the user's file.
+        self.enable("fornax")
+        plan = self.plan_remove("fornax", operation="uninstall")
+        self.assertTrue(
+            any(
+                change.target == f"{lifecycle.STATUS_LINE_KEY}.{lifecycle.MARKER_KEY}"
+                for change in plan.changes
+            )
+        )
+
     def test_removal_never_deletes_the_file_it_shares_with_the_host(self) -> None:
         self.settings.unlink()
         self.enable("fornax")

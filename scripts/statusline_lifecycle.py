@@ -1376,8 +1376,15 @@ def _released_status_line(
     remembered command from overwriting a newer one the user chose themselves.
     """
     after = dict(before)
-    after.pop(MARKER_KEY, None)
-    changes = [Change(ChangeKind.REMOVE, f"{STATUS_LINE_KEY}.{MARKER_KEY}", "ownership marker removed")]
+    # Only disclosed when there is one to remove. Announcing it unconditionally
+    # made every drift plan claim a marker removal that could not happen, since
+    # a statusline the compositor does not own has no marker in it -- a plan is
+    # the thing the user consents to, so a change listed in one has to be real.
+    changes: list[Change] = []
+    if after.pop(MARKER_KEY, None) is not None:
+        changes.append(
+            Change(ChangeKind.REMOVE, f"{STATUS_LINE_KEY}.{MARKER_KEY}", "ownership marker removed")
+        )
     notes: list[str] = []
 
     if ownership is not Ownership.HORONOM_OWNED:
