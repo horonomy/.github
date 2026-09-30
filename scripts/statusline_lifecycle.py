@@ -515,6 +515,24 @@ class Plan:
         }
 
 
+def _validated_argv(argv: object, field: str) -> tuple[str, ...]:
+    """Check one command a product asked us to run on its behalf.
+
+    Extracted rather than inlined because there is now more than one such command
+    per provider, and a second copy of these bounds is a second chance to forget
+    one. Everything checked here is checked again by the compositor when it reads
+    the registry back; this copy exists so the refusal names the flag the caller
+    typed rather than surfacing later as a corrupt-registry error.
+    """
+    if not isinstance(argv, (list, tuple)) or not argv:
+        raise LifecycleError(f"{field} must be a non-empty list of non-empty strings")
+    if not all(isinstance(part, str) and part for part in argv):
+        raise LifecycleError(f"{field} must be a non-empty list of non-empty strings")
+    if len(argv) > compositor.MAX_ARGV_LENGTH:
+        raise LifecycleError(f"{field} may have at most {compositor.MAX_ARGV_LENGTH} parts")
+    return tuple(argv)
+
+
 @dataclasses.dataclass(frozen=True)
 class ProviderRegistration:
     """What a product tells the host in order to appear in the line.
@@ -536,12 +554,7 @@ class ProviderRegistration:
         # Constructed rather than compared so an unrecognised scope raises here,
         # at registration, instead of at the first render.
         contract.Scope(self.scope)
-        if not self.argv or not all(isinstance(part, str) and part for part in self.argv):
-            raise LifecycleError("a provider command must be a non-empty list of non-empty strings")
-        if len(self.argv) > compositor.MAX_ARGV_LENGTH:
-            raise LifecycleError(
-                f"a provider command may have at most {compositor.MAX_ARGV_LENGTH} parts"
-            )
+        _validated_argv(self.argv, "a provider command")
         if self.timeout_ms is not None and not (
             0 < self.timeout_ms <= compositor.MAX_PROVIDER_TIMEOUT_MS
         ):
