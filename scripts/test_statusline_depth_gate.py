@@ -1669,3 +1669,215 @@ class PlainTextTest(unittest.TestCase):
                             or (case.snapshot.fallback_text or "") in line,
                             line,
                         )
+
+
+# --------------------------------------------------------------------------- #
+# What is allowed to reach the line, at either depth
+# --------------------------------------------------------------------------- #
+
+# A snapshot that fills in every field the contract has room for, including the
+# ones no reader is ever meant to see.
+#
+# The matrix rows above are written to exercise *states*, and a row that happens
+# not to set `explain_key` cannot prove `explain_key` stays off the line. That
+# matters here more than it usually would, because the defect this fixture exists
+# to catch has a ready-made justification: detail is the developer's depth, so a
+# machine identifier is arguably useful there. The ticket's answer is that detail
+# is a deeper reading of the same reviewed surface, not a wider one — a field that
+# is unsafe to show is unsafe at both depths, and "this is developer mode" is not
+# a reason.
+BOOKKEEPING = status(
+    provider="fornax",
+    # Every value here is distinctive enough that its appearance on a line could
+    # not be a coincidence, and none of them are quantities a reading also
+    # reports, so a leak cannot be mistaken for a count.
+    provider_version="9.9.9-bookkeeping",
+    scope=contract.Scope.PROJECT,
+    availability=contract.Availability.AVAILABLE,
+    observed_at="2026-09-30T11:22:33Z",
+    cache_ttl_seconds=59,
+    order_hint=977,
+    fallback_text="Fornax could not be read",
+    segments=(
+        segment(
+            key="latest_verdict",
+            state=contract.SegmentState.ATTENTION,
+            label="Unverified",
+            # No prose beside it, so the host has to make the token readable and
+            # the raw token is the thing that must not survive that.
+            reason_code="evidence_not_recorded",
+            count=7,
+            total=9,
+            count_label="claims",
+            age_seconds=61,
+            fresh_for_seconds=3600,
+            explain_key="fornax.verdict.latest",
+            # Three digits, and not a number any reading here reports: a segment's
+            # sort key is an integer like any quantity, so a one-digit hint could
+            # only be asserted absent by accident.
+            order_hint=613,
+            clear_role=contract.ClearRole.POSTURE,
+        ),
+        segment(
+            key="remaining_work",
+            state=contract.SegmentState.WARN,
+            label="Remaining work",
+            reason_code="claims_disagree",
+            reason_label="Two claims disagree about the same fact",
+            confidence=contract.Confidence.HIGH,
+            confidence_of=contract.ConfidenceSubject.PREFLIGHT_ESTIMATE,
+            duration_seconds=720,
+            duration_label="P90",
+            hypothetical=True,
+            age_seconds=5,
+            fresh_for_seconds=600,
+            explain_key="fornax.plan.remaining",
+            order_hint=811,
+            clear_role=contract.ClearRole.VITAL,
+        ),
+    ),
+)
+
+DISCLOSURE_CASES = tuple(case.snapshot for case in MATRIX) + (BOOKKEEPING,)
+
+
+def allowlisted(snapshot: contract.ProviderStatus, mode, depth) -> tuple[str, ...]:
+    """Every string this snapshot permits on the line, longest first.
+
+    Two sources and no third: host-owned vocabulary — the product's name, the
+    scope and state markers, the hypothetical marker, the separators — and the
+    provider's own reader-facing values, each rendered through the formatter that
+    owns it rather than reproduced as a literal here.
+
+    Deliberately a superset across depths: it offers every segment's values at
+    both depths, so it says nothing about *which* readings clear keeps. That claim
+    belongs to the matrices above, and folding it in here would make a failure
+    ambiguous between "clear showed too much" and "something leaked".
+    """
+    allowed = {
+        render.provider_display_name(snapshot.provider),
+        render.scope_marker(snapshot.scope.value, mode),
+        render.HYPOTHETICAL_TEXT,
+        render.SEGMENT_SEPARATORS[mode],
+        render.DETAIL_SEPARATOR,
+        render.NO_SEGMENTS_LABEL,
+        snapshot.fallback_text or "",
+    }
+    allowed.update(render.state_marker(state.value, mode) for state in contract.SegmentState)
+    for part in snapshot.segments:
+        allowed.add(part.label)
+        allowed.add(render.format_reason(part.reason_code, part.reason_label))
+        if part.count is not None and part.count_label:
+            allowed.add(render.format_count(part.count, part.total, part.count_label, mode))
+        if part.duration_seconds is not None and part.duration_label:
+            allowed.add(render.format_duration(part.duration_seconds, part.duration_label))
+        if part.confidence is not None:
+            allowed.add(
+                render.format_confidence(
+                    part.confidence.value,
+                    None if part.confidence_of is None else part.confidence_of.value,
+                    mode,
+                )
+            )
+        if part.age_seconds is not None:
+            allowed.add(render.format_age(part.age_seconds, mode))
+    del depth  # Accepted to document that the answer does not depend on it.
+    return tuple(sorted((value for value in allowed if value), key=len, reverse=True))
+
+
+def residue(snapshot: contract.ProviderStatus, mode, depth) -> str:
+    """The rendered line with everything it is allowed to say struck out.
+
+    Longest first, so removing a short allowed value cannot break a longer one
+    apart and leave two halves that look like a leak.
+    """
+    text = render.render_provider(snapshot, mode, depth)
+    for value in allowlisted(snapshot, mode, depth):
+        text = text.replace(value, " ")
+    return text
+
+
+class DisclosureBoundaryTest(unittest.TestCase):
+    """Detail is a deeper reading of one reviewed surface, not a wider one.
+
+    The privacy rule for this ticket is short: detail uses the same
+    privacy-reviewed provider snapshot as clear, and nothing else. Stated
+    positively it is an allowlist — the line may contain the provider's
+    reader-facing values and the host's own vocabulary — which is why the first
+    test below works by subtraction rather than by hunting for known-bad strings.
+    A denylist can only ever catch the leaks someone thought of.
+
+    The second test is narrower and catches what subtraction cannot judge: a
+    machine token that happens to read like prose. `evidence_not_recorded` is
+    fine to show once the host has made it readable; the token itself is an
+    internal identifier, and a reader who sees one has been handed something to
+    match on rather than something to read.
+    """
+
+    def test_nothing_on_the_line_came_from_outside_the_reviewed_surface(self) -> None:
+        for snapshot in DISCLOSURE_CASES:
+            for mode in MODES:
+                for depth in DEPTHS:
+                    left = residue(snapshot, mode, depth)
+                    with self.subTest(
+                        provider=snapshot.provider, mode=mode.value, depth=depth.value
+                    ):
+                        self.assertEqual(
+                            [character for character in left if character.isalnum()],
+                            [],
+                            f"{render.render_provider(snapshot, mode, depth)!r} left {left!r}",
+                        )
+
+    def test_no_machine_token_reaches_a_reader_at_either_depth(self) -> None:
+        for snapshot in DISCLOSURE_CASES:
+            for mode in MODES:
+                for depth in DEPTHS:
+                    line = render.render_provider(snapshot, mode, depth)
+                    with self.subTest(
+                        provider=snapshot.provider, mode=mode.value, depth=depth.value
+                    ):
+                        # The shape rather than the instance: segment keys, reason
+                        # codes and explain keys are all snake_case, so one
+                        # assertion covers every identifier the contract carries
+                        # and every one a later field might add.
+                        self.assertNotIn("_", line, line)
+                        for part in snapshot.segments:
+                            # Stated separately as well, because an explain key is
+                            # dotted rather than underscored when its parts are
+                            # single words, and so can leak past the rule above.
+                            if part.explain_key:
+                                self.assertNotIn(part.explain_key, line, line)
+
+    def test_the_wire_documents_own_bookkeeping_stays_off_the_line(self) -> None:
+        # Fields that exist for the host's benefit: which version answered, when,
+        # how long the answer keeps, and where it sorts. All four are legitimate
+        # in a diagnostic dump and none of them are a reading.
+        for mode in MODES:
+            for depth in DEPTHS:
+                line = render.render_provider(BOOKKEEPING, mode, depth)
+                with self.subTest(mode=mode.value, depth=depth.value):
+                    self.assertNotIn(BOOKKEEPING.provider_version, line, line)
+                    self.assertNotIn(BOOKKEEPING.observed_at, line, line)
+                    self.assertNotIn(str(BOOKKEEPING.cache_ttl_seconds), line, line)
+                    self.assertNotIn(str(BOOKKEEPING.order_hint), line, line)
+                    for part in BOOKKEEPING.segments:
+                        self.assertNotIn(str(part.order_hint), line, line)
+
+    def test_the_fixture_offers_every_field_there_is_to_leak(self) -> None:
+        """Otherwise the class above proves only that absent fields stay absent.
+
+        Asserted over the contract's own field list rather than a list written
+        here, so a field added to `Segment` tomorrow fails this test until the
+        fixture carries it — which is the point at which someone has to decide
+        whether it is safe to render.
+        """
+        carried = {
+            field.name
+            for field in dataclasses.fields(contract.Segment)
+            for part in BOOKKEEPING.segments
+            if getattr(part, field.name) not in (None, False)
+        }
+        self.assertEqual(
+            carried,
+            {field.name for field in dataclasses.fields(contract.Segment)},
+        )
