@@ -2331,6 +2331,164 @@ class ExplainCommandLineTest(ExplainCase):
         self.assertFalse(options.legend_only)
 
 
+class MigrationTest(LifecycleCase):
+    """The three configurations real users are arriving from.
+
+    Each of these existed before any of this did: Fornax's project-local DogFood
+    wrapper, the founder's hand-written composed wrapper, and a manually edited
+    `settings.json`. The tests are here rather than in the docs because
+    "migration is reversible" is a claim about code, and a document asserting it
+    is a document that can be wrong for a release.
+    """
+
+    def wrapper(self, name: str, body: str) -> pathlib.Path:
+        path = self.root / name
+        path.write_text(f"#!/bin/sh\n{body}")
+        path.chmod(0o755)
+        subprocess.run([str(path)], capture_output=True, timeout=30, check=False)
+        return path
+
+    def provider(self, name: str, label: str) -> pathlib.Path:
+        status = contract.ProviderStatus(
+            provider=name,
+            provider_version="1.0.0",
+            scope=contract.Scope.HOST,
+            availability=contract.Availability.AVAILABLE,
+            segments=(segment("v", "ok", label),),
+        )
+        path = self.root / f"{name}-provider.sh"
+        path.write_text(f"#!/bin/sh\nprintf '%s' {shlex.quote(json.dumps(status.to_wire()))}\n")
+        path.chmod(0o755)
+        subprocess.run([str(path)], capture_output=True, timeout=30, check=False)
+        return path
+
+    def composed(self) -> str:
+        stream = io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            compositor.main(stdin=io.BytesIO(b"{}"), stdout=stream)
+        return stream.getvalue()
+
+    def test_a_manual_configuration_is_migrated_and_handed_back_intact(self) -> None:
+        # The plainest origin, and the one whose reversibility the docs promise
+        # without qualification.
+        script = self.wrapper("hand-rolled.sh", "echo 'my line'\n")
+        data = self._read()
+        data[lifecycle.STATUS_LINE_KEY] = {
+            "type": "command",
+            "command": str(script),
+            "padding": 1,
+            "refreshInterval": 3,
+            "futureUnknownKey": "keep-me",
+        }
+        self.write(data)
+        before, script_before = self._read(), script.read_bytes()
+
+        self.enable("fornax")
+        self.enable("libra")
+        self._uninstall()
+
+        self.assertEqual(self._read(), before)
+        # The one thing no other test here asserts: the file the command points at
+        # was never opened for writing. "Its script will not be edited" is a claim
+        # about a file outside the settings document entirely.
+        self.assertEqual(script.read_bytes(), script_before)
+
+    def test_migration_never_edits_the_composed_wrapper_it_replaces(self) -> None:
+        # The founder's own origin: one hand-written script that shells out to two
+        # products itself. Registering those products does not stop the wrapper
+        # from calling them, so the line legitimately says each thing twice --
+        # which is a thing for the reader to fix in their own script, and exactly
+        # the kind of edit this code may not make for them.
+        wrapper = self.wrapper("composed.sh", "echo 'fornax: VERIFIED | libra: ok'\n")
+        data = self._read()
+        data[lifecycle.STATUS_LINE_KEY]["command"] = str(wrapper)
+        self.write(data)
+        before = wrapper.read_bytes()
+
+        self.enable("fornax", argv=(str(self.provider("fornax", "Verified")),), timeout_ms=2000)
+
+        line = self.composed()
+        self.assertEqual(wrapper.read_bytes(), before)
+        self.assertIn("fornax: VERIFIED", line)
+        self.assertIn("Verified", line)
+        # Named for what it is, so that a later reading of this test does not take
+        # the duplicate for an accident the code should have prevented.
+        self.assertEqual(line.lower().count("fornax"), 2, line)
+
+    def test_a_project_local_wrapper_is_left_for_its_owner_to_retire(self) -> None:
+        # Claude Code's project-local settings replace the global `statusLine`
+        # rather than merging with it, so migrating the global file does not
+        # migrate a project. Deleting the project file to make the global one take
+        # effect would be a destructive mutation of state we do not own.
+        project = self.root / "project" / ".claude" / "settings.local.json"
+        project.parent.mkdir(parents=True)
+        local = {
+            "statusLine": {"type": "command", "command": "scripts/fornax-statusline.sh"},
+            "permissions": {"allow": ["Bash(fornax status)"]},
+        }
+        project.write_bytes(lifecycle.serialize(local, indent=2))
+        before = project.read_bytes()
+
+        self.enable("fornax")
+        self._uninstall()
+
+        self.assertEqual(project.read_bytes(), before)
+
+    def test_a_project_local_wrapper_can_itself_be_migrated_in_place(self) -> None:
+        # And the supported way to retire it: point the lifecycle at that file.
+        # Nothing here is global -- one settings path per invocation -- so the
+        # project keeps its own upstream and its own unrelated keys.
+        project = self.root / "project" / ".claude" / "settings.local.json"
+        project.parent.mkdir(parents=True)
+        wrapper = self.wrapper("fornax-statusline.sh", "echo 'fornax dogfood'\n")
+        project.write_bytes(
+            lifecycle.serialize(
+                {
+                    "statusLine": {"type": "command", "command": str(wrapper)},
+                    "permissions": {"allow": ["Bash(fornax status)"]},
+                },
+                indent=2,
+            )
+        )
+        global_before = self.settings.read_bytes()
+
+        document = lifecycle.read_settings(project)
+        registry = lifecycle.read_registry(self.home)
+        lifecycle.apply(
+            lifecycle.plan_enable(
+                document,
+                registry,
+                lifecycle.ProviderRegistration(
+                    provider="fornax", argv=("/bin/echo", "fornax"), scope="host"
+                ),
+            )
+        )
+
+        self.assertEqual(
+            lifecycle.read_registry(self.home).data["upstream"]["command"], str(wrapper)
+        )
+        self.assertEqual(self.settings.read_bytes(), global_before)
+        self.assertEqual(
+            json.loads(project.read_text())["permissions"]["allow"], ["Bash(fornax status)"]
+        )
+
+    def test_a_presentation_preference_set_before_a_migration_survives_it(self) -> None:
+        # "Migration preserves presentation preferences." A reader who turned
+        # glyphs off because their font renders them as boxes has not changed their
+        # mind by enabling a second product.
+        self.enable("fornax")
+        lifecycle.apply(
+            lifecycle.plan_presentation(lifecycle.read_registry(self.home), glyphs=False)
+        )
+
+        self.enable("libra")
+        self.enable("fornax", timeout_ms=400)
+        self.remove("libra")
+
+        mode = compositor.load_registry(lifecycle.read_registry(self.home).path).mode
+        self.assertFalse(mode.uses_glyphs)
+
+
 class CommandLineTest(LifecycleCase):
     """The CLI exists so that nobody has to hand-edit JSON, so it is tested as the surface."""
 
