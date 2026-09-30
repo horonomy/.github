@@ -143,6 +143,7 @@ class LifecycleCase(unittest.TestCase):
             argv=kwargs.pop("argv", ("/bin/echo", provider)),
             scope=kwargs.pop("scope", "host"),
             timeout_ms=kwargs.pop("timeout_ms", None),
+            explain_argv=kwargs.pop("explain_argv", None),
         )
         return lifecycle.plan_enable(document, registry, registration, **kwargs)
 
