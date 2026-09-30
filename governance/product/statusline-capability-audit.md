@@ -72,7 +72,7 @@ which is why the distinction matters.
 | Circinus | `SUPPORTED` | Shipped, HORO-1568 |
 | Libra Governor | `SUPPORTED` | Shipped, HORO-1569 |
 | Glomeris | `SUPPORTED` | HORO-1577 |
-| Ophiuchus | `BLOCKED` | No persisted relay activity record — criterion 1 |
+| Ophiuchus | `BLOCKED` | No persisted relay activity record — criteria 1, 2 and 6 |
 | Eltanin | `BLOCKED` | Status surface returns liveness, not state, by protocol design — criterion 1 |
 | Eridanus | `BLOCKED` | No local read-only projection over the Edge buffer — criteria 1 and 4 |
 | Horologium | `NOT_APPLICABLE` | Server-side; state is review-time, not session-time |
@@ -163,7 +163,7 @@ Each entry names the exact missing prerequisite and the criterion it fails.
 named prerequisite existed, so each entry doubles as the specification of what
 would unblock it.
 
-### Ophiuchus — `BLOCKED` on criterion 1
+### Ophiuchus — `BLOCKED` on criteria 1, 2 and 6
 
 **Missing prerequisite:** a persisted, locally readable record of relay activity.
 
@@ -173,11 +173,12 @@ so even if it were richer it would fail criterion 2.
 
 The state a statusline would want is relay receipts, and receipts are transient by
 design: they are validated and printed, never stored. Usage history is
-relay-operator-side and off by default. The product's own docstring for that path
-states the problem more precisely than this audit could — a relay that should be
-recording and is not looks exactly like a relay nobody used. That is criterion 6
-failing at the source rather than in the rendering: a provider cannot distinguish
-unavailable from a healthy zero when the underlying store cannot either.
+relay-operator-side and off by default — and the product's own documentation for
+that path already names the consequence: a relay that should be recording and is
+not looks exactly like a relay nobody used. That is criterion 6 failing at the
+source rather than in the rendering. A provider cannot distinguish unavailable
+from a healthy zero when the underlying store cannot either, so this is not
+something careful provider code could recover from.
 
 This confirms the standing DogFood hypothesis as recorded.
 
