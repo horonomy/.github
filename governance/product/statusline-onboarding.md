@@ -312,6 +312,58 @@ each fragment at the depth the line is actually using, while still decoding ever
 reading the provider reported — the ones the current depth leaves out are marked
 as not being on the line rather than listed as though they were.
 
+### One product, one row at `detail` (HORO-1628)
+
+Founder DogFooding found the flaw the first implementation of depth still had:
+three products, each now saying more, all on one shared line. The products with
+the most to report are the ones a reader most needs at this depth, and they were
+exactly the ones pushing the line past the edge of the terminal. So at `detail`
+every enabled product is laid out on a physical row of its own, in the same
+contract order the shared line used, appended after the complete upstream output:
+
+```
+~/proj  main*  claude-opus-5  $0.42
+Fornax         📁 ✅ Verified (3 of 3 claims; 2m ago)
+Circinus       💻 🟠 Shadow mode [NOT ENFORCED] (2 of 14 tool calls)
+Libra Governor 💬 🛑 Awaiting your approval (escalated to human) · ✅ Preflight (preflight confidence high) · ⚪ Remaining work (P90 12m)
+```
+
+`clear` keeps its single line. It is the summary depth — one row is what makes it
+scannable, and a reader who wants a row per product is asking for `detail`.
+
+Rows are the resource this depth has, and that is what it spends when the
+terminal is narrow. The same three products in sixty columns:
+
+```
+~/proj  main*  claude-opus-5  $0.42
+Fornax         📁 ✅ Verified (3 of 3 claims; 2m ago)
+Circinus       💻
+  🟠 Shadow mode [NOT ENFORCED] (2 of 14 tool calls)
+Libra Governor 💬
+  🛑 Awaiting your approval (escalated to human)
+  ✅ Preflight (preflight confidence high)
+  ⚪ Remaining work (P90 12m)
+```
+
+A product too wide for one row wraps onto indented continuation rows rather than
+dropping a reading, and wrapping happens only between whole readings, so a state
+marker, a `[NOT ENFORCED]` qualifier or an emoji sequence can never be split from
+what it qualifies. An indented row belongs to the product above it. Product names are
+padded into a small column measured in display cells rather than characters, and
+the padding is dropped the moment it would cost a row — the alignment is a
+readability courtesy, never a correctness claim about how wide a glyph is.
+
+Below the width of a single reading no row-per-product layout exists at all, and
+there the line falls back to the shared horizontal rendering, which is the one
+place a reading may be shed and which says so with `[+N more]`. That fallback is
+the only way `detail` ever hides anything.
+
+This is a compositor-level concern throughout. No provider emits a newline or
+learns anything about layout; Fornax, Circinus and the Libra Governor return the
+same snapshot they always did, and no extra data is collected to fill the rows.
+The user's own statusline stays user-owned: it is never parsed, never rewritten
+and never collapsed, whether it prints one row or several.
+
 ## Privacy of these surfaces
 
 `doctor`, `list` and `explain` are what get pasted into an issue, so none of
@@ -409,6 +461,29 @@ narrowing its decode to what the line happens to show, a left-out reading decode
 without saying it is left out, `doctor` not naming the depth in force, and an
 unreadable saved depth reported as the reader's own.
 
+The row-per-product layout carries 33 further cases in
+`scripts/test_statusline_render.py`, split by whether the terminal is wide enough
+to be uninteresting. The wide half states the requirement — each product found
+where a reader expects it, once, with its own state and supporting context, in
+contract order whatever order the providers registered in, in every rendering
+style, with a text style saying all of it in words. The narrow half sweeps every
+mode across two hundred widths and states what holds at all of them: no row wider
+than the budget, every product still opening exactly one row, every continuation
+row indented, and nothing dropped. Two of those cases exist only to keep the
+sweep honest, asserting that wrapping and the horizontal fallback are both
+actually reached rather than passed over.
+
+Eight mutations, each detected: the depth not laying out vertically at all, rows
+joined by a divider instead of a newline, a continuation row losing its indent, a
+column measured in characters instead of display cells, a wrapped product
+dropping its overflow, a row allowed past the width budget, the block prepended
+to the user's output instead of appended, and `clear`'s shed-reading marker
+leaking into a layout that sheds nothing. Two of the tests failed to catch their
+mutation first time round, for the same reason in both cases: they read the row
+separator and the indent out of the module constants they were checking, so
+emptying the indent or swapping the newline for a divider mutated the test along
+with the code. Both now assert the literal character.
+
 One caveat recorded honestly: a single full-suite run during this work reported
 one failure whose name was lost to a truncated pipe. Fifteen subsequent runs,
 six of them under artificial CPU load, were clean. The most likely candidate by
@@ -417,10 +492,9 @@ reproduced and is not claimed to be fixed.
 
 ## Status
 
-Implemented and tested against fixtures, including the two information depths.
-HORO-1572's safety matrix, compositor and host mutation fixtures, and latency
-measurement are in place. What remains is HORO-1628 — giving each product its own
-physical line in `detail`, so a multi-product diagnostic view is readable — and
+Implemented and tested against fixtures, including the two information depths and
+the row-per-product layout `detail` uses. HORO-1572's safety matrix, compositor
+and host mutation fixtures, and latency measurement are in place. What remains is
 HORO-1627, the gate over both depths: the per-product state matrix, the switching
 cases, the mutations for this capability added without weakening the existing
 ones, and cold/warm latency at each depth. Behind those sits the Founder DogFood

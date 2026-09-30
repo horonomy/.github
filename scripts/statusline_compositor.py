@@ -676,7 +676,11 @@ def collect(
 
 
 def _render(reader: object, writer: object) -> None:
-    """Do the work of one render, writing at most one line to `writer`.
+    """Do the work of one render, writing one statusline to `writer`.
+
+    One statusline, not one line: at detail depth the renderer lays each product
+    out on a row of its own, and the upstream statusline may have been several
+    rows before we ever saw it. The composed text is printed as it comes back.
 
     Split from `main` so that "this command always exits 0" is structural rather
     than repeated: every early exit here is a bare `return`, and there is exactly

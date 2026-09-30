@@ -996,6 +996,42 @@ def scope_marker(scope: str, mode: PresentationMode) -> str:
 NO_SEGMENTS_LABEL = "No status reported"
 
 
+def provider_parts(
+    status: object,
+    mode: PresentationMode,
+    depth: InformationDepth = InformationDepth.DETAIL,
+) -> tuple[str, str, tuple[str, ...]]:
+    """One provider split into who is speaking and what they said.
+
+    Returns `(name, scope marker, readings)`. The two layouts this module
+    supports — every provider on one shared line, and every provider on a
+    physical line of its own — are the same rendering assembled differently, so
+    they both build a provider from here rather than each walking the contract.
+    A second assembler is how the vertical layout would eventually lose a scope
+    marker that the horizontal one kept, or apply the Clear projection once where
+    the other applies it twice.
+
+    `readings` is never empty. A provider that reported no segments gets one
+    reading saying so, because silence on a status line reads as all-clear; see
+    `render_provider` for why the host states that rather than trusting the
+    provider to.
+    """
+    segments = statusline_contract.order_segments(status)
+    if segments and not depth.shows_supporting_detail:
+        segments = clear_readings(status)
+    if segments:
+        readings = tuple(render_segment(segment, mode, depth) for segment in segments)
+    elif getattr(status, "fallback_text", None):
+        readings = (f"{state_marker(UNKNOWN_STATE, mode)} {status.fallback_text}",)
+    else:
+        readings = (f"{state_marker(UNKNOWN_STATE, mode)} {NO_SEGMENTS_LABEL}",)
+    return (
+        provider_display_name(status.provider),
+        scope_marker(_enum_value(status.scope), mode),
+        readings,
+    )
+
+
 def render_provider(
     status: object,
     mode: PresentationMode,
@@ -1025,19 +1061,8 @@ def render_provider(
     used for that only when present — it is a convenience rendering, never the
     primary one.
     """
-    segments = statusline_contract.order_segments(status)
-    if segments and not depth.shows_supporting_detail:
-        segments = clear_readings(status)
-    if segments:
-        body = SEGMENT_SEPARATORS[mode].join(render_segment(s, mode, depth) for s in segments)
-    elif getattr(status, "fallback_text", None):
-        body = f"{state_marker(UNKNOWN_STATE, mode)} {status.fallback_text}"
-    else:
-        body = f"{state_marker(UNKNOWN_STATE, mode)} {NO_SEGMENTS_LABEL}"
-
-    name = provider_display_name(status.provider)
-    scope = scope_marker(_enum_value(status.scope), mode)
-    return f"{name} {scope} {body}"
+    name, scope, readings = provider_parts(status, mode, depth)
+    return f"{name} {scope} {SEGMENT_SEPARATORS[mode].join(readings)}"
 
 
 def provider_severity(status: object) -> int:
@@ -1127,6 +1152,111 @@ def _render_groups(
         marker = _hidden_marker(hidden)
         text = f"{text}{SEGMENT_SEPARATORS[mode]}{marker}" if text else marker
     return text
+
+
+# ------------------------------------------------------------ the vertical layout
+#
+# At `DETAIL` every provider gets a physical line of its own (HORO-1628). Founder
+# DogFooding of the horizontal layout found the failure this fixes: three products
+# with reasons, ages and counters concatenated into one line is correct and
+# unreadable, and the state a reader most needs — a product that has just gone
+# degraded and has the most to say — is the one that pushes the line widest.
+#
+# Vertical space is the resource `DETAIL` has and `CLEAR` does not, so this is
+# where it gets spent. `CLEAR` stays on one line: it is the glanceable depth, and
+# a summary that costs three rows is no longer a summary.
+
+
+# A continuation line is attached to its provider by indentation alone. That is
+# the one attachment that survives a text-only terminal, a reader with colour
+# off, and a copy-paste into a plain-text bug report — all three of which are
+# states this line is read in. Two columns is enough to be visible without a
+# narrow terminal paying much for it.
+READING_INDENT = "  "
+
+# Named because two different things divide a row from the next one here -- this,
+# and the upstream separators above -- and a bare "\n" in the middle of an f-string
+# is the one of the two that is easy to add without meaning to.
+ROW_SEPARATOR = "\n"
+
+
+def _wrap_provider(
+    head: str,
+    readings: tuple[str, ...],
+    mode: PresentationMode,
+    budget: int | None,
+) -> list[str] | None:
+    """Lay one provider out as its own line, wrapping only if it must.
+
+    Readings are packed onto the head's line while they fit and onto indented
+    continuation lines after that. A reading is never split: the segment renderer
+    has already welded host-owned tokens to the prose they qualify — `[NOT
+    ENFORCED]` to its label above all — and a wrap between them would leave a
+    hypothetical reading as a line that says a block happened.
+
+    Returns `None` when a single reading will not fit even on a line of its own,
+    which is this function saying the terminal is too narrow for a vertical layout
+    to be readable. It does not truncate and it does not drop: in a layout with
+    rows to spare, both would be losing information to save space that exists.
+    """
+    if budget is None:
+        return [f"{head} {SEGMENT_SEPARATORS[mode].join(readings)}"]
+    if display_width(head) > budget:
+        return None
+
+    lines: list[str] = []
+    current, carries_reading = head, False
+    for reading in readings:
+        separator = SEGMENT_SEPARATORS[mode] if carries_reading else " "
+        joined = f"{current}{separator}{reading}"
+        if display_width(joined) <= budget:
+            current, carries_reading = joined, True
+            continue
+        lines.append(current)
+        current = f"{READING_INDENT}{reading}"
+        if display_width(current) > budget:
+            return None
+        carries_reading = True
+    lines.append(current)
+    return lines
+
+
+def _detail_block(statuses: tuple, mode: PresentationMode, budget: int | None) -> str | None:
+    """Every provider on a line of its own, in the contract's order.
+
+    Product names are padded into a column so the state markers line up, because
+    the eye finds "which product is this" by the left edge and the founder's
+    reading of a three-product block is a vertical scan. The column is paid for
+    out of slack only: the unpadded layout is measured too, and alignment is kept
+    just when it costs no extra row. So a narrow terminal spends its columns on
+    state rather than on a tidy left edge, and neither the layout's existence nor
+    its correctness depends on the padding surviving.
+
+    Padding is measured in display columns rather than characters, and nothing is
+    aligned after the scope marker, so no claim here depends on how many cells an
+    emoji occupies — a wide glyph moves the text after it and cannot silently
+    shift a product's identity out from under its own line.
+
+    Returns `None` when even one provider cannot be laid out within `budget`.
+    """
+    parts = [provider_parts(status, mode, InformationDepth.DETAIL) for status in statuses]
+    widest = max(display_width(name) for name, _, _ in parts)
+    laid_out = []
+    for columns in dict.fromkeys((widest, 0)):
+        lines: list[str] = []
+        for name, scope, readings in parts:
+            head = f"{name}{' ' * (columns - display_width(name))} {scope}"
+            wrapped = _wrap_provider(head, readings, mode, budget)
+            if wrapped is None:
+                break
+            lines.extend(wrapped)
+        else:
+            laid_out.append(lines)
+    if not laid_out:
+        return None
+    # `min` is stable, so the padded layout wins a tie, which is the common case:
+    # a terminal with room to align is a terminal that aligns.
+    return ROW_SEPARATOR.join(min(laid_out, key=len))
 
 
 def _without_dropped(statuses: tuple, dropped: set) -> tuple:
@@ -1251,6 +1381,85 @@ def _fit_minimal(statuses: tuple, mode: PresentationMode, budget: int) -> str:
     return f"{head}{label}{suffix}"
 
 
+def _appended(upstream: str, block: str) -> str:
+    """Put the Horonom block on the row after the user's own output.
+
+    The upstream text is passed through byte for byte, however many lines it has
+    and whether or not it ends in one: a command that printed two rows meant to
+    print two rows, and collapsing them for the sake of our alignment would be
+    exactly the ownership this host does not take. An existing trailing newline is
+    used as the separator rather than added to, so a user whose command ends in one
+    does not get a blank row between their line and ours.
+    """
+    if not upstream:
+        return block
+    separator = "" if upstream.endswith(ROW_SEPARATOR) else ROW_SEPARATOR
+    return f"{upstream}{separator}{block}"
+
+
+def _detail_rows(
+    upstream: str,
+    ordered: tuple,
+    mode: PresentationMode,
+    width_budget: int | None,
+) -> str | None:
+    """One provider per row, in the first allowed style that can be laid out.
+
+    The requested style is tried first and wraps if it must, because a row is the
+    cheaper concession at this depth: the reader asked for the icons and asked for
+    the detail, and there are rows to spend. A narrower style is reached only when
+    the requested one cannot be laid out at all — a single reading wider than the
+    whole terminal — and `None`, meaning nothing gets dropped here, only when none
+    of them can.
+    """
+    for candidate in _mode_candidates(mode):
+        block = _detail_block(ordered, candidate, width_budget)
+        if block is not None:
+            return _appended(upstream, block)
+    return None
+
+
+def _shared_line(
+    upstream: str,
+    ordered: tuple,
+    mode: PresentationMode,
+    width_budget: int | None,
+    depth: InformationDepth,
+) -> str:
+    """Every provider on one shared line, shedding readings until it fits.
+
+    What `CLEAR` uses, and what `DETAIL` falls back to when no row-per-provider
+    layout fits at all. Degradation, in order, and only when a budget is set: take
+    the first allowed style that measures within budget; then shed the least
+    important provider groups, saying how many readings went; then fall back to the
+    single worst state with its label truncated grapheme-safely. If even that
+    cannot be said honestly, the upstream text is returned alone.
+    """
+    candidates = [
+        (candidate, _render_groups(ordered, candidate, depth=depth))
+        for candidate in _mode_candidates(mode)
+    ]
+    chosen_mode, block = candidates[0]
+    if width_budget is not None:
+        for candidate, text in candidates:
+            if display_width(text) <= width_budget:
+                chosen_mode, block = candidate, text
+                break
+        else:
+            chosen_mode, _ = min(candidates, key=lambda pair: display_width(pair[1]))
+            dropped = _fit_by_dropping(ordered, chosen_mode, width_budget, depth)
+            block = (
+                dropped if dropped is not None
+                else _fit_minimal(ordered, chosen_mode, width_budget)
+            )
+
+    if not block:
+        return upstream
+    if not upstream:
+        return block
+    return f"{upstream}{UPSTREAM_SEPARATORS[chosen_mode]}{block}"
+
+
 def compose(
     upstream_text: str | None,
     statuses: object,
@@ -1285,41 +1494,29 @@ def compose(
     toward `DETAIL` here also makes a caller that forgets the argument verbose
     rather than quiet.
 
-    Degradation, in order, and only when a budget is set: try each allowed mode
-    and take the first that measures within budget; then shed the least
-    important provider groups, saying how many segments went; then fall back to
-    the single worst state with its label truncated grapheme-safely. If even
-    that cannot be said honestly, the upstream text is returned alone — the
-    user's own line is the last thing to go, never the first.
+    Depth also chooses the layout. At `DETAIL` each provider is given a physical
+    row of its own, wrapping onto indented continuation rows where one row will
+    not hold it, so `width_budget` bounds each row rather than the block as a
+    whole. `CLEAR` stays the single row its summary is meant to be. Only when no
+    row-per-provider layout exists at all — a single reading wider than the entire
+    budget — does `DETAIL` fall through to the rendering below, which is the one
+    that sheds readings and the only way `DETAIL` ever hides anything.
+
+    The two layouts are `_detail_rows` and `_shared_line`, which is where the
+    degradation each one performs is described. Whichever answers, the user's own
+    line is the last thing to go and never the first.
     """
     ordered = project_to_depth(statuses, depth)
     upstream = upstream_text or ""
     if not ordered:
         return upstream
 
-    candidates = [
-        (candidate, _render_groups(ordered, candidate, depth=depth))
-        for candidate in _mode_candidates(mode)
-    ]
-    chosen_mode, block = candidates[0]
-    if width_budget is not None:
-        for candidate, text in candidates:
-            if display_width(text) <= width_budget:
-                chosen_mode, block = candidate, text
-                break
-        else:
-            chosen_mode, _ = min(candidates, key=lambda pair: display_width(pair[1]))
-            dropped = _fit_by_dropping(ordered, chosen_mode, width_budget, depth)
-            block = (
-                dropped if dropped is not None
-                else _fit_minimal(ordered, chosen_mode, width_budget)
-            )
+    if depth.shows_supporting_detail:
+        rows = _detail_rows(upstream, ordered, mode, width_budget)
+        if rows is not None:
+            return rows
 
-    if not block:
-        return upstream
-    if not upstream:
-        return block
-    return f"{upstream}{UPSTREAM_SEPARATORS[chosen_mode]}{block}"
+    return _shared_line(upstream, ordered, mode, width_budget, depth)
 
 
 # ------------------------------------------------------------ the explain surface
