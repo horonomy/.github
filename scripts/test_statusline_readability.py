@@ -547,13 +547,23 @@ class ScopeTest(ReadabilityCase):
 class NarrowTerminalTest(ReadabilityCase):
     """What is left when there is no room, and whether it is still true."""
 
-    def test_the_block_never_exceeds_the_budget_it_was_given(self) -> None:
+    def test_no_row_of_the_block_ever_exceeds_the_budget_it_was_given(self) -> None:
+        """The budget is a terminal width, so it is spent a row at a time.
+
+        Written when the block was always one row, where "the block fits" and
+        "every row fits" were the same sentence. At `detail` the block is a row per
+        product (HORO-1628), and measuring the whole thing would charge each row
+        for the width of all the others — which is not a width of anything. Each
+        row is therefore measured on its own, which for a single-row block is the
+        original assertion unchanged.
+        """
         for name, statuses in every_snapshot():
             for mode, width, block in self.lines(statuses):
                 if width is None:
                     continue
-                with self.subTest(snapshot=name, mode=mode, width=width):
-                    self.assertLessEqual(render.display_width(block), width, block)
+                for row in block.split("\n"):
+                    with self.subTest(snapshot=name, mode=mode, width=width, row=row):
+                        self.assertLessEqual(render.display_width(row), width, block)
 
     def test_no_glyph_is_ever_left_half_rendered(self) -> None:
         """A truncation that cuts inside a cluster produces a replacement box.
