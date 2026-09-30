@@ -31,20 +31,29 @@ it out, and the audit records which one failed rather than a summary verdict.
 
 ## Verdict vocabulary
 
-Four verdicts, deliberately not three. The distinction between the last two is
-the point: a host that *has no such feature* and a host we *have not established
-the answer for* are different facts, and collapsing them would let an
-unexamined host pass as a decided one.
+Products and hosts are being asked different questions — *should this product
+contribute a segment* versus *can this host carry one at all* — so they draw from
+overlapping but distinct verdict sets. `UNKNOWN` is shared, and is the reason
+there are five verdicts rather than four.
 
-| Verdict | Meaning | What the entry must carry |
-|---|---|---|
-| `SUPPORTED` | Eligible on all seven criteria | A shipped provider, or an owning implementation ticket |
-| `BLOCKED` | Would be eligible but for a specific missing prerequisite | The exact prerequisite, and which criterion it fails |
-| `NOT_APPLICABLE` | Structurally out of scope, and no prerequisite would change that | The reason, and what *would* change the answer |
-| `UNKNOWN` | Not established | Why it could not be established, and what evidence would settle it |
+| Verdict | Applies to | Meaning | What the entry must carry |
+|---|---|---|---|
+| `SUPPORTED` | product, host | Eligible on all seven criteria / the host can carry a segment | A shipped provider or an owning implementation ticket; for a host, the mechanism |
+| `BLOCKED` | product | Would be eligible but for a specific missing prerequisite | The exact prerequisite, and which criteria it fails |
+| `NOT_APPLICABLE` | product | Structurally out of scope, and no prerequisite would change that | The reason, and what *would* change the answer |
+| `UNSUPPORTED` | host | The host has no mechanism for this capability | What its nearest feature does instead, and the version examined |
+| `UNKNOWN` | product, host | Not established | Why it could not be established, and what evidence would settle it |
 
-`UNKNOWN` is a legitimate resting state for an entry. It is not a placeholder to
-be cleared by guessing.
+The distinction that matters most is `UNSUPPORTED` against `UNKNOWN`. A host that
+*has no such mechanism* and a host we *have not established the answer for* are
+different facts, and collapsing them would let an unexamined host pass as a
+decided one. `UNKNOWN` is therefore a legitimate resting state for an entry, not a
+placeholder to be cleared by guessing.
+
+`BLOCKED` and `NOT_APPLICABLE` are product-side only, deliberately. A host does
+not have a *prerequisite* a Horonom campaign could supply — it either exposes the
+mechanism or it does not — so offering a host those verdicts would invite an entry
+that reads as actionable when nothing here can act on it.
 
 ## Method
 
