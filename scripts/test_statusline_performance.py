@@ -37,6 +37,23 @@ faster, which is worth stating plainly: caching earns its place by keeping a
 slow product off the critical path, not by speeding up a render whose cost is
 someone else's command.
 
+Those provider figures are shell fixtures, and a fixture is cheaper to start
+than a product. Repeated against the three real products on the same workstation
+(Fornax and Libra as unoptimized debug binaries, Circinus from its venv, n=9
+median):
+
+    their statusline alone                       414 ms
+    host + their statusline, 0 providers         419 ms   (+5 ms)
+    host + their statusline, 3 real products     490 ms   (+72 ms)
+
+So the host itself costs about 5 ms, and three real products cost about 72 ms
+rather than the 5 ms the fixtures suggest -- three `fork`/`exec`s of real
+binaries, two of them unoptimized. Concurrency is still doing the work it was
+added for (probed one after another these same products would add several
+hundred milliseconds), and 72 ms sits well inside `DEFAULT_DEADLINE_MS`, but a
+reader comparing the two tables should take the second one as the cost of
+adopting products and the first as the cost of the host's own machinery.
+
 The tests are in-process rather than subprocess, so the ~25 ms interpreter start
 and ~60 ms import are excluded from what they assert. That fixed prologue is a
 property of how the command is installed, not of this module's behaviour, and
