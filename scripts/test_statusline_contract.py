@@ -918,6 +918,7 @@ class WireParsingTest(unittest.TestCase):
                     "explain_key": "fornax.latest_finding",
                     "order_hint": 3,
                     "clear_role": "posture",
+                    "fresh_for_seconds": 86400,
                 }
             ],
         )
@@ -1002,6 +1003,69 @@ class ClearRoleTest(unittest.TestCase):
                     built = self._segment(state=state, clear_role=role)
                     self.assertIs(built.state, state)
                     self.assertIs(built.clear_role, role)
+
+
+class FreshnessHorizonTest(unittest.TestCase):
+    """`fresh_for_seconds`: the provider says when its own reading expires."""
+
+    def _segment(self, **overrides) -> sc.Segment:
+        fields = {
+            "key": "latest_decision",
+            "state": sc.SegmentState.OK,
+            "label": "Allowed",
+        }
+        fields.update(overrides)
+        return sc.Segment(**fields)
+
+    def test_a_horizon_without_an_age_is_refused(self) -> None:
+        # The alternative is the host choosing between two wrong answers: show a
+        # possibly stale reading, or hide a good one. Neither is the host's to
+        # make silently, so the unjudgeable combination cannot be built.
+        with self.assertRaises(sc.ContractViolation) as caught:
+            self._segment(fresh_for_seconds=300)
+        self.assertIn("age_seconds", str(caught.exception))
+
+    def test_an_age_without_a_horizon_stays_valid(self) -> None:
+        # The asymmetry is deliberate: an age is a fact on its own, and most
+        # readings legitimately never expire.
+        self.assertFalse(self._segment(age_seconds=99883).is_stale)
+
+    def test_a_reading_inside_its_horizon_is_fresh(self) -> None:
+        self.assertFalse(self._segment(age_seconds=120, fresh_for_seconds=300).is_stale)
+
+    def test_a_reading_past_its_horizon_is_stale(self) -> None:
+        self.assertTrue(self._segment(age_seconds=301, fresh_for_seconds=300).is_stale)
+
+    def test_the_boundary_second_is_still_fresh(self) -> None:
+        # `>` not `>=`: "fresh for 300 seconds" includes the three-hundredth.
+        self.assertFalse(self._segment(age_seconds=300, fresh_for_seconds=300).is_stale)
+
+    def test_a_segment_declaring_nothing_is_never_stale(self) -> None:
+        # Silence is not an expiry claim. Reading it as one would hide every
+        # segment from every provider written before this field existed.
+        self.assertFalse(self._segment().is_stale)
+
+    def test_a_horizon_of_zero_is_a_real_horizon_not_an_absence(self) -> None:
+        # Guards the `is not None` checks against being written as truthiness,
+        # which would silently turn "expires immediately" into "never expires".
+        self.assertTrue(self._segment(age_seconds=1, fresh_for_seconds=0).is_stale)
+        self.assertFalse(self._segment(age_seconds=0, fresh_for_seconds=0).is_stale)
+
+    def test_a_negative_or_non_integer_horizon_is_refused(self) -> None:
+        for value in (-1, 1.5, "300", True):
+            with self.subTest(value=repr(value)):
+                with self.assertRaises(sc.ContractViolation):
+                    self._segment(age_seconds=10, fresh_for_seconds=value)
+
+    def test_the_horizon_survives_the_wire_in_both_directions(self) -> None:
+        payload = sc._segment_to_wire(
+            self._segment(age_seconds=120, fresh_for_seconds=300)
+        )
+        self.assertEqual(payload["fresh_for_seconds"], 300)
+        self.assertEqual(sc._segment_from_wire(payload, 0).fresh_for_seconds, 300)
+
+    def test_an_absent_horizon_is_omitted_from_the_wire(self) -> None:
+        self.assertNotIn("fresh_for_seconds", sc._segment_to_wire(self._segment()))
 
 
 class WireForwardCompatibilityTest(unittest.TestCase):

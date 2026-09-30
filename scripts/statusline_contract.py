@@ -633,6 +633,25 @@ class Segment:
     # provider has not judged this", which the host answers with a documented
     # default -- not with a guess dressed up as a declaration.
     clear_role: ClearRole | None = None
+    # How long this reading stays worth acting on. Declared by the provider for
+    # the same reason `clear_role` is: only the product knows whether five
+    # minutes is stale. A shared host guess would be one number applied to a
+    # security verification and a policy decision alike.
+    fresh_for_seconds: int | None = None
+
+    @property
+    def is_stale(self) -> bool:
+        """Whether this reading has outlived the horizon its provider declared.
+
+        `False` when either half is missing, and deliberately so: a segment that
+        declared no horizon has made no claim to be judged against, and treating
+        silence as staleness would hide readings whose provider never said they
+        expire. The contract refuses the one combination that would make this
+        answer a guess -- a horizon with no age.
+        """
+        if self.fresh_for_seconds is None or self.age_seconds is None:
+            return False
+        return self.age_seconds > self.fresh_for_seconds
 
     def __post_init__(self) -> None:
         require_token(self.key, "segment.key")
@@ -655,6 +674,27 @@ class Segment:
         require_bounded_int(self.order_hint, "segment.order_hint", MAX_ORDER_HINT)
         if self.clear_role is not None and not isinstance(self.clear_role, ClearRole):
             raise ContractViolation("segment.clear_role must be a ClearRole")
+        self._validate_freshness()
+
+    def _validate_freshness(self) -> None:
+        """A horizon with nothing to measure against cannot be judged, so refuse it.
+
+        Same shape as the count and duration rules above, and the same reason: a
+        field that can only be read in combination with another must not be
+        settable alone. The specific failure is that the host would have to pick
+        between two wrong answers -- treat an unmeasurable reading as fresh and
+        show a possibly stale secondary, or treat it as stale and hide a good
+        one -- and neither is a choice the host is entitled to make silently.
+        """
+        if self.fresh_for_seconds is not None:
+            require_bounded_int(
+                self.fresh_for_seconds, "segment.fresh_for_seconds", MAX_AGE_SECONDS
+            )
+            if self.age_seconds is None:
+                raise ContractViolation(
+                    "segment.fresh_for_seconds requires segment.age_seconds; a "
+                    "freshness horizon with no age cannot be judged either way"
+                )
 
     def _validate_confidence(self) -> None:
         """A confidence without its subject reads as risk; forbid the pair split."""
@@ -971,7 +1011,7 @@ def _segment_to_wire(segment: Segment) -> dict:
         value = getattr(segment, name)
         if value is not None:
             payload[name] = value
-    for name in ("age_seconds", "count", "total", "duration_seconds"):
+    for name in ("age_seconds", "count", "total", "duration_seconds", "fresh_for_seconds"):
         value = getattr(segment, name)
         if value is not None:
             payload[name] = value
@@ -1122,6 +1162,7 @@ def _segment_from_wire(payload: object, index: int) -> Segment:
         explain_key=payload.get("explain_key"),
         order_hint=payload.get("order_hint", 0),
         clear_role=_parse_clear_role(payload.get("clear_role")),
+        fresh_for_seconds=payload.get("fresh_for_seconds"),
     )
 
 
