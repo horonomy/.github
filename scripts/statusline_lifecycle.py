@@ -52,10 +52,12 @@ import pathlib
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 
 import statusline_compositor as compositor
 import statusline_contract as contract
+import statusline_render as render
 
 # The key Claude Code reads, and the only key in the settings file this module
 # is ever allowed to write.
@@ -73,6 +75,12 @@ SUPPORTED_STATUS_LINE_TYPE = "command"
 MARKER_KEY = "_horonom"
 MARKER_OWNER = "horonom-statusline"
 MARKER_VERSION = 1
+
+# Where the reader's presentation preference lives, in our own registry rather
+# than in the host's settings file. It is not host configuration -- Claude Code
+# neither reads nor writes it -- so putting it there would mean mutating a shared
+# file for something only we consume.
+PRESENTATION_KEY = "presentation"
 
 DEFAULT_SETTINGS_PATH = "~/.claude/settings.json"
 
@@ -421,13 +429,23 @@ class Plan:
     `settings_after` and `registry_after` are the complete documents to be
     written, not patches: the diffing has already happened, so there is no second
     interpretation step between deciding and writing.
+
+    `settings_path`, `ownership` and `fingerprint` are absent together for an
+    operation that has nothing to do with the shared settings file -- changing a
+    presentation preference in our own registry, for instance. They are one
+    decision rather than three because naming a settings file implies it is in
+    scope: a plan that reported a path, a scope and an owner for a change that
+    cannot touch any of them would be describing a blast radius it does not have.
+    Absence also has a second effect, which is the point of separating them:
+    `apply` does not read the settings file for such a plan, so an unparseable
+    settings file cannot block a preference that does not depend on it.
     """
 
     operation: str
-    settings_path: pathlib.Path
-    ownership: Ownership
+    settings_path: pathlib.Path | None
+    ownership: Ownership | None
     changes: tuple[Change, ...]
-    fingerprint: str
+    fingerprint: str | None
     registry_path: pathlib.Path | None = None
     registry_fingerprint: str | None = None
     settings_after: dict | None = None
@@ -437,9 +455,35 @@ class Plan:
     refusal: str | None = None
     remediation: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        """Enforce the all-or-nothing rule the three settings fields share.
+
+        Checked rather than documented because the dangerous half is silent: a
+        plan that writes `settings_after` without a fingerprint would skip the
+        staleness check in `apply` and overwrite whatever arrived in between,
+        which is the exact clobber this lifecycle exists to prevent.
+        """
+        present = {
+            self.settings_path is not None,
+            self.ownership is not None,
+            self.fingerprint is not None,
+        }
+        if len(present) != 1:
+            raise ValueError(
+                "settings_path, ownership and fingerprint describe one settings read "
+                "and must be supplied or omitted together"
+            )
+        if self.settings_after is not None and self.fingerprint is None:
+            raise ValueError("a plan that writes the settings file must carry its fingerprint")
+
     @property
     def scope(self) -> str:
-        return settings_scope(self.settings_path)
+        # A registry-only plan is host-wide by construction: the registry lives
+        # under one directory per machine, not one per Claude Code scope, so a
+        # preference set here applies to every project. That is a wider blast
+        # radius than a project settings file, and saying so is the whole reason
+        # this property exists.
+        return "host" if self.settings_path is None else settings_scope(self.settings_path)
 
     @property
     def mutates(self) -> bool:
@@ -452,13 +496,13 @@ class Plan:
     def to_json(self) -> dict:
         return {
             "operation": self.operation,
-            "settings_path": str(self.settings_path),
+            "settings_path": None if self.settings_path is None else str(self.settings_path),
             "scope": self.scope,
             # Never "whole_artifact". The settings file is shared with the host
             # tool and with every other product, so the answer to "what does
             # uninstall do" is always "removes entries", never "removes a file".
             "ownership_model": "shared_artifact",
-            "current_owner": self.ownership.value,
+            "current_owner": None if self.ownership is None else self.ownership.value,
             "would_mutate": self.mutates,
             # Stated as its own field, separate from any automation consent, so
             # that a caller passing a --yes equivalent cannot read this as
@@ -472,6 +516,24 @@ class Plan:
         }
 
 
+def _validated_argv(argv: object, field: str) -> tuple[str, ...]:
+    """Check one command a product asked us to run on its behalf.
+
+    Extracted rather than inlined because there is now more than one such command
+    per provider, and a second copy of these bounds is a second chance to forget
+    one. Everything checked here is checked again by the compositor when it reads
+    the registry back; this copy exists so the refusal names the flag the caller
+    typed rather than surfacing later as a corrupt-registry error.
+    """
+    if not isinstance(argv, (list, tuple)) or not argv:
+        raise LifecycleError(f"{field} must be a non-empty list of non-empty strings")
+    if not all(isinstance(part, str) and part for part in argv):
+        raise LifecycleError(f"{field} must be a non-empty list of non-empty strings")
+    if len(argv) > compositor.MAX_ARGV_LENGTH:
+        raise LifecycleError(f"{field} may have at most {compositor.MAX_ARGV_LENGTH} parts")
+    return tuple(argv)
+
+
 @dataclasses.dataclass(frozen=True)
 class ProviderRegistration:
     """What a product tells the host in order to appear in the line.
@@ -481,24 +543,32 @@ class ProviderRegistration:
     the user's and must be reproduced exactly; a provider's command is supplied
     by a product that knows its own arguments, so there is no reason to involve a
     shell -- and therefore no shell to quote for.
+
+    `explain_argv` is the product's own long-form surface, recorded so the shared
+    `explain` command can hand over to it instead of paraphrasing it. Supplied by
+    the product rather than derived from `argv`, because the three first products
+    spell it three ways -- `fornax statusline explain`, `libra-governor statusline
+    explain`, `circinus statusline --explain` -- and a host that guessed would run
+    the wrong thing or, worse, the provider command again. Optional, because a
+    product without one is a supported state that `explain` reports plainly; the
+    alternative is the host inventing the deeper explanation itself, which is how
+    a shared host starts carrying product knowledge it cannot keep current.
     """
 
     provider: str
     argv: tuple[str, ...]
     scope: str
     timeout_ms: int | None = None
+    explain_argv: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         contract.require_provider_id(self.provider)
         # Constructed rather than compared so an unrecognised scope raises here,
         # at registration, instead of at the first render.
         contract.Scope(self.scope)
-        if not self.argv or not all(isinstance(part, str) and part for part in self.argv):
-            raise LifecycleError("a provider command must be a non-empty list of non-empty strings")
-        if len(self.argv) > compositor.MAX_ARGV_LENGTH:
-            raise LifecycleError(
-                f"a provider command may have at most {compositor.MAX_ARGV_LENGTH} parts"
-            )
+        _validated_argv(self.argv, "a provider command")
+        if self.explain_argv is not None:
+            _validated_argv(self.explain_argv, "a provider explain command")
         if self.timeout_ms is not None and not (
             0 < self.timeout_ms <= compositor.MAX_PROVIDER_TIMEOUT_MS
         ):
@@ -516,6 +586,12 @@ class ProviderRegistration:
         }
         if self.timeout_ms is not None:
             entry["timeout_ms"] = self.timeout_ms
+        if self.explain_argv is not None:
+            # A key the compositor does not read, deliberately. It has no use for
+            # this command and must never be tempted to run it: `explain` is a
+            # thing a person asks for, and the render path has a budget measured
+            # in milliseconds.
+            entry["explain_command"] = list(self.explain_argv)
         return entry
 
 
@@ -611,6 +687,11 @@ def _upstream_of(registry: RegistryDocument) -> str | None:
 
 def _lifecycle_of(registry: RegistryDocument) -> dict:
     block = (registry.data or {}).get("lifecycle")
+    return block if isinstance(block, dict) else {}
+
+
+def _presentation_of(registry: RegistryDocument) -> dict:
+    block = (registry.data or {}).get(PRESENTATION_KEY)
     return block if isinstance(block, dict) else {}
 
 
@@ -873,6 +954,151 @@ def plan_enable(
     )
 
 
+# How each axis reads in a plan. Spelled out rather than printing the stored mode
+# name, because `compact_plain` tells a reader neither which of the two things it
+# means nor that there were two.
+_DENSITY_WORDS = {False: "balanced", True: "compact"}
+_ICON_WORDS = {False: "text only", True: "emoji"}
+
+# The same two axes as the command line spells them. `.get` on an omitted flag
+# yields `None`, which is exactly "leave this axis alone".
+_DENSITY_FLAG = {"balanced": False, "compact": True}
+_ICON_FLAG = {"emoji": True, "text": False}
+
+
+def _presentation_refusal(registry: RegistryDocument) -> tuple[str | None, tuple[str, ...]]:
+    """Why a preference change must not proceed, or `(None, ())` if it may.
+
+    Both refusals are the same judgement: a rendering preference is the least
+    consequential thing this module writes, so it is never worth spending the
+    record of the user's original statusline on.
+
+    That is also why an absent registry is refused rather than created. `enable`
+    refuses when the compositor owns the slot and the registry has gone missing,
+    precisely because that record is the only copy -- so a registry conjured by a
+    cosmetic command would clear a safety refusal without anyone being told.
+    """
+    if not registry.present:
+        return (
+            "no provider registry exists, so there is no installation to set a preference on",
+            ("enable a provider first; the preference can be set immediately afterwards",),
+        )
+    if not registry.usable:
+        return (
+            f"the provider registry is unusable ({registry.problem}), and rewriting it for a "
+            "rendering preference would discard both the registered providers and the recorded "
+            "original statusline command",
+            (
+                "run `doctor` to see the observed state",
+                f"repair or remove {registry.path.name} by hand",
+            ),
+        )
+    return (None, ())
+
+
+def plan_presentation(
+    registry: RegistryDocument, *, compact: bool | None = None, glyphs: bool | None = None
+) -> Plan:
+    """What changing the reader's presentation preference would do, without doing it.
+
+    `None` means leave that axis alone, so one knob can be set without stating
+    the other -- a user who only knows that their font renders emoji badly should
+    not have to decide about density to say so.
+
+    The two axes are resolved here into the single `mode` the compositor already
+    reads, rather than stored as two fields beside it: fields that must agree are
+    fields that can disagree, and the one that loses would be deciding how the
+    line renders.
+
+    Nothing else calls this. Upgrades in particular do not, which is what "do not
+    auto-rewrite user preferences on upgrade" amounts to in code: a stored
+    preference changes only when the user asks for it to.
+    """
+    refusal, remediation = _presentation_refusal(registry)
+    if refusal is not None:
+        return Plan(
+            operation="presentation",
+            settings_path=None,
+            ownership=None,
+            changes=(Change(ChangeKind.BLOCKED_UNKNOWN, PRESENTATION_KEY, refusal),),
+            fingerprint=None,
+            registry_path=registry.path,
+            registry_fingerprint=registry.fingerprint,
+            refusal=refusal,
+            remediation=remediation,
+        )
+
+    stored = _presentation_of(registry)
+    before = render.PresentationMode.parse(stored.get("mode"))
+    after = render.PresentationMode.for_axes(
+        compact=before.is_compact if compact is None else compact,
+        glyphs=before.uses_glyphs if glyphs is None else glyphs,
+    )
+    # Copied and updated rather than rebuilt, so `width_budget` and anything a
+    # later version puts here survive a change to a neighbouring key. Same rule
+    # as the settings file: we own `mode` and nothing else in this object.
+    presentation = dict(stored)
+    presentation["mode"] = after.value
+    registry_after = dict(registry.data)
+    registry_after[PRESENTATION_KEY] = presentation
+
+    setting = (
+        f"density {_DENSITY_WORDS[after.is_compact]}, icons {_ICON_WORDS[after.uses_glyphs]}"
+    )
+    if stored.get("mode") == after.value:
+        # Running this with no flags, or with the flags already in effect, is a
+        # legitimate way to ask what the current setting is. Reporting it as a
+        # change that is not happening is the honest answer to that question.
+        changes = [
+            Change(
+                ChangeKind.PRESERVED_USER,
+                f"registry.{PRESENTATION_KEY}.mode",
+                f"already {setting}",
+            )
+        ]
+    else:
+        changes = [
+            Change(
+                ChangeKind.UPDATE if "mode" in stored else ChangeKind.ADD,
+                f"registry.{PRESENTATION_KEY}.mode",
+                setting,
+            )
+        ]
+    kept = [key for key in stored if key != "mode"]
+    if kept:
+        changes.append(
+            Change(
+                ChangeKind.PRESERVED_USER,
+                f"registry.{PRESENTATION_KEY}",
+                f"{len(kept)} other preference key(s) unchanged: {', '.join(kept)}",
+            )
+        )
+    providers = _provider_ids(registry)
+    if providers:
+        changes.append(
+            Change(
+                ChangeKind.PRESERVED_OTHER_PRODUCT,
+                "registry.providers",
+                f"{len(providers)} provider(s) left registered: {', '.join(providers)}",
+            )
+        )
+
+    return Plan(
+        operation="presentation",
+        settings_path=None,
+        ownership=None,
+        changes=tuple(changes),
+        fingerprint=None,
+        registry_path=registry.path,
+        registry_fingerprint=registry.fingerprint,
+        registry_after=None if registry_after == registry.data else registry_after,
+        notes=(
+            "the host configuration is not read or written by this operation, so it "
+            "cannot be affected by it",
+        ),
+    )
+
+
 def serialize(
     data: dict, *, indent: int | str | None = DEFAULT_INDENT, trailing_newline: bool = True
 ) -> bytes:
@@ -1010,6 +1236,34 @@ def _verify(plan: Plan) -> None:
             raise VerificationError(f"{path} still exists after it was removed")
 
 
+def _reread_or_refuse(plan: Plan) -> SettingsDocument | None:
+    """Re-read both files and refuse if either moved since the plan was formed.
+
+    Returns the freshly read settings document, because the write that follows
+    needs its indentation, trailing newline and mode -- reading it twice would
+    open a window between the check and the values used.
+
+    `None` for a plan that carries no settings fingerprint, which is a plan that
+    never read the file. Re-reading it anyway would make an unparseable settings
+    file fail an operation that does not depend on it -- and the user whose
+    settings file is broken is the one most likely to need to change how the line
+    renders.
+    """
+    current = None
+    if plan.fingerprint is not None:
+        current = read_settings(plan.settings_path)
+        if current.fingerprint != plan.fingerprint:
+            raise ConcurrentModificationError(
+                f"{plan.settings_path} changed after this plan was formed; nothing was written"
+            )
+    if plan.registry_path is not None and plan.registry_fingerprint is not None:
+        if read_registry_at(plan.registry_path).fingerprint != plan.registry_fingerprint:
+            raise ConcurrentModificationError(
+                f"{plan.registry_path} changed after this plan was formed; nothing was written"
+            )
+    return current
+
+
 def apply(plan: Plan) -> ApplyResult:
     """Carry out a plan, or refuse to.
 
@@ -1029,16 +1283,7 @@ def apply(plan: Plan) -> ApplyResult:
     if not plan.mutates:
         return ApplyResult(plan=plan, settings_written=False, registry_written=False, verified=True)
 
-    current = read_settings(plan.settings_path)
-    if current.fingerprint != plan.fingerprint:
-        raise ConcurrentModificationError(
-            f"{plan.settings_path} changed after this plan was formed; nothing was written"
-        )
-    if plan.registry_path is not None and plan.registry_fingerprint is not None:
-        if read_registry_at(plan.registry_path).fingerprint != plan.registry_fingerprint:
-            raise ConcurrentModificationError(
-                f"{plan.registry_path} changed after this plan was formed; nothing was written"
-            )
+    current = _reread_or_refuse(plan)
 
     settings_write = None
     if plan.settings_after is not None:
@@ -1445,6 +1690,319 @@ def _remediation(ownership: Ownership, registry: RegistryDocument, owned: bool) 
     return []
 
 
+# How long a product's own explain surface may take, and how much of its answer
+# is kept. Both far looser than anything on the render path, because these are
+# different operations: a refresh nobody asked for gets 250ms, and a command a
+# person typed can afford to wait for a real answer. Bounded all the same -- a
+# product that hangs must not hang this.
+EXPLAIN_TIMEOUT_SECONDS = 5.0
+MAX_EXPLAIN_OUTPUT_BYTES = 16 * 1024
+
+
+def _explain_commands(registry: RegistryDocument) -> dict[str, tuple[str, ...]]:
+    """Each provider's recorded long-form command, read from the raw document.
+
+    Read here rather than through `compositor.parse_registry` deliberately. The
+    compositor's read model has no field for this at all, which is what keeps a
+    command carrying a five-second budget out of reach of the render path;
+    reading it from the raw entries preserves that while still letting this
+    surface hand over to it.
+
+    A malformed value is skipped rather than raised on. Every field that decides
+    what runs on the statusline has already been validated by the compositor; a
+    bad value here costs one hand-over section in a diagnostic, and failing the
+    whole command over it would deny the reader the key as well.
+    """
+    commands: dict[str, tuple[str, ...]] = {}
+    for entry in (registry.data or {}).get("providers") or []:
+        if not isinstance(entry, dict) or "explain_command" not in entry:
+            continue
+        provider = entry.get("provider")
+        if not isinstance(provider, str):
+            continue
+        try:
+            commands[provider] = _validated_argv(entry["explain_command"], "explain_command")
+        except LifecycleError:
+            continue
+    return commands
+
+
+def _product_detail(argv: tuple[str, ...]) -> dict:
+    """Ask the owning product for its own long-form explanation of its readings.
+
+    Runs with no shell and no stdin: the child cannot read the host payload, so
+    it cannot render, log or grow a dependency on the user's session, and there
+    is nothing for a quoting mistake to reinterpret.
+
+    Only stdout is reproduced. A product's explain surface is output designed for
+    a person to read and carries that product's own privacy tests; its stderr is
+    neither, and a crash message is exactly the kind of thing that carries a
+    filesystem path or an environment value. So a failure is reported as a status
+    and a name, never as whatever the product printed on its way down.
+    """
+    detail: dict = {"available": False, "command_name": pathlib.Path(argv[0]).name, "text": None}
+    try:
+        # `shell=False` by omission, and an argv list rather than a string, so
+        # neither a space in a path nor a metacharacter in an argument can turn a
+        # recorded command into a different one.
+        completed = subprocess.run(
+            list(argv),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=EXPLAIN_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except FileNotFoundError:
+        detail["problem"] = "the recorded explain command is not installed"
+        return detail
+    except PermissionError:
+        detail["problem"] = "the recorded explain command is not executable"
+        return detail
+    except subprocess.TimeoutExpired:
+        detail["problem"] = f"it did not answer within {EXPLAIN_TIMEOUT_SECONDS:g}s"
+        return detail
+    except OSError as exc:
+        detail["problem"] = f"it could not be started (errno {exc.errno})"
+        return detail
+    if completed.returncode != 0:
+        detail["problem"] = (
+            f"it exited {completed.returncode}; its error output is not reproduced here "
+            "because that is not a surface the product designed to be read"
+        )
+        return detail
+    text = completed.stdout[:MAX_EXPLAIN_OUTPUT_BYTES].decode("utf-8", "replace").strip()
+    if not text:
+        detail["problem"] = "it answered with nothing"
+        return detail
+    detail["available"] = True
+    detail["text"] = text
+    return detail
+
+
+def _wire_value(value: object) -> str | None:
+    """The wire string behind a contract enum member, or the string itself.
+
+    Accepting both is what lets this decode a status built by hand in a test as
+    readily as one parsed off a provider's stdout.
+    """
+    if value is None:
+        return None
+    return getattr(value, "value", value)
+
+
+def _reading(segment: object, mode: render.PresentationMode) -> dict:
+    """One segment, as the line shows it and as the words behind its tokens.
+
+    Every value comes either from the segment or from the host's own meaning
+    tables, keyed by what the segment reported. Nothing is inferred: a segment
+    that carried no reason clause reports no reason, because "the provider did
+    not say why" and "the host worked out why" are different claims and only the
+    first is true. Freshness likewise appears only where the provider dated its
+    reading.
+
+    `rendered` is produced by the renderer at the same mode as the line, so the
+    fragment quoted back to the reader is the fragment they are looking at rather
+    than a description of it.
+    """
+    state = _wire_value(segment.state) or render.UNKNOWN_STATE
+    reading = {
+        "key": segment.key,
+        "rendered": render.render_segment(segment, mode),
+        "state": state,
+        "state_token": render.state_marker(state, mode),
+        # An unrecognised state is described as unknown rather than left without
+        # a meaning. The contract refuses one on parse, so this fires only for a
+        # hand-built value, and the honest gloss for a state the host has no word
+        # for is the one that says so.
+        "state_means": render.STATE_MEANINGS.get(
+            state, render.STATE_MEANINGS[render.UNKNOWN_STATE]
+        ),
+    }
+    if getattr(segment, "hypothetical", False):
+        reading["hypothetical"] = render.HYPOTHETICAL_MEANING
+    confidence = _wire_value(segment.confidence)
+    if confidence is not None:
+        subject = _wire_value(segment.confidence_of)
+        if subject not in render.CONFIDENCE_SUBJECT_MEANINGS:
+            subject = "unspecified"
+        reading["confidence"] = {
+            "rendered": render.format_confidence(confidence, subject, mode),
+            "means": render.CONFIDENCE_SUBJECT_MEANINGS[subject],
+        }
+    reason = render.format_reason(segment.reason_code, segment.reason_label)
+    if reason:
+        reading["reason"] = reason
+    if segment.age_seconds is not None:
+        reading["freshness"] = render.format_age(segment.age_seconds, mode)
+    if segment.explain_key:
+        reading["explain_key"] = segment.explain_key
+    return reading
+
+
+def _mode_is_recognised(stored: object) -> bool:
+    """Whether `parse` resolved the stored preference or fell back to its default.
+
+    `PresentationMode.parse` deliberately never says which it did -- it exists to
+    always yield a renderable mode -- so ask it twice with two different
+    defaults. A value it recognises answers the same both times; one it does not
+    answers with whichever default it was handed. Asked rather than reimplemented
+    here, because a second copy of the accepted spellings is a second copy to
+    forget an alias in.
+    """
+    balanced = render.PresentationMode.parse(stored, render.PresentationMode.BALANCED)
+    plain = render.PresentationMode.parse(stored, render.PresentationMode.COMPACT_PLAIN)
+    return balanced is plain
+
+
+def _presentation_in_force(registry: RegistryDocument) -> tuple[render.PresentationMode, str]:
+    """The mode the line is rendered in, and where that came from.
+
+    The source matters to a reader being shown a key: a legend drawn in glyphs
+    for someone who asked for text would explain tokens they are not looking at,
+    and the likeliest cause of that is a stored preference this version cannot
+    read. So an unrecognised value is reported as one, rather than silently
+    appearing as the default it resolves to.
+    """
+    stored = _presentation_of(registry).get("mode")
+    mode = render.PresentationMode.parse(stored)
+    if stored is None:
+        return mode, "the default"
+    if not _mode_is_recognised(stored):
+        return mode, "the default; the saved preference is not a mode this version knows"
+    return mode, "your saved preference"
+
+
+def _explain_provider(
+    entry: object,
+    explain_argv: tuple[str, ...] | None,
+    mode: render.PresentationMode,
+    home: pathlib.Path | None,
+) -> dict:
+    """One provider: its live group as rendered, decoded, then its own words.
+
+    The group is rendered from the same status the readings are decoded from, so
+    the fragment shown and the explanation of it cannot describe different
+    moments. That status may come from Horonom's own provider cache, which is the
+    honest thing to decode -- it is what the line is showing.
+    """
+    status = compositor.run_provider(entry, entry.timeout_ms, home)
+    scope = _wire_value(status.scope) or entry.scope.value
+    report = {
+        "provider": status.provider,
+        "display_name": render.provider_display_name(status.provider),
+        "scope": scope,
+        "scope_token": render.scope_marker(scope, mode),
+        "scope_means": render.SCOPE_MEANINGS.get(scope, "a scope this version does not know"),
+        "availability": _wire_value(status.availability),
+        "rendered": render.render_provider(status, mode),
+        "readings": [
+            _reading(segment, mode) for segment in contract.order_segments(status)
+        ],
+    }
+    if explain_argv is None:
+        report["detail"] = {
+            "available": False,
+            "command_name": None,
+            "text": None,
+            # Said plainly rather than filled in. The host could write a paragraph
+            # about any of these products, and it would be a paragraph nobody
+            # maintains alongside the product it describes.
+            "problem": "this product registered no explain command, so the readings above are "
+            "all the host has to show",
+        }
+    else:
+        report["detail"] = _product_detail(explain_argv)
+    return report
+
+
+def explain(
+    settings_path: str | os.PathLike | None = None,
+    home: pathlib.Path | None = None,
+    *,
+    provider: str | None = None,
+    legend_only: bool = False,
+) -> dict:
+    """The key to the line, and what the line is saying right now.
+
+    Read-only on every path, like `doctor`, and for the same reason: this is the
+    command a reader runs when the line is confusing, which is exactly the moment
+    a surface must not be changing anything. It does run each provider, because a
+    decode of a remembered reading is a decode of nothing -- but running a
+    provider is what the statusline itself does several times a minute, and it
+    reaches no host configuration.
+
+    Two layers, in the order a reader needs them. The key comes from the host's
+    own rendering tables, so it is complete before anything is measured. The
+    decode pairs each token in each live reading with that key, and then hands
+    over to the owning product's own explain surface where one was registered.
+    The host does not paraphrase that deeper layer: a shared surface that
+    explained Fornax's verification states in its own words would be a second,
+    staler copy of Fornax's documentation.
+
+    Prints no configuration value, exactly as `doctor` does not. What reaches the
+    output is the provider's own rendered text -- which has already passed the
+    contract's privacy allowlist -- the host's fixed prose, and each command's
+    basename.
+    """
+    path = pathlib.Path(settings_path or DEFAULT_SETTINGS_PATH).expanduser()
+    registry = read_registry(home)
+    mode, mode_source = _presentation_in_force(registry)
+    report: dict = {
+        "registry_path": str(registry.path),
+        "presentation": {"mode": mode.value, "source": mode_source},
+        "legend": [
+            {
+                "title": section.title,
+                "entries": [dataclasses.asdict(entry) for entry in section.entries],
+            }
+            for section in render.legend(mode)
+        ],
+        "providers": [],
+        "notes": [],
+    }
+    if legend_only:
+        return report
+
+    try:
+        document = read_settings(path)
+    except LifecycleError as exc:
+        report["notes"].append(
+            f"the settings file could not be read ({exc}), so what is on your line cannot be "
+            "confirmed from here; what follows is what the registered providers answer when asked"
+        )
+    else:
+        if classify(document) is not Ownership.HORONOM_OWNED:
+            report["notes"].append(
+                "the statusline slot is not Horonom-owned, so nothing Horonom renders is on "
+                "your line right now; `statusline doctor` says who owns it"
+            )
+
+    if not registry.usable:
+        report["notes"].append(
+            f"the provider registry is unusable ({registry.problem}), so there is nothing to "
+            "decode; the key itself is still correct"
+        )
+        return report
+
+    parsed = compositor.parse_registry(registry.data or empty_registry())
+    details = _explain_commands(registry)
+    for entry in parsed.providers:
+        if provider is not None and entry.provider != provider:
+            continue
+        report["providers"].append(
+            _explain_provider(entry, details.get(entry.provider), mode, home)
+        )
+    if provider is not None and not report["providers"]:
+        report["notes"].append(
+            f"no provider named {provider!r} is registered; `statusline list` shows which are"
+        )
+    elif not parsed.providers:
+        report["notes"].append(
+            "no providers are registered, so the line shows only your own statusline"
+        )
+    return report
+
+
 EXIT_OK = 0
 EXIT_REFUSED = 1
 EXIT_FAILED = 3
@@ -1452,8 +2010,13 @@ EXIT_FAILED = 3
 
 def _describe(plan: Plan, result: ApplyResult | None) -> str:
     """The plan as prose, for a reader who is about to trust it with their config."""
-    lines = [f"{plan.operation}: {plan.settings_path} ({plan.scope} scope)"]
-    lines.append(f"  current owner: {plan.ownership.value}")
+    # Names the file the operation actually writes, which for a plan with no
+    # settings read is the registry. Reporting a settings path there would be
+    # naming a file this operation cannot touch.
+    target = plan.settings_path or plan.registry_path
+    lines = [f"{plan.operation}: {target} ({plan.scope} scope)"]
+    if plan.ownership is not None:
+        lines.append(f"  current owner: {plan.ownership.value}")
     if plan.refusal is not None:
         lines.append(f"  REFUSED: {plan.refusal}")
         lines.extend(f"  next: {step}" for step in plan.remediation)
@@ -1516,6 +2079,109 @@ def _describe_doctor(report: dict) -> str:
     return "\n".join(lines)
 
 
+def _legend_lines(section: dict) -> list[str]:
+    """One section of the key, as an aligned three-column block.
+
+    The token column is padded by `display_width`, not by `len`. A glyph occupies
+    two terminal columns and one Python character, so padding by length is
+    precisely how a key drawn in emoji arrives with a ragged second column --
+    which is the same class of bug the width machinery exists for on the line
+    itself.
+    """
+    entries = section["entries"]
+    tokens = max((render.display_width(entry["token"]) for entry in entries), default=0)
+    names = max((len(entry["name"]) for entry in entries), default=0)
+    lines = [f"  {section['title']}"]
+    for entry in entries:
+        pad = " " * (tokens - render.display_width(entry["token"]))
+        lines.append(
+            f"    {entry['token']}{pad}  {entry['name']:<{names}}  {entry['meaning']}"
+        )
+    return lines
+
+
+def _reading_lines(reading: dict) -> list[str]:
+    """One decoded reading: the fragment, then a labelled line per thing in it.
+
+    One fact per line, each with the word for what it is. The alternative is a
+    paragraph, and a reader who came here confused by a compressed line is not
+    helped by a denser one.
+    """
+    lines = [f"    {reading['rendered']}"]
+    lines.append(f"      state: {reading['state']} -- {reading['state_means']}")
+    if "reason" in reading:
+        lines.append(f"      why: {reading['reason']}")
+    if "freshness" in reading:
+        lines.append(f"      as of: {reading['freshness']}")
+    if "confidence" in reading:
+        confidence = reading["confidence"]
+        lines.append(f"      {confidence['rendered']} -- {confidence['means']}")
+    if "hypothetical" in reading:
+        lines.append(f"      {render.HYPOTHETICAL_TEXT}: {reading['hypothetical']}")
+    if "explain_key" in reading:
+        lines.append(f"      the product calls this: {reading['explain_key']}")
+    return lines
+
+
+# Every line prefixed, not merely the block indented. This is another program's
+# output: it may be blank in places, it may be indented already, and it may
+# contain something shaped exactly like one of the host's own labelled lines. A
+# per-line marker makes the extent of the quotation unambiguous, so a product can
+# never appear to be the host talking.
+_QUOTE_PREFIX = "      > "
+
+
+def _detail_lines(provider: dict) -> list[str]:
+    """The owning product's own explanation, attributed, or why there is none."""
+    detail = provider["detail"]
+    if not detail["available"]:
+        return [f"      no deeper explanation: {detail['problem']}"]
+    heading = f"      {provider['display_name']}'s own explanation ({detail['command_name']}):"
+    return [heading] + [
+        f"{_QUOTE_PREFIX}{line}".rstrip() for line in detail["text"].splitlines()
+    ]
+
+
+def _describe_explain(report: dict) -> str:
+    """The explain report as prose: the key first, then the line it decodes.
+
+    The key comes first deliberately. A reader who already knows the vocabulary
+    scrolls past it once; a reader who does not is the entire reason this command
+    exists, and putting the decode first would hand them the tokens again before
+    the words for them.
+    """
+    presentation = report["presentation"]
+    lines = [
+        f"presentation: {presentation['mode']} ({presentation['source']})",
+        "",
+        "how to read the line",
+    ]
+    for section in report["legend"]:
+        lines.extend(_legend_lines(section))
+    for note in report["notes"]:
+        lines.extend(["", f"note: {note}"])
+    if not report["providers"]:
+        return "\n".join(lines)
+
+    lines.extend(["", "what the line says right now"])
+    for provider in report["providers"]:
+        # Availability is printed for every provider, including the healthy ones.
+        # One that only appears when it is bad is one a reader cannot distinguish
+        # from a missing field, and `unavailable` reading as zero is the specific
+        # confusion this whole contract was shaped to prevent.
+        lines.extend(
+            [
+                f"  {provider['rendered']}",
+                f"    reporting on: {provider['scope']} -- {provider['scope_means']}",
+                f"    availability: {provider['availability']}",
+            ]
+        )
+        for reading in provider["readings"]:
+            lines.extend(_reading_lines(reading))
+        lines.extend(_detail_lines(provider))
+    return "\n".join(lines)
+
+
 def _describe_list(report: dict) -> str:
     """Just the registrations, for the question "what is turned on"."""
     lines = [f"statusline owner: {report['slot']['owner']}"]
@@ -1570,11 +2236,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
 
-    def shared(subcommand: argparse.ArgumentParser, *, mutating: bool = True) -> None:
-        subcommand.add_argument(
-            "--settings",
-            help=f"path to the Claude Code settings file (default {DEFAULT_SETTINGS_PATH})",
-        )
+    def shared(
+        subcommand: argparse.ArgumentParser, *, mutating: bool = True, settings: bool = True
+    ) -> None:
+        # `--settings` is omitted rather than accepted-and-ignored for the one
+        # subcommand that never opens that file. A flag that silently does
+        # nothing is worse than an absent one: it invites the reader to believe
+        # the operation is scoped by it.
+        if settings:
+            subcommand.add_argument(
+                "--settings",
+                help=f"path to the Claude Code settings file (default {DEFAULT_SETTINGS_PATH})",
+            )
         subcommand.add_argument("--json", action="store_true", help="emit machine-readable output")
         if mutating:
             subcommand.add_argument(
@@ -1598,6 +2271,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="one argument of the provider command; repeat for each argument",
     )
     enable.add_argument("--timeout-ms", type=int, help="per-render budget for this provider")
+    # Omitting it un-records it, exactly as omitting --timeout-ms resets the
+    # budget. `enable` states the whole registration rather than patching it,
+    # because a registration assembled from several past invocations is one no
+    # product could predict the effect of re-running.
+    enable.add_argument(
+        "--explain-command",
+        action="append",
+        metavar="ARG",
+        dest="explain_argv",
+        help="one argument of this product's own long-form explain command; repeat for each",
+    )
     enable.add_argument(
         "--adopt",
         action="store_true",
@@ -1614,8 +2298,47 @@ def build_parser() -> argparse.ArgumentParser:
     )
     shared(uninstall)
 
+    # Two independent flags rather than one `--mode compact_plain`, because the
+    # stored value is a resolved pair and a user thinking about their terminal is
+    # not. Either may be omitted, which is what makes "my font is bad" expressible
+    # on its own; `presentation` with neither is a legitimate no-op that prints
+    # the current setting.
+    presentation = subcommands.add_parser(
+        "presentation", help="choose how the line is rendered for this reader"
+    )
+    presentation.add_argument(
+        "--density",
+        choices=("balanced", "compact"),
+        help="how many columns a reading may spend (unchanged if omitted)",
+    )
+    presentation.add_argument(
+        "--icon-style",
+        choices=("emoji", "text"),
+        dest="icon_style",
+        help="text is for terminals whose font or width handling makes emoji unreliable",
+    )
+    shared(presentation, settings=False)
+
     listing = subcommands.add_parser("list", help="show what is registered")
     shared(listing, mutating=False)
+
+    # A positional provider rather than `--provider`, unlike the mutating
+    # subcommands: there the name selects what gets changed and being explicit is
+    # worth the typing, whereas here it only narrows a report, and `explain
+    # fornax` is what a reader reaches for.
+    explaining = subcommands.add_parser(
+        "explain", help="show the key to the line and what it is saying now"
+    )
+    explaining.add_argument(
+        "provider", nargs="?", help="narrow the decode to one provider (all of them by default)"
+    )
+    explaining.add_argument(
+        "--legend",
+        action="store_true",
+        dest="legend_only",
+        help="print only the key, asking no provider anything",
+    )
+    shared(explaining, mutating=False)
 
     diagnose = subcommands.add_parser("doctor", help="explain who owns the statusline")
     diagnose.add_argument(
@@ -1626,12 +2349,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run_report(options: argparse.Namespace, path: pathlib.Path, stream: object) -> int:
-    """The two read-only commands, which answer without reading a plan at all.
+    """The read-only commands, which answer without reading a plan at all.
 
-    Kept apart from the mutating commands because the whole point of `doctor`
-    and `list` is that they cannot reach a write, and a shared prologue is how
-    that stops being obvious.
+    Kept apart from the mutating commands because the whole point of `doctor`,
+    `list` and `explain` is that they cannot reach a write, and a shared prologue
+    is how that stops being obvious.
     """
+    if options.command == "explain":
+        report = explain(path, provider=options.provider, legend_only=options.legend_only)
+        print(
+            json.dumps(report, indent=2) if options.json else _describe_explain(report),
+            file=stream,
+        )
+        # A note is not a refusal. Every state `explain` can report is one it was
+        # asked to describe, including "nothing of ours is on your line" -- which
+        # is an answer, not a failure to give one.
+        return EXIT_OK
     report = doctor(path, probe=getattr(options, "probe", False))
     if options.command == "list":
         # `.get`, because an unparseable settings file yields a report with no
@@ -1648,9 +2381,21 @@ def _run_report(options: argparse.Namespace, path: pathlib.Path, stream: object)
 def main(argv: list[str] | None = None, stdout: object = None) -> int:
     options = build_parser().parse_args(argv)
     stream = stdout if stdout is not None else sys.stdout
+
+    if options.command == "presentation":
+        # Handled before the settings file is located, let alone read. The
+        # preference is ours, and a settings file we cannot parse must not stand
+        # between a user and a line their terminal can render.
+        plan = plan_presentation(
+            read_registry(),
+            compact=_DENSITY_FLAG.get(options.density),
+            glyphs=_ICON_FLAG.get(options.icon_style),
+        )
+        return _run_plan(plan, options, stream)
+
     path = _settings_path(options.settings)
 
-    if options.command in ("doctor", "list"):
+    if options.command in ("doctor", "list", "explain"):
         return _run_report(options, path, stream)
 
     try:
@@ -1670,6 +2415,7 @@ def main(argv: list[str] | None = None, stdout: object = None) -> int:
                 argv=tuple(options.command_argv),
                 scope=options.scope,
                 timeout_ms=options.timeout_ms,
+                explain_argv=None if options.explain_argv is None else tuple(options.explain_argv),
             )
         except (LifecycleError, ValueError) as exc:
             print(f"enable refused: {exc}", file=stream)

@@ -161,6 +161,18 @@ class TestPresentationModeParse(unittest.TestCase):
             render.PresentationMode.parse("  COMPACT "), render.PresentationMode.COMPACT
         )
 
+    def test_the_symmetric_name_for_plain_resolves_to_it(self):
+        # Not an alias for convenience: the fallback is a glyph mode, so a text
+        # preference that misses would render emoji on a terminal that cannot.
+        self.assertIs(
+            render.PresentationMode.parse("balanced_plain"), render.PresentationMode.PLAIN
+        )
+
+    def test_a_hyphen_is_accepted_where_a_member_uses_an_underscore(self):
+        for spelling in ("compact-plain", "balanced-plain"):
+            with self.subTest(spelling=spelling):
+                self.assertFalse(render.PresentationMode.parse(spelling).uses_glyphs)
+
     def test_unrecognised_input_falls_back_rather_than_raising(self):
         for value in ("", "verbose", None, 7, [], object()):
             self.assertIs(render.PresentationMode.parse(value), render.PresentationMode.BALANCED)
@@ -171,10 +183,33 @@ class TestPresentationModeParse(unittest.TestCase):
             render.PresentationMode.PLAIN,
         )
 
-    def test_only_plain_declines_glyphs(self):
-        self.assertFalse(render.PresentationMode.PLAIN.uses_glyphs)
-        self.assertTrue(render.PresentationMode.BALANCED.uses_glyphs)
-        self.assertTrue(render.PresentationMode.COMPACT.uses_glyphs)
+    def test_density_and_icon_style_are_independent(self):
+        # Every combination of the two axes is reachable. The one that matters is
+        # compact-and-text: a narrow terminal and an unreliable emoji font are
+        # different problems, and a reader with both must not have to pick one.
+        self.assertEqual(
+            {(mode.is_compact, mode.uses_glyphs) for mode in MODES},
+            {(False, True), (True, True), (False, False), (True, False)},
+        )
+
+    def test_a_mode_can_be_looked_up_by_its_two_axes(self):
+        # Round-trips for every member, which is what a surface offering the two
+        # axes as separate choices needs: whatever the user asked for, the mode it
+        # resolves to reports back exactly that.
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertIs(
+                    render.PresentationMode.for_axes(
+                        compact=mode.is_compact, glyphs=mode.uses_glyphs
+                    ),
+                    mode,
+                )
+
+    def test_no_two_modes_claim_the_same_pair_of_axes(self):
+        # The round trip above would still pass if a future member shadowed an
+        # existing one -- the survivor would answer for both. Then a user asking
+        # for one would silently get the other.
+        self.assertEqual(len(render._MODE_BY_AXES), len(MODES))
 
 
 class TestGraphemeClusters(unittest.TestCase):
@@ -634,9 +669,13 @@ class TestSeparatorHierarchy(unittest.TestCase):
                     3,
                 )
 
-    def test_plain_mode_separators_are_ascii(self):
-        self.assertTrue(render.SEGMENT_SEPARATORS[render.PresentationMode.PLAIN].isascii())
-        self.assertTrue(render.UPSTREAM_SEPARATORS[render.PresentationMode.PLAIN].isascii())
+    def test_text_mode_separators_are_ascii(self):
+        for mode in MODES:
+            if mode.uses_glyphs:
+                continue
+            with self.subTest(mode=mode):
+                self.assertTrue(render.SEGMENT_SEPARATORS[mode].isascii())
+                self.assertTrue(render.UPSTREAM_SEPARATORS[mode].isascii())
         self.assertTrue(render.DETAIL_SEPARATOR.isascii())
 
     def test_every_mode_has_a_separator_at_every_level(self):
@@ -909,21 +948,73 @@ class TestModeLadder(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.assertIs(render._mode_candidates(mode)[0], mode)
 
-    def test_the_ladder_never_reintroduces_a_glyph_a_plain_request_declined(self):
-        for candidate in render._mode_candidates(render.PresentationMode.PLAIN):
-            self.assertFalse(candidate.uses_glyphs)
+    def test_the_ladder_never_reintroduces_a_glyph_a_text_request_declined(self):
+        for mode in MODES:
+            if mode.uses_glyphs:
+                continue
+            for candidate in render._mode_candidates(mode):
+                with self.subTest(mode=mode, candidate=candidate):
+                    self.assertFalse(candidate.uses_glyphs)
 
-    def test_a_compact_request_is_not_re_expanded_to_balanced(self):
-        self.assertNotIn(
-            render.PresentationMode.BALANCED,
-            render._mode_candidates(render.PresentationMode.COMPACT),
-        )
+    def test_a_compact_request_is_never_re_expanded(self):
+        # Including via a text fallback: falling from COMPACT to PLAIN would drop
+        # the glyphs and hand the prose back, which is the trade COMPACT_PLAIN
+        # exists to make unnecessary.
+        for mode in MODES:
+            if not mode.is_compact:
+                continue
+            for candidate in render._mode_candidates(mode):
+                with self.subTest(mode=mode, candidate=candidate):
+                    self.assertTrue(candidate.is_compact)
 
-    def test_the_ladder_is_a_suffix_of_the_declared_order(self):
+    def test_every_candidate_list_follows_the_declared_preference_order(self):
         for mode in MODES:
             candidates = render._mode_candidates(mode)
             with self.subTest(mode=mode):
-                self.assertEqual(candidates, render.MODE_LADDER[render.MODE_LADDER.index(mode):])
+                positions = [render.MODE_PREFERENCE.index(c) for c in candidates]
+                self.assertEqual(positions, sorted(positions))
+                self.assertEqual(len(set(candidates)), len(candidates))
+
+    def test_a_text_request_can_still_be_tightened(self):
+        # The ladder must not run out of rungs for a text reader: a plain request
+        # on a narrow terminal has somewhere to go.
+        self.assertIn(
+            render.PresentationMode.COMPACT_PLAIN,
+            render._mode_candidates(render.PresentationMode.PLAIN),
+        )
+
+
+class TestCompactTextMode(unittest.TestCase):
+    """The axis combination that did not exist before HORO-1571.
+
+    Both halves are asserted because either one alone would pass for a mode that
+    merely aliased an existing member: `plain` is already glyph-free, and
+    `compact` is already narrow.
+    """
+
+    ALL = (fornax_status(), circinus_status(), libra_status())
+    GLYPHS = tuple(render.STATE_GLYPHS.values()) + tuple(render.SCOPE_GLYPHS.values())
+
+    def test_it_is_narrower_than_the_balanced_text_mode(self):
+        # The gap this member fills: a text reader on a narrow terminal had no
+        # rung below `plain`, which is in fact the widest mode of the four.
+        for status_ in self.ALL:
+            with self.subTest(provider=status_.provider):
+                self.assertLess(
+                    render.display_width(
+                        render.render_provider(status_, render.PresentationMode.COMPACT_PLAIN)
+                    ),
+                    render.display_width(
+                        render.render_provider(status_, render.PresentationMode.PLAIN)
+                    ),
+                )
+
+    def test_it_emits_no_host_glyph(self):
+        for status_ in self.ALL:
+            out = render.render_provider(status_, render.PresentationMode.COMPACT_PLAIN)
+            for glyph in self.GLYPHS:
+                with self.subTest(provider=status_.provider, glyph=glyph):
+                    self.assertNotIn(glyph, out)
 
 
 class TestComposeUpstreamPreservation(unittest.TestCase):
@@ -982,7 +1073,7 @@ class TestComposeDegradation(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        # Every test here walks the same three-mode budget sweep, so it is
+        # Every test here walks the same budget sweep over every mode, so it is
         # rendered once rather than once per assertion.
         cls._sweep = []
         for mode in MODES:
@@ -1037,10 +1128,10 @@ class TestComposeDegradation(unittest.TestCase):
             if match:
                 self.assertTrue(1 <= int(match.group(1)) < total, f"{mode.value}/{budget}")
 
-    def test_plain_mode_stays_ascii_under_every_budget(self):
+    def test_a_text_mode_stays_ascii_under_every_budget(self):
         for mode, budget, _, block in self.each_budget():
-            if mode is render.PresentationMode.PLAIN:
-                self.assertTrue(block.isascii(), f"budget={budget}: {block}")
+            if not mode.uses_glyphs:
+                self.assertTrue(block.isascii(), f"{mode.value}/{budget}: {block}")
 
     def test_a_non_empty_block_always_carries_a_readable_word(self):
         for mode, budget, _, block in self.each_budget():
@@ -1205,6 +1296,189 @@ class TestNoUnknownFieldIsRendered(unittest.TestCase):
     def test_a_path_shaped_label_cannot_be_constructed_in_the_first_place(self):
         with self.assertRaises((contract.PrivacyViolation, contract.ContractViolation)):
             segment(label="/Users/someone/secrets/config.json")
+
+
+class TestLegendCompleteness(unittest.TestCase):
+    """Every token the line can show has a meaning, and vice versa.
+
+    Both directions matter and they fail differently. A token with no meaning is
+    a reader looking up the one symbol that is not in the key; a meaning with no
+    token is dead prose that will eventually describe something the line stopped
+    doing.
+    """
+
+    def test_state_meanings_cover_exactly_the_contract_states(self):
+        self.assertEqual(
+            set(render.STATE_MEANINGS), {member.value for member in contract.SegmentState}
+        )
+
+    def test_scope_meanings_cover_exactly_the_contract_scopes(self):
+        self.assertEqual(set(render.SCOPE_MEANINGS), {member.value for member in contract.Scope})
+
+    def test_confidence_meanings_cover_exactly_the_contract_subjects(self):
+        self.assertEqual(
+            set(render.CONFIDENCE_SUBJECT_MEANINGS),
+            {member.value for member in contract.ConfidenceSubject},
+        )
+
+    def test_confidence_meanings_match_the_phrasings_that_are_printed(self):
+        # The subject tables decide what the line says; a meaning keyed to a
+        # subject the renderer has no phrasing for would explain a token nobody
+        # ever sees.
+        self.assertEqual(
+            set(render.CONFIDENCE_SUBJECT_MEANINGS), set(render.CONFIDENCE_SUBJECT_TEXT)
+        )
+
+    def test_no_meaning_merely_restates_its_own_token(self):
+        # The defect this whole surface exists to fix is a token that means
+        # nothing to a reader. Glossing `attention` as "attention" reproduces it.
+        for table, tokens in (
+            (render.STATE_MEANINGS, render.STATE_TEXT),
+            (render.SCOPE_MEANINGS, render.SCOPE_TEXT),
+        ):
+            for key, meaning in table.items():
+                with self.subTest(key=key):
+                    self.assertGreater(len(meaning.split()), 3)
+                    self.assertNotEqual(meaning.strip().lower(), tokens[key].strip().lower())
+                    self.assertNotEqual(meaning.strip().lower(), key)
+
+    def test_unknown_is_explained_as_not_being_all_clear(self):
+        # The one meaning with a specific job. `unknown` is the state a reader is
+        # most likely to take for good news, and the contract is explicit that it
+        # is never a stand-in for `ok`.
+        self.assertIn("all clear", render.STATE_MEANINGS["unknown"])
+
+    def test_host_scope_is_explained_as_reaching_other_sessions(self):
+        # Host-wide state read as session-scoped is the concrete misreading
+        # `scope_marker` exists to prevent, so the key has to say so in words.
+        self.assertIn("other", render.SCOPE_MEANINGS["host"])
+
+    def test_a_preflight_confidence_is_explained_as_not_a_risk_level(self):
+        self.assertIn("Not a risk level", render.CONFIDENCE_SUBJECT_MEANINGS["preflight_estimate"])
+
+
+class TestLegendTokens(unittest.TestCase):
+    """Each row's token is one the renderer actually emits, in the same mode.
+
+    This is the part that cannot be asserted against the legend alone. The rows
+    are built from the rendering functions, so comparing a row to those functions
+    would restate the implementation; comparing it to *rendered output* is what
+    proves the key describes the line.
+    """
+
+    def rows(self, mode, title_contains):
+        section = next(s for s in render.legend(mode) if title_contains in s.title)
+        return section.entries
+
+    def test_every_state_token_appears_in_a_segment_of_that_state(self):
+        for mode in MODES:
+            for row in self.rows(mode, "state"):
+                with self.subTest(mode=mode, state=row.name):
+                    state = contract.SegmentState(row.name.lower())
+                    rendered = render.render_segment(segment(state=state), mode)
+                    self.assertIn(row.token, rendered)
+
+    def test_every_scope_token_appears_in_a_provider_of_that_scope(self):
+        for mode in MODES:
+            for row in self.rows(mode, "scope"):
+                with self.subTest(mode=mode, scope=row.name):
+                    scope = contract.Scope(row.name.strip("[]"))
+                    rendered = render.render_provider(status(scope=scope), mode)
+                    self.assertIn(row.token, rendered)
+
+    def test_every_confidence_token_appears_in_a_segment_with_that_subject(self):
+        for mode in MODES:
+            for row in self.rows(mode, "confidence"):
+                with self.subTest(mode=mode, subject=row.name):
+                    rendered = render.render_segment(
+                        segment(
+                            confidence=contract.Confidence.HIGH,
+                            confidence_of=contract.ConfidenceSubject(row.name),
+                        ),
+                        mode,
+                    )
+                    self.assertIn(row.token, rendered)
+
+    def test_the_hypothetical_token_appears_in_a_hypothetical_segment(self):
+        for mode in MODES:
+            row = next(r for r in self.rows(mode, "markers") if r.name == "hypothetical")
+            with self.subTest(mode=mode):
+                rendered = render.render_segment(segment(hypothetical=True), mode)
+                self.assertIn(row.token, rendered)
+
+    def test_the_divider_token_appears_between_an_upstream_line_and_the_block(self):
+        for mode in MODES:
+            row = next(r for r in self.rows(mode, "markers") if r.name == "divider")
+            with self.subTest(mode=mode):
+                composed = render.compose("mine", (status(),), mode=mode)
+                self.assertIn(f"mine{render.UPSTREAM_SEPARATORS[mode]}", composed)
+                self.assertIn(row.token, composed)
+
+    def test_the_freshness_token_is_an_age_the_renderer_would_print(self):
+        for mode in MODES:
+            row = next(r for r in self.rows(mode, "markers") if r.name == "freshness")
+            with self.subTest(mode=mode):
+                rendered = render.render_segment(
+                    segment(age_seconds=render._LEGEND_AGE_SECONDS), mode
+                )
+                self.assertIn(row.token, rendered)
+
+    def test_the_freshness_example_demonstrates_rounding_down(self):
+        # A row that rounded to an exact `2m` would teach the reader the opposite
+        # of what `format_age` does, and freshness is the reading they are most
+        # likely to act on.
+        self.assertNotEqual(render._LEGEND_AGE_SECONDS % 60, 0)
+
+    def test_a_text_mode_legend_contains_no_glyph_at_all(self):
+        # The load-bearing one. These modes exist for terminals whose font or
+        # width handling makes emoji unreliable; a key rendered in glyphs would
+        # fail exactly the reader who needed it.
+        glyphs = set(render.STATE_GLYPHS.values()) | set(render.SCOPE_GLYPHS.values())
+        for mode in MODES:
+            if mode.uses_glyphs:
+                continue
+            # Titles included, not just rows. They are the part most easily
+            # forgotten, being prose rather than a token, and a heading that
+            # renders as a replacement character is no more readable than a glyph
+            # that does.
+            printed = "\n".join(
+                "\n".join(
+                    [section.title]
+                    + [f"{row.token} {row.name} {row.meaning}" for row in section.entries]
+                )
+                for section in render.legend(mode)
+            )
+            with self.subTest(mode=mode):
+                self.assertTrue(printed.isascii(), printed)
+                for glyph in glyphs:
+                    self.assertNotIn(glyph, printed)
+
+    def test_a_glyph_mode_legend_does_show_the_glyphs_it_explains(self):
+        # Guards the guard above: if `legend` returned text tokens in every mode,
+        # that test would pass for the wrong reason.
+        printed = " ".join(
+            row.token
+            for section in render.legend(render.PresentationMode.BALANCED)
+            for row in section.entries
+        )
+        for glyph in set(render.STATE_GLYPHS.values()) | set(render.SCOPE_GLYPHS.values()):
+            with self.subTest(glyph=glyph):
+                self.assertIn(glyph, printed)
+
+    def test_row_names_are_unique_within_a_section(self):
+        for mode in MODES:
+            for section in render.legend(mode):
+                with self.subTest(mode=mode, section=section.title):
+                    names = [row.name for row in section.entries]
+                    self.assertEqual(len(set(names)), len(names))
+
+    def test_no_row_is_missing_a_meaning(self):
+        for mode in MODES:
+            for section in render.legend(mode):
+                for row in section.entries:
+                    with self.subTest(mode=mode, name=row.name):
+                        self.assertTrue(row.token)
+                        self.assertTrue(row.meaning.strip())
 
 
 if __name__ == "__main__":

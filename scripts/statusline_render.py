@@ -32,14 +32,27 @@ import statusline_contract
 class PresentationMode(enum.Enum):
     """How much room the host is willing to spend on being legible.
 
-    Ordered least to most compressed. `PLAIN` is not a degraded mode — it is
-    the correct mode for a terminal whose font or width handling makes emoji
-    unreliable, and it must carry exactly the same state meaning as `BALANCED`.
+    Two independent axes, not one scale: **density** (how many columns a reading
+    is allowed) and **icon style** (whether glyphs may be used at all). They are
+    independent because the constraints behind them are — a narrow terminal and a
+    terminal whose font renders emoji badly are different problems, and a reader
+    can easily have both. Every combination is therefore a member, so a user who
+    needs a tight line *and* plain text can ask for exactly that instead of being
+    handed whichever half the enum happened to offer.
+
+    A text mode is not a degraded mode. It is the correct mode for a terminal
+    whose font or width handling makes emoji unreliable, and it carries exactly
+    the same state meaning as its glyph counterpart.
     """
 
     BALANCED = "balanced"
     COMPACT = "compact"
+    # `plain` rather than `balanced_plain`, which would be the symmetric name:
+    # registries written before the axes were separated already carry this value,
+    # and renaming it would silently fall back to a glyph mode for anyone who had
+    # asked for text. `parse` accepts the symmetric spelling as an alias.
     PLAIN = "plain"
+    COMPACT_PLAIN = "compact_plain"
 
     @classmethod
     def parse(cls, value: object, default: "PresentationMode" = None) -> "PresentationMode":
@@ -49,20 +62,77 @@ class PresentationMode(enum.Enum):
         statusline is a worse outcome than an ignored preference, and unlike
         the provider contract's `scope` there is no wrong-answer risk here —
         every mode conveys the same semantics.
+
+        The fallback is exactly why the accepted spellings are generous. It
+        resolves to a glyph mode, so a near-miss on a *text* preference answers a
+        request for plain text with emoji — the one failure that is visibly
+        broken rather than merely unwanted. A hyphen instead of an underscore
+        must not cost a reader that.
         """
         if default is None:
             default = cls.BALANCED
         if isinstance(value, cls):
             return value
         if isinstance(value, str):
+            name = value.strip().lower().replace("-", "_")
             for member in cls:
-                if member.value == value.strip().lower():
+                if member.value == name:
                     return member
+            if name in _MODE_ALIASES:
+                return _MODE_ALIASES[name]
         return default
+
+    @classmethod
+    def for_axes(cls, *, compact: bool, glyphs: bool) -> "PresentationMode":
+        """The one mode with exactly these two properties.
+
+        Exists so that a surface offering density and icon style as separate
+        choices resolves them by inverting the axis table rather than by naming
+        members. Naming members is where the two can disagree with what was
+        asked for -- and a user who asked for text and was handed a glyph mode
+        gets exactly the broken output the text modes exist to avoid.
+
+        Total by construction: every combination of the two booleans is a
+        member, which is what the fourth member was added to guarantee.
+        """
+        return _MODE_BY_AXES[(compact, glyphs)]
+
+    @property
+    def is_compact(self) -> bool:
+        """Whether to spend fewer columns: shorter phrasings, exceptions only."""
+        return _MODE_AXES[self][0]
 
     @property
     def uses_glyphs(self) -> bool:
-        return self is not PresentationMode.PLAIN
+        return _MODE_AXES[self][1]
+
+
+# `(is_compact, uses_glyphs)` per member. A table rather than identity
+# comparisons scattered through the module, because density and icon style are
+# two independent reader constraints -- a narrow terminal and an unreliable
+# emoji font are different problems with different answers. Written as
+# `mode is COMPACT`, a density decision silently also asserts "and glyphs are
+# fine", so every such site would quietly take the wrong branch for any mode
+# that combined the axes differently. Asking the mode which axis is being
+# consulted makes that impossible rather than merely unlikely.
+_MODE_AXES = {
+    PresentationMode.BALANCED: (False, True),
+    PresentationMode.COMPACT: (True, True),
+    PresentationMode.PLAIN: (False, False),
+    PresentationMode.COMPACT_PLAIN: (True, False),
+}
+
+# The same table read the other way, for `for_axes`. Derived rather than written
+# out so the two directions cannot disagree; a test asserts it is still a
+# bijection, which is the property that would break if a future member claimed
+# an axis pair some existing member already has.
+_MODE_BY_AXES = {axes: mode for mode, axes in _MODE_AXES.items()}
+
+# Names that are not wire values but mean one. `balanced_plain` is what naming
+# the two axes independently produces for the mode whose value is historically
+# `plain`; both spellings must resolve, because a reader who writes the
+# symmetric one is asking for text and the fallback would give them glyphs.
+_MODE_ALIASES = {"balanced_plain": PresentationMode.PLAIN}
 
 
 _ZWJ = "\u200d"  # ZERO WIDTH JOINER
@@ -280,8 +350,8 @@ STATE_SEVERITY = {
     "critical": 4,
 }
 
-# States that keep their word even in COMPACT, because an exception must become
-# *more* explicit under pressure, not less. `unknown` is in here deliberately:
+# States that keep their word even in a compact mode, because an exception must
+# become *more* explicit under pressure, not less. `unknown` is here deliberately:
 # a provider that could not read its own state is the case a reader is most
 # likely to misread as fine.
 EMPHATIC_STATES = frozenset({"unknown", "attention", "warn", "critical"})
@@ -296,7 +366,7 @@ def state_marker(state: str, mode: PresentationMode) -> str:
     label is rendered beside it and is the human-readable carrier of meaning —
     `<check> Verified` says everything `<check> OK Verified` says.
 
-    The exception is COMPACT, which shortens and may drop labels: there an
+    The exception is a compact mode, which shortens and may drop labels: there an
     emphatic state carries its own word, so an exception never depends on a
     reader decoding a glyph. An unrecognised state degrades to `unknown` rather
     than rendering blank, matching the provider contract's degradation rule —
@@ -307,7 +377,7 @@ def state_marker(state: str, mode: PresentationMode) -> str:
     if not mode.uses_glyphs:
         return STATE_TEXT[state]
     glyph = STATE_GLYPHS[state]
-    if mode is PresentationMode.COMPACT and state in EMPHATIC_STATES:
+    if mode.is_compact and state in EMPHATIC_STATES:
         return f"{glyph} {STATE_TEXT[state]}"
     return glyph
 
@@ -319,8 +389,8 @@ def format_age(age_seconds: int, mode: PresentationMode) -> str:
     seconds or days old, and the extra precision costs columns that a provider
     label needs more. Rounds *down*, so "2m" never overstates freshness.
 
-    BALANCED and PLAIN say "ago" because a bare "2m" beside a count reads as a
-    duration or a budget rather than an age.
+    The balanced-density modes say "ago" because a bare "2m" beside a count reads
+    as a duration or a budget rather than an age.
     """
     age_seconds = max(0, int(age_seconds))
     for limit, unit, divisor in ((60, "s", 1), (3600, "m", 60), (86400, "h", 3600)):
@@ -330,7 +400,7 @@ def format_age(age_seconds: int, mode: PresentationMode) -> str:
     else:
         value, unit = age_seconds // 86400, "d"
     token = f"{value}{unit}"
-    return token if mode is PresentationMode.COMPACT else f"{token} ago"
+    return token if mode.is_compact else f"{token} ago"
 
 
 # Descending, and each entry's divisor is the next one's unit, so the pair
@@ -393,7 +463,7 @@ def format_count(count: int, total: int | None, count_label: str, mode: Presenta
     """
     if total is None:
         quantity = str(count)
-    elif mode is PresentationMode.COMPACT:
+    elif mode.is_compact:
         quantity = f"{count}/{total}"
     else:
         quantity = f"{count} of {total}"
@@ -410,8 +480,8 @@ CONFIDENCE_SUBJECT_TEXT = {
     "unspecified": "confidence",
 }
 
-# COMPACT still names the subject, just shorter. It never degrades to the bare
-# value, because "high" alone is the ambiguity this field was added to remove.
+# A compact mode still names the subject, just shorter. It never degrades to the
+# bare value, because "high" alone is the ambiguity this field was added to remove.
 CONFIDENCE_SUBJECT_TEXT_COMPACT = {
     "preflight_estimate": "preflight",
     # Not "verified": `verified low` reads as a verdict about the subject rather
@@ -429,11 +499,7 @@ def format_confidence(confidence: str, confidence_of: str, mode: PresentationMod
     omitted: dropping the subject would leave the bare value this function
     exists to qualify.
     """
-    table = (
-        CONFIDENCE_SUBJECT_TEXT_COMPACT
-        if mode is PresentationMode.COMPACT
-        else CONFIDENCE_SUBJECT_TEXT
-    )
+    table = CONFIDENCE_SUBJECT_TEXT_COMPACT if mode.is_compact else CONFIDENCE_SUBJECT_TEXT
     subject = table.get(confidence_of) or table["unspecified"]
     return f"{subject} {confidence}"
 
@@ -479,19 +545,27 @@ HYPOTHETICAL_TEXT = "NOT ENFORCED"
 # boundary the provider never intended.
 DETAIL_SEPARATOR = "; "
 
-# PLAIN drops to ASCII for the same reason it drops glyphs: it exists for
+# A text mode drops to ASCII for the same reason it drops glyphs: it exists for
 # terminals whose character handling cannot be trusted, and U+00B7 is one more
 # thing to get wrong for no gain.
+#
+# Keyed off the icon-style axis and derived for every member, rather than
+# enumerated per mode. The separator has never been a density decision -- it is
+# the same width either way -- so writing it per member would invite a future
+# mode to be given a glyph separator it cannot render, or no separator at all.
+_GLYPH_SEGMENT_SEPARATOR = " · "  # MIDDLE DOT
+_TEXT_SEGMENT_SEPARATOR = " | "
+_GLYPH_UPSTREAM_SEPARATOR = " ┃ "  # BOX DRAWINGS HEAVY VERTICAL
+_TEXT_UPSTREAM_SEPARATOR = " || "
+
 SEGMENT_SEPARATORS = {
-    PresentationMode.BALANCED: " · ",  # MIDDLE DOT
-    PresentationMode.COMPACT: " · ",
-    PresentationMode.PLAIN: " | ",
+    mode: _GLYPH_SEGMENT_SEPARATOR if mode.uses_glyphs else _TEXT_SEGMENT_SEPARATOR
+    for mode in PresentationMode
 }
 
 UPSTREAM_SEPARATORS = {
-    PresentationMode.BALANCED: " ┃ ",  # BOX DRAWINGS HEAVY VERTICAL
-    PresentationMode.COMPACT: " ┃ ",
-    PresentationMode.PLAIN: " || ",
+    mode: _GLYPH_UPSTREAM_SEPARATOR if mode.uses_glyphs else _TEXT_UPSTREAM_SEPARATOR
+    for mode in PresentationMode
 }
 
 
@@ -540,10 +614,10 @@ def render_segment(segment: object, mode: PresentationMode) -> str:
         details.append(format_confidence(confidence, _enum_value(segment.confidence_of), mode))
 
     reason = format_reason(segment.reason_code, segment.reason_label)
-    # COMPACT spends its remaining columns on exceptions only: a reason for an
-    # `ok` segment is the least useful thing on the line, and a reason for a
-    # `critical` one is the most.
-    if reason and (mode is not PresentationMode.COMPACT or state in EMPHATIC_STATES):
+    # A compact mode spends its remaining columns on exceptions only: a reason
+    # for an `ok` segment is the least useful thing on the line, and a reason for
+    # a `critical` one is the most.
+    if reason and (not mode.is_compact or state in EMPHATIC_STATES):
         details.append(reason)
     if segment.age_seconds is not None:
         details.append(format_age(segment.age_seconds, mode))
@@ -629,26 +703,48 @@ def provider_severity(status: object) -> int:
     )
 
 
-# Tried in order when a budget is set. Deliberately *measured* rather than
-# assumed to shrink: COMPACT can be wider than BALANCED, because an emphatic
-# state gains its word there, and that is the intended trade — an exception
-# becomes more explicit under pressure, not less. So the ladder picks the first
-# candidate that actually fits instead of trusting the order.
-MODE_LADDER = (PresentationMode.BALANCED, PresentationMode.COMPACT, PresentationMode.PLAIN)
+# Preference order when a budget is set: keep glyphs as long as they fit, and
+# tighten density before abandoning them. Deliberately *measured* rather than
+# assumed to shrink: a compact mode can be wider than a balanced one, because an
+# emphatic state gains its word there, and that is the intended trade — an
+# exception becomes more explicit under pressure, not less. So the ladder picks
+# the first candidate that actually fits instead of trusting the order.
+MODE_PREFERENCE = (
+    PresentationMode.BALANCED,
+    PresentationMode.COMPACT,
+    PresentationMode.PLAIN,
+    PresentationMode.COMPACT_PLAIN,
+)
+
+# What the ladder may try, per requested mode. Derived from the two axes rather
+# than hand-listed per mode, so the rule below is stated once and cannot drift
+# from the lists that implement it.
+MODE_LADDER = {
+    requested: tuple(
+        candidate
+        for candidate in MODE_PREFERENCE
+        if (candidate.is_compact or not requested.is_compact)
+        and (requested.uses_glyphs or not candidate.uses_glyphs)
+    )
+    for requested in PresentationMode
+}
 
 
 def _mode_candidates(mode: PresentationMode) -> tuple[PresentationMode, ...]:
     """The modes the ladder may try, given what the user asked for.
 
-    Strictly downward: the ladder never hands back something the user declined.
-    A PLAIN request is a statement about what the terminal can render, not about
-    width, so no width pressure may reintroduce a glyph — that would produce
-    exactly the broken output PLAIN exists to avoid. A COMPACT request is not
-    re-expanded to BALANCED either, since the user asked for compactness and
-    running out of room is not a reason to give them more prose.
+    Strictly downward on both axes: the ladder never hands back something the
+    user declined. A text request is a statement about what the terminal can
+    render, not about width, so no width pressure may reintroduce a glyph — that
+    would produce exactly the broken output the text modes exist to avoid. A
+    compact request is not re-expanded either, since the user asked for
+    compactness and running out of room is not a reason to give them more prose.
+
+    The second rule is why the two axes have to be independent: before
+    `COMPACT_PLAIN` existed, a compact request under width pressure could only
+    shed its glyphs by falling to `PLAIN`, which quietly gave the prose back.
     """
-    start = MODE_LADDER.index(mode)
-    return MODE_LADDER[start:]
+    return MODE_LADDER[mode]
 
 
 def _hidden_marker(count: int) -> str:
@@ -835,3 +931,155 @@ def compose(
     if not upstream:
         return block
     return f"{upstream}{UPSTREAM_SEPARATORS[chosen_mode]}{block}"
+
+
+# ------------------------------------------------------------ the explain surface
+#
+# A glanceable line is one that leaves its own key out. These tables are that key.
+# They live beside the glyph tables rather than in the command that prints them,
+# for the same reason the glyphs are here at all: the vocabulary is host-owned, so
+# a new state should have exactly one place to be described, next to the line that
+# gives it an icon.
+
+# Phrased as what the token means for the reader, never as a synonym for its own
+# name. `attention` glossed as "needs attention" is the opaque-abbreviation problem
+# again, one indirection later.
+STATE_MEANINGS = {
+    "ok": "checked, and nothing here needs you",
+    "attention": "something is waiting on a decision or an action from you",
+    "warn": "something is wrong; work is not stopped",
+    "critical": "something is wrong and is stopping work",
+    "neutral": "a fact with no health claim, such as a mode name or a task id",
+    "unknown": (
+        "the provider could not determine its own state; this is not a quiet way of "
+        "saying all clear"
+    ),
+}
+
+# Named, unlike the other three marker meanings in the key below, because this is
+# the one a reader may meet on a single reading rather than on the line as a
+# whole -- so a surface explaining one segment has to be able to quote it, and a
+# second copy of this particular sentence is the copy that must not drift.
+HYPOTHETICAL_MEANING = "what a policy would have done. Nothing was blocked and nothing was stopped"
+
+SCOPE_MEANINGS = {
+    "host": "everything on this machine, including sessions other than this one",
+    "session": "this Claude Code session only",
+    "project": "this project or working directory only",
+}
+
+# Each entry says what the confidence is a confidence *in*, which is the entire
+# reason the field exists — see `CONFIDENCE_SUBJECT_TEXT`.
+CONFIDENCE_SUBJECT_MEANINGS = {
+    "preflight_estimate": (
+        "how far the product trusts its own estimate, made before the work runs. "
+        "Not a risk level and not a severity"
+    ),
+    "verification": "how far the product trusts a verification result it has not confirmed",
+    "policy_decision": "how far the product trusts a decision it reached",
+    "unspecified": "the product did not say what the confidence is about",
+}
+
+
+@dataclasses.dataclass(frozen=True)
+class LegendEntry:
+    """One row of the key: the token as it appears, its word, and what it means.
+
+    `token` is produced by the same functions that render the line, at the same
+    mode, rather than written out. A key that shows glyphs to a reader whose line
+    is in text is worse than no key at all — it explains something they are not
+    looking at, and the modes exist precisely because that reader's terminal
+    cannot be trusted with the glyph.
+
+    `name` is the machine word for the same thing, so the row is still usable
+    when the token is a glyph the reader cannot see.
+    """
+
+    token: str
+    name: str
+    meaning: str
+
+
+@dataclasses.dataclass(frozen=True)
+class LegendSection:
+    """A group of rows under the question it answers."""
+
+    title: str
+    entries: tuple[LegendEntry, ...]
+
+
+# The example age used by the freshness row. Not a round number, so the row
+# demonstrates that the format rounds down to one coarse unit — `120` would render
+# as an exact `2m` and teach the reader the opposite.
+_LEGEND_AGE_SECONDS = 135
+
+# The example confidence used by the confidence rows. Any value would do; `high`
+# is the one most often misread as risk, which is what those rows exist to correct.
+_LEGEND_CONFIDENCE = "high"
+
+# The example hidden-segment count. Plural, because the singular would leave a
+# reader to guess whether the marker ever carries a number.
+_LEGEND_HIDDEN = 2
+
+
+def legend(mode: PresentationMode) -> tuple[LegendSection, ...]:
+    """The key to the line, rendered in the mode the line is rendered in.
+
+    Derived from the rendering tables rather than listed, so a state, scope or
+    confidence subject that exists cannot be missing from the key, and a token
+    shown here cannot differ from the token shown in the line. The meaning tables
+    are keyed identically and the test suite asserts that in both directions,
+    which is what makes completeness a property rather than a promise.
+
+    Pure, like everything else in this module: no provider is consulted and
+    nothing is read. This is the half of the explain surface that is true before
+    anything has been measured.
+    """
+    return (
+        LegendSection(
+            "state -- how to read a reading",
+            tuple(
+                LegendEntry(state_marker(state, mode), STATE_TEXT[state], STATE_MEANINGS[state])
+                for state in STATE_TEXT
+            ),
+        ),
+        LegendSection(
+            "scope -- what a reading is about",
+            tuple(
+                LegendEntry(scope_marker(scope, mode), SCOPE_TEXT[scope], SCOPE_MEANINGS[scope])
+                for scope in SCOPE_TEXT
+            ),
+        ),
+        LegendSection(
+            "confidence -- what a high, medium or low is a confidence in",
+            tuple(
+                LegendEntry(
+                    format_confidence(_LEGEND_CONFIDENCE, subject, mode),
+                    subject,
+                    CONFIDENCE_SUBJECT_MEANINGS[subject],
+                )
+                for subject in CONFIDENCE_SUBJECT_TEXT
+            ),
+        ),
+        LegendSection(
+            "markers the host adds",
+            (
+                LegendEntry(f"[{HYPOTHETICAL_TEXT}]", "hypothetical", HYPOTHETICAL_MEANING),
+                LegendEntry(
+                    _hidden_marker(_LEGEND_HIDDEN),
+                    "hidden",
+                    "the line ran out of room, and this many readings are not shown",
+                ),
+                LegendEntry(
+                    format_age(_LEGEND_AGE_SECONDS, mode),
+                    "freshness",
+                    "how old the reading is, rounded down so it is never overstated",
+                ),
+                LegendEntry(
+                    UPSTREAM_SEPARATORS[mode].strip(),
+                    "divider",
+                    "everything to the left of this is your own statusline, verbatim",
+                ),
+            ),
+        ),
+    )

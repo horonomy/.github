@@ -32,6 +32,7 @@ import unittest.mock
 import statusline_compositor as compositor
 import statusline_contract as contract
 import statusline_lifecycle as lifecycle
+import statusline_render as render
 
 
 def rich_settings() -> dict:
@@ -142,6 +143,7 @@ class LifecycleCase(unittest.TestCase):
             argv=kwargs.pop("argv", ("/bin/echo", provider)),
             scope=kwargs.pop("scope", "host"),
             timeout_ms=kwargs.pop("timeout_ms", None),
+            explain_argv=kwargs.pop("explain_argv", None),
         )
         return lifecycle.plan_enable(document, registry, registration, **kwargs)
 
@@ -354,6 +356,50 @@ class SettingsScopeTest(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertEqual(lifecycle.settings_scope(path), expected)
+
+
+class PlanShapeTest(unittest.TestCase):
+    """The invariant tying a plan's three settings fields together.
+
+    Asserted structurally rather than through an operation because the dangerous
+    combination is one no current caller produces: the guard exists so that a
+    future one cannot introduce a settings write with no staleness check.
+    """
+
+    def plan(self, **kwargs) -> lifecycle.Plan:
+        fields = {
+            "operation": "presentation",
+            "settings_path": None,
+            "ownership": None,
+            "changes": (),
+            "fingerprint": None,
+        }
+        return lifecycle.Plan(**{**fields, **kwargs})
+
+    def test_a_plan_may_omit_the_settings_file_entirely(self) -> None:
+        plan = self.plan()
+        self.assertIsNone(plan.to_json()["settings_path"])
+        self.assertIsNone(plan.to_json()["current_owner"])
+
+    def test_omitting_the_settings_file_is_disclosed_as_host_wide(self) -> None:
+        # The registry is one directory per machine, so a plan that writes only
+        # the registry reaches every project -- a wider blast radius than the
+        # "project" a settings path would have reported.
+        self.assertEqual(self.plan().scope, "host")
+
+    def test_the_three_settings_fields_cannot_be_supplied_apart(self) -> None:
+        for partial in (
+            {"settings_path": pathlib.Path("/work/repo/.claude/settings.json")},
+            {"ownership": lifecycle.Ownership.ABSENT},
+            {"fingerprint": "deadbeef"},
+        ):
+            with self.subTest(partial=sorted(partial)), self.assertRaises(ValueError):
+                self.plan(**partial)
+
+    def test_a_settings_write_cannot_be_planned_without_a_fingerprint(self) -> None:
+        # The combination that would skip the staleness check in `apply`.
+        with self.assertRaises(ValueError):
+            self.plan(settings_after={"statusLine": {}})
 
 
 class EnablePreservationTest(LifecycleCase):
@@ -664,6 +710,173 @@ class DisableTest(LifecycleCase):
         self.assertIn("circinus is not registered; nothing to remove", plan.notes)
         self.assertEqual(lifecycle.read_registry(self.home).path.read_bytes(), registry_before)
         self.assertEqual(self.settings.read_bytes(), settings_before)
+
+
+class PresentationTest(LifecycleCase):
+    """The reader's own rendering preference, which lives in our registry.
+
+    Two properties carry the weight here. It must survive every other operation,
+    since a preference that is quietly reset by the next `enable` is not a
+    preference; and the value written must be one the compositor honours, which
+    the compositor's deliberate fall-back on an unrecognised mode would otherwise
+    hide behind a line that renders perfectly in the wrong style.
+    """
+
+    def plan_presentation(self, **kwargs) -> lifecycle.Plan:
+        return lifecycle.plan_presentation(lifecycle.read_registry(self.home), **kwargs)
+
+    def presentation(self, **kwargs) -> lifecycle.ApplyResult:
+        return lifecycle.apply(self.plan_presentation(**kwargs))
+
+    def stored(self) -> dict:
+        return self._registry()[lifecycle.PRESENTATION_KEY]
+
+    def effective(self) -> render.PresentationMode:
+        """The mode the compositor will actually render in."""
+        return compositor.load_registry(lifecycle.read_registry(self.home).path).mode
+
+    def test_every_preference_this_can_write_is_one_the_compositor_honours(self) -> None:
+        self.enable("fornax")
+        for compact in (False, True):
+            for glyphs in (False, True):
+                with self.subTest(compact=compact, glyphs=glyphs):
+                    self.presentation(compact=compact, glyphs=glyphs)
+                    # Read back through the compositor's own parser, not ours. It
+                    # falls back to the default on an unrecognised mode name
+                    # rather than failing, so a value only this module understands
+                    # would produce a line that renders correctly in the style the
+                    # user did not ask for -- and nothing would report it.
+                    self.assertEqual(
+                        (self.effective().is_compact, self.effective().uses_glyphs),
+                        (compact, glyphs),
+                    )
+
+    def test_either_axis_can_be_set_without_stating_the_other(self) -> None:
+        self.enable("fornax")
+        self.presentation(glyphs=False)
+        self.assertFalse(self.effective().uses_glyphs)
+        self.assertFalse(self.effective().is_compact)
+
+        # The terminal got narrower. The font did not get better.
+        self.presentation(compact=True)
+        self.assertTrue(self.effective().is_compact)
+        self.assertFalse(self.effective().uses_glyphs)
+
+    def test_other_keys_in_the_preference_object_are_left_alone(self) -> None:
+        self.enable("fornax")
+        registry = self._registry()
+        registry[lifecycle.PRESENTATION_KEY] = {
+            "width_budget": 96,
+            "futureUnknownKey": "keep-me",
+        }
+        lifecycle.read_registry(self.home).path.write_bytes(lifecycle.serialize(registry))
+
+        self.presentation(glyphs=False)
+
+        # A preference object is ours as a whole, but `mode` is the only key in it
+        # this operation owns -- the same rule the settings file gets.
+        self.assertEqual(self.stored()["width_budget"], 96)
+        self.assertEqual(self.stored()["futureUnknownKey"], "keep-me")
+        self.assertEqual(self.stored()["mode"], render.PresentationMode.PLAIN.value)
+
+    def test_setting_a_preference_that_is_already_set_writes_nothing(self) -> None:
+        self.enable("fornax")
+        self.presentation(compact=True, glyphs=False)
+        before = lifecycle.read_registry(self.home).path.read_bytes()
+
+        plan = self.plan_presentation(compact=True, glyphs=False)
+        result = lifecycle.apply(plan)
+
+        self.assertFalse(plan.mutates)
+        self.assertFalse(result.registry_written)
+        self.assertEqual(lifecycle.read_registry(self.home).path.read_bytes(), before)
+        # Reported rather than silently succeeding, so that running it to ask
+        # "what is set" answers the question.
+        self.assertIn("already density compact, icons text only", str(plan.to_json()))
+
+    def test_a_preference_change_does_not_read_the_settings_file_at_all(self) -> None:
+        self.enable("fornax")
+        with self.deny_reads(self.settings):
+            self.presentation(glyphs=False)
+        self.assertFalse(self.effective().uses_glyphs)
+
+    def test_an_unparseable_settings_file_does_not_block_a_preference(self) -> None:
+        self.enable("fornax")
+        self.settings.write_bytes(b'{"model": "claude-opus-4",')
+        broken = self.settings.read_bytes()
+
+        self.presentation(glyphs=False)
+
+        # Fail-closed exists to stop us writing a configuration we do not
+        # understand. It must not stop a user whose configuration is already
+        # broken from making the line legible -- that user is the likeliest one to
+        # need it, and this operation cannot touch their file.
+        self.assertFalse(self.effective().uses_glyphs)
+        self.assertEqual(self.settings.read_bytes(), broken)
+
+    def test_a_missing_registry_is_refused_rather_than_created(self) -> None:
+        plan = self.plan_presentation(glyphs=False)
+
+        # Creating one here would clear `enable`'s refusal for the case where the
+        # compositor owns the slot and the registry -- the only record of the
+        # user's original command -- has gone missing.
+        self.assertIsNotNone(plan.refusal)
+        self.assertFalse(lifecycle.read_registry(self.home).present)
+        with self.assertRaises(lifecycle.OwnershipError):
+            lifecycle.apply(plan)
+
+    def test_an_unusable_registry_is_not_overwritten_for_a_preference(self) -> None:
+        self.enable("fornax")
+        registry_path = lifecycle.read_registry(self.home).path
+        registry_path.write_bytes(b'{"registry_version": 1, "providers": "not a list"}')
+        before = registry_path.read_bytes()
+
+        plan = self.plan_presentation(glyphs=False)
+
+        # MALFORMED_OR_UNSUPPORTED_CONFIG_FAILS_WITH_ZERO_MUTATION, applied to our
+        # own file: the providers and the recorded original are in it, and a
+        # rendering preference is not worth either of them.
+        self.assertIsNotNone(plan.refusal)
+        self.assertEqual(registry_path.read_bytes(), before)
+
+    def test_enabling_another_provider_preserves_the_preference(self) -> None:
+        self.enable("fornax")
+        self.presentation(compact=True, glyphs=False)
+
+        self.enable("circinus")
+
+        # "Do not auto-rewrite user preferences on upgrade" -- which in code means
+        # no operation but this one may change the stored mode.
+        self.assertEqual(self.effective(), render.PresentationMode.COMPACT_PLAIN)
+
+    def test_re_enabling_the_same_provider_preserves_the_preference(self) -> None:
+        self.enable("fornax")
+        self.presentation(glyphs=False)
+        self.enable("fornax", timeout_ms=400)
+        self.assertFalse(self.effective().uses_glyphs)
+
+    def test_disabling_one_provider_preserves_the_preference(self) -> None:
+        self.enable("fornax")
+        self.enable("circinus")
+        self.presentation(glyphs=False)
+
+        self.remove("circinus")
+
+        self.assertFalse(self.effective().uses_glyphs)
+
+    def test_the_last_provider_leaving_takes_the_preference_with_it(self) -> None:
+        self.enable("fornax")
+        self.presentation(glyphs=False)
+
+        self._uninstall()
+
+        # Deliberate, and the one place the preference does not survive: the
+        # preference is our state, and uninstall removes our state. What must
+        # survive is the user's, and it does -- their settings file comes back
+        # whole. Leaving a preferences file behind after an uninstall would be
+        # litter, not a courtesy.
+        self.assertFalse(lifecycle.read_registry(self.home).present)
+        self.assertEqual(self._read(), self.original)
 
 
 class RestorationTest(LifecycleCase):
@@ -1457,6 +1670,823 @@ class DoctorTest(LifecycleCase):
         self.assertEqual(report["providers"][0]["availability"], "unavailable")
         self.assertEqual(report["providers"][0]["command_name"], "provider.sh")
         self.assertEqual(self.settings.read_bytes(), before)
+
+
+def segment(key: str, state: str, label: str, **fields) -> contract.Segment:
+    """A segment built from wire values, the way a provider's output arrives.
+
+    Strings rather than enum members, because that is what comes off a
+    provider's stdout and the decode has to cope with the same input the
+    renderer does.
+    """
+    return contract.Segment(
+        key=key,
+        state=contract.SegmentState(state),
+        label=label,
+        confidence=contract.Confidence(fields.pop("confidence"))
+        if "confidence" in fields
+        else None,
+        confidence_of=contract.ConfidenceSubject(fields.pop("confidence_of"))
+        if "confidence_of" in fields
+        else None,
+        **fields,
+    )
+
+
+class ExplainCase(LifecycleCase):
+    """A registered provider that really answers, plus a real explain command.
+
+    The provider is a script rather than a patched function: `explain` decodes
+    what a provider actually said, so a test that handed it a status object
+    directly would skip the part where the answer crosses a process boundary and
+    is validated -- which is where a decode of something that is not there would
+    otherwise pass.
+    """
+
+    def provider_script(self, status: contract.ProviderStatus) -> pathlib.Path:
+        path = self.root / f"{status.provider}-provider.sh"
+        path.write_text(f"#!/bin/sh\nprintf '%s' {shlex.quote(json.dumps(status.to_wire()))}\n")
+        path.chmod(0o755)
+        # Run once before it is ever timed. A freshly written executable pays a
+        # one-time evaluation cost on macOS that comfortably exceeds a provider's
+        # render budget, and a test asserting on a decode must not be measuring
+        # that instead.
+        subprocess.run([str(path)], capture_output=True, timeout=30, check=False)
+        return path
+
+    def detail_script(self, name: str, body: str, *, warm: bool = True) -> pathlib.Path:
+        """A stand-in for a product's own explain surface.
+
+        `warm=False` for a script that is not meant to finish -- warming one of
+        those would hang the fixture rather than the thing under test. Safe to
+        skip there precisely because those tests assert on a timeout, and the
+        first-exec cost can only make a slow script slower.
+        """
+        path = self.root / f"{name}.sh"
+        path.write_text(f"#!/bin/sh\n{body}")
+        path.chmod(0o755)
+        if warm:
+            subprocess.run([str(path)], capture_output=True, timeout=30, check=False)
+        return path
+
+    def status(
+        self,
+        provider: str = "fornax",
+        *,
+        availability: str = "available",
+        scope: str = "host",
+        segments: tuple[contract.Segment, ...] = (),
+    ) -> contract.ProviderStatus:
+        return contract.ProviderStatus(
+            provider=provider,
+            provider_version="1.0.0",
+            scope=contract.Scope(scope),
+            availability=contract.Availability(availability),
+            segments=segments,
+        )
+
+    def register(self, status: contract.ProviderStatus, **kwargs) -> None:
+        self.enable(
+            status.provider,
+            argv=(str(self.provider_script(status)),),
+            scope=status.scope.value,
+            timeout_ms=2000,
+            **kwargs,
+        )
+
+    def explain(self, **kwargs) -> dict:
+        return lifecycle.explain(self.settings, self.home, **kwargs)
+
+    def printed(self, **kwargs) -> str:
+        return lifecycle._describe_explain(self.explain(**kwargs))
+
+
+class ExplainDecodeTest(ExplainCase):
+    """What the decode says about a reading, against what the line shows."""
+
+    def test_it_quotes_the_fragment_the_compositor_really_renders(self) -> None:
+        # The tie that makes every other assertion here about the user's line
+        # rather than about a second renderer. `explain` is asked for its
+        # fragment, the compositor is then asked for the whole line, and the
+        # fragment has to be in it verbatim.
+        self.register(
+            self.status(
+                segments=(
+                    segment("verification", "unknown", "Verification", reason_code="no_daemon"),
+                )
+            )
+        )
+
+        reading = self.explain()["providers"][0]["readings"][0]
+
+        stream = io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            compositor.main(stdin=io.BytesIO(b"{}"), stdout=stream)
+        self.assertIn(reading["rendered"], stream.getvalue())
+
+    def test_an_unknown_reading_carries_its_reason_and_its_freshness(self) -> None:
+        # Fornax's UNVERIFIED case, which is the one the readability pass was
+        # filed about: the state alone left a reader with no idea why.
+        self.register(
+            self.status(
+                segments=(
+                    segment(
+                        "verification",
+                        "unknown",
+                        "Verification",
+                        reason_code="daemon_not_running",
+                        age_seconds=135,
+                        explain_key="fornax.verification",
+                    ),
+                )
+            )
+        )
+
+        reading = self.explain()["providers"][0]["readings"][0]
+
+        self.assertEqual(reading["reason"], "daemon not running")
+        self.assertEqual(reading["freshness"], "2m ago")
+        self.assertEqual(reading["explain_key"], "fornax.verification")
+        # UNKNOWN != HEALTHY, said in words rather than left to the icon.
+        self.assertIn("all clear", reading["state_means"])
+
+    def test_no_reason_is_invented_for_a_provider_that_gave_none(self) -> None:
+        # The host does not infer a reason, and specifically does not infer one
+        # from a count: "the provider did not say why" is a different claim from
+        # any reason the host could construct, and only the first one is true.
+        self.register(
+            self.status(
+                segments=(
+                    segment("tasks", "neutral", "Tasks", count=3, total=9, count_label="running"),
+                )
+            )
+        )
+
+        reading = self.explain()["providers"][0]["readings"][0]
+
+        self.assertNotIn("reason", reading)
+        self.assertNotIn("freshness", reading)
+        self.assertNotIn("why:", self.printed())
+
+    def test_a_would_block_reading_stays_hypothetical_all_the_way_down(self) -> None:
+        # Circinus shadow mode. A reader who concludes from this that their agent
+        # was stopped has been told something false, so the marker survives into
+        # the decode with the denial spelled out rather than just the token.
+        self.register(
+            self.status(
+                provider="circinus",
+                segments=(segment("decision", "warn", "Would block", hypothetical=True),),
+            )
+        )
+
+        reading = self.explain()["providers"][0]["readings"][0]
+        printed = self.printed()
+
+        self.assertEqual(reading["hypothetical"], render.HYPOTHETICAL_MEANING)
+        self.assertIn(render.HYPOTHETICAL_TEXT, printed)
+        self.assertIn("Nothing was blocked", printed)
+
+    def test_a_preflight_confidence_is_decoded_as_a_confidence_not_a_risk(self) -> None:
+        # Libra's `pf:high`, which read as "high risk" to the one reader it was
+        # built for. The subject is carried into the decode and the meaning says
+        # what it is not.
+        self.register(
+            self.status(
+                provider="libra",
+                segments=(
+                    segment(
+                        "preflight",
+                        "attention",
+                        "Preflight",
+                        confidence="high",
+                        confidence_of="preflight_estimate",
+                    ),
+                ),
+            )
+        )
+
+        confidence = self.explain()["providers"][0]["readings"][0]["confidence"]
+
+        self.assertEqual(confidence["rendered"], "preflight confidence high")
+        self.assertIn("Not a risk level", confidence["means"])
+
+    def test_an_unavailable_provider_is_not_decoded_as_a_healthy_zero(self) -> None:
+        self.register(self.status(availability="unavailable"))
+
+        provider = self.explain()["providers"][0]
+
+        self.assertEqual(provider["availability"], "unavailable")
+        self.assertNotIn("ok", [reading["state"] for reading in provider["readings"]])
+        # Named on the line as well, because an availability that only appears
+        # when it is bad cannot be told apart from a field nobody filled in.
+        self.assertIn("availability: unavailable", self.printed())
+
+    def test_every_token_in_a_decode_has_a_row_in_the_key(self) -> None:
+        # The key is generated from the rendering tables and the decode is
+        # generated from the same ones, so this is the assertion that catches the
+        # two drifting: a reading whose token nothing explains.
+        self.register(
+            self.status(
+                scope="session",
+                segments=(
+                    segment("a", "critical", "Blocked"),
+                    segment(
+                        "b",
+                        "attention",
+                        "Waiting",
+                        confidence="medium",
+                        confidence_of="policy_decision",
+                    ),
+                    segment("c", "ok", "Checked", age_seconds=30),
+                ),
+            )
+        )
+
+        report = self.explain()
+        tokens = {
+            entry["token"] for section in report["legend"] for entry in section["entries"]
+        }
+        provider = report["providers"][0]
+
+        self.assertIn(provider["scope_token"], tokens)
+        for reading in provider["readings"]:
+            with self.subTest(key=reading["key"]):
+                self.assertIn(reading["state_token"], tokens)
+                if "confidence" in reading:
+                    # The confidence rows carry an example value, so the row for a
+                    # subject is the one that ends in the same subject phrasing.
+                    self.assertTrue(
+                        any(
+                            reading["confidence"]["rendered"].rsplit(" ", 1)[0]
+                            == token.rsplit(" ", 1)[0]
+                            for token in tokens
+                        ),
+                        reading["confidence"],
+                    )
+
+
+class ExplainHandoverTest(ExplainCase):
+    """Handing the deep explanation to the product that owns it."""
+
+    def test_the_product_speaks_for_itself_and_is_attributed(self) -> None:
+        # The host does not paraphrase. A shared surface explaining Fornax's
+        # verification states in its own words would be a second copy of Fornax's
+        # documentation, kept current by nobody.
+        detail = self.detail_script("fornax-explain", "echo 'UNVERIFIED: no daemon has reported'\n")
+        self.register(
+            self.status(segments=(segment("verification", "unknown", "Verification"),)),
+            explain_argv=(str(detail),),
+        )
+
+        report = self.explain()["providers"][0]["detail"]
+
+        self.assertTrue(report["available"])
+        self.assertEqual(report["text"], "UNVERIFIED: no daemon has reported")
+        self.assertEqual(report["command_name"], "fornax-explain.sh")
+        self.assertIn("Fornax's own explanation", self.printed())
+
+    def test_a_product_that_registered_none_is_said_to_have_none(self) -> None:
+        self.register(self.status(segments=(segment("verification", "ok", "Verified"),)))
+
+        report = self.explain()["providers"][0]["detail"]
+
+        self.assertFalse(report["available"])
+        self.assertIsNone(report["text"])
+        self.assertIn("registered no explain command", report["problem"])
+
+    def test_a_failing_explain_command_is_reported_and_not_reproduced(self) -> None:
+        # Its stderr is not a surface the product designed to be read, and on this
+        # workstation a crash message is exactly where a path shows up.
+        detail = self.detail_script(
+            "angry", "echo 'Traceback: /Users/founder/private/keys.json' >&2\nexit 3\n"
+        )
+        self.register(
+            self.status(segments=(segment("verification", "ok", "Verified"),)),
+            explain_argv=(str(detail),),
+        )
+
+        printed = self.printed()
+
+        self.assertIn("exited 3", printed)
+        self.assertNotIn("Traceback", printed)
+        self.assertNotIn("/Users/founder", printed)
+
+    def test_an_explain_command_that_hangs_does_not_hang_the_report(self) -> None:
+        detail = self.detail_script("sleeper", "sleep 30\n", warm=False)
+        self.register(
+            self.status(segments=(segment("verification", "ok", "Verified"),)),
+            explain_argv=(str(detail),),
+        )
+
+        with unittest.mock.patch.object(lifecycle, "EXPLAIN_TIMEOUT_SECONDS", 0.3):
+            report = self.explain()["providers"][0]["detail"]
+
+        self.assertFalse(report["available"])
+        self.assertIn("did not answer", report["problem"])
+
+    def test_an_absent_explain_command_is_a_reported_state_not_a_crash(self) -> None:
+        # The likeliest real case of all: the product was uninstalled and its
+        # registration outlived it.
+        self.register(
+            self.status(segments=(segment("verification", "ok", "Verified"),)),
+            explain_argv=(str(self.root / "gone.sh"),),
+        )
+
+        report = self.explain()["providers"][0]["detail"]
+
+        self.assertFalse(report["available"])
+        self.assertIn("not installed", report["problem"])
+
+    def test_a_product_cannot_appear_to_be_the_host_talking(self) -> None:
+        # A product printing something shaped like one of the host's own labelled
+        # lines must not be readable as one, so the quotation is marked per line
+        # rather than merely indented.
+        detail = self.detail_script(
+            "mimic",
+            "printf 'state: ok -- everything is fine\\n\\n      availability: available\\n'\n",
+        )
+        self.register(
+            self.status(segments=(segment("verification", "unknown", "Verification"),)),
+            explain_argv=(str(detail),),
+        )
+
+        printed = self.printed()
+
+        # The host prints an `availability:` line of its own, so a line matching
+        # that shape is not on its own evidence of anything. What is: both of the
+        # mimic's non-blank lines carry the marker, including the one it indented
+        # to the host's own depth.
+        quoted = [line for line in printed.splitlines() if line.startswith(lifecycle._QUOTE_PREFIX)]
+        self.assertEqual(
+            quoted,
+            [
+                f"{lifecycle._QUOTE_PREFIX}state: ok -- everything is fine",
+                f"{lifecycle._QUOTE_PREFIX}      availability: available",
+            ],
+            printed,
+        )
+        for line in printed.splitlines():
+            if "everything is fine" in line:
+                with self.subTest(line=line):
+                    self.assertTrue(line.startswith(lifecycle._QUOTE_PREFIX), line)
+
+    def test_an_explain_command_is_never_run_while_rendering_the_line(self) -> None:
+        # The recorded command has a budget measured in seconds and the render
+        # path has one measured in milliseconds. The compositor's read model has
+        # no field for it at all, which is what keeps the two apart; this proves
+        # the registry entry that carries it cannot reach the render path.
+        marker = self.root / "ran"
+        detail = self.detail_script(
+            "marker", f"touch {shlex.quote(str(marker))}\necho 'the deep explanation'\n"
+        )
+        marker.unlink(missing_ok=True)
+        self.register(
+            self.status(segments=(segment("verification", "ok", "Verified"),)),
+            explain_argv=(str(detail),),
+        )
+
+        stream = io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            compositor.main(stdin=io.BytesIO(b"{}"), stdout=stream)
+
+        self.assertIn("Verified", stream.getvalue())
+        self.assertFalse(marker.exists())
+
+        # And the same registry entry does reach `explain`, so the assertion above
+        # is about the render path rather than about a command that never worked.
+        self.assertTrue(self.explain()["providers"][0]["detail"]["available"])
+        self.assertTrue(marker.exists())
+
+    def test_a_malformed_explain_command_costs_only_the_handover(self) -> None:
+        # Everything that decides what runs on the statusline has already been
+        # validated by the compositor. Failing the whole command over a bad value
+        # in this one optional field would deny the reader the key as well.
+        self.register(self.status(segments=(segment("verification", "ok", "Verified"),)))
+        registry = lifecycle.read_registry(self.home)
+        data = registry.data
+        data["providers"][0]["explain_command"] = ["", 7]
+        registry.path.write_bytes(lifecycle.serialize(data, indent=2))
+
+        report = self.explain()
+
+        self.assertIn("registered no explain command", report["providers"][0]["detail"]["problem"])
+        self.assertTrue(report["legend"])
+        self.assertTrue(report["providers"][0]["readings"])
+
+
+class ExplainReadOnlyTest(ExplainCase):
+    """The command a reader runs when the line confuses them, changing nothing."""
+
+    def test_it_mutates_nothing_on_any_path(self) -> None:
+        for stage in ("nothing installed", "one provider", "drifted", "unusable registry"):
+            with self.subTest(stage=stage):
+                if stage == "one provider":
+                    self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+                if stage == "drifted":
+                    data = self._read()
+                    data[lifecycle.STATUS_LINE_KEY]["command"] = "/somewhere/else.sh"
+                    self.write(data)
+                if stage == "unusable registry":
+                    lifecycle.read_registry(self.home).path.write_bytes(b"{ truncated")
+                before = self.settings.read_bytes()
+                registry = lifecycle.read_registry(self.home)
+                registry_before = registry.path.read_bytes() if registry.present else None
+
+                self.explain()
+
+                self.assertEqual(self.settings.read_bytes(), before)
+                after = lifecycle.read_registry(self.home)
+                self.assertEqual(after.path.read_bytes() if after.present else None, registry_before)
+
+    def test_running_it_before_anything_is_installed_creates_no_state(self) -> None:
+        report = self.explain()
+
+        # Same reason `doctor` may not: a surface you run to find out whether the
+        # product is installed must not install part of it in the process.
+        self.assertFalse(self.home.exists())
+        self.assertTrue(report["legend"])
+        notes = " ".join(report["notes"])
+        self.assertIn("not Horonom-owned", notes)
+        self.assertIn("no providers are registered", notes)
+
+    def test_the_legend_alone_asks_no_provider_anything(self) -> None:
+        # `--legend` is for a reader who wants the vocabulary, not a reading. It
+        # should cost nothing, and a provider is a subprocess.
+        marker = self.root / "probed"
+        script = self.root / "provider.sh"
+        script.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(marker))}\nexit 1\n")
+        script.chmod(0o755)
+        self.enable("fornax", argv=(str(script),), timeout_ms=2000)
+
+        report = self.explain(legend_only=True)
+
+        self.assertFalse(marker.exists())
+        self.assertTrue(report["legend"])
+        self.assertEqual(report["providers"], [])
+
+    def test_an_unusable_registry_still_yields_the_key(self) -> None:
+        # The key is built from the host's own rendering tables, so it is correct
+        # before anything is measured -- and a reader whose registry is broken is
+        # exactly a reader looking at a line they cannot read.
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+        lifecycle.read_registry(self.home).path.write_bytes(b"{ truncated")
+
+        report = self.explain()
+
+        self.assertTrue(report["legend"])
+        self.assertEqual(report["providers"], [])
+        self.assertIn("the key itself is still correct", " ".join(report["notes"]))
+
+    def test_an_unreadable_settings_file_does_not_stop_the_decode(self) -> None:
+        # What is on the line cannot be confirmed without the settings file, but
+        # what the providers say can still be decoded, and saying so is more use
+        # than refusing to answer at all.
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+
+        with self.deny_reads(self.settings):
+            report = self.explain()
+
+        self.assertIn("could not be read", " ".join(report["notes"]))
+        self.assertEqual([p["provider"] for p in report["providers"]], ["fornax"])
+        self.assertTrue(report["providers"][0]["readings"])
+
+    def test_it_says_when_nothing_of_ours_is_on_the_line(self) -> None:
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+        data = self._read()
+        data[lifecycle.STATUS_LINE_KEY]["command"] = "/Users/founder/.claude/i-changed-my-mind.sh"
+        self.write(data)
+
+        notes = " ".join(self.explain()["notes"])
+
+        self.assertIn("not Horonom-owned", notes)
+        self.assertIn("statusline doctor", notes)
+
+    def test_it_prints_no_value_out_of_the_settings_file(self) -> None:
+        # The file it reads holds an API-key-shaped env var, an internal URL and
+        # the user's home path. None of them is this command's business, and the
+        # reason it can promise that is that it reads the file to classify the
+        # slot and never to print from it.
+        data = self._read()
+        data["env"]["ANTHROPIC_AUTH_TOKEN"] = "sk-ant-notarealkey-0123456789"
+        data["env"]["FOUNDER_BIN"] = "/Users/founder/private/bin"
+        self.write(data)
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+
+        printed = self.printed()
+
+        for secret in (
+            "sk-ant-notarealkey-0123456789",
+            "ANTHROPIC_AUTH_TOKEN",
+            "api.example.invalid",
+            "/Users/founder/private/bin",
+            "managed-settings.json",
+        ):
+            with self.subTest(secret=secret):
+                self.assertNotIn(secret, printed)
+
+        # The user's own statusline path is not in the settings file any more --
+        # it moved into the registry when the slot was taken over -- so assert
+        # against the place it actually lives, or the line above would be proving
+        # the absence of something that was never there to leak.
+        upstream = lifecycle.read_registry(self.home).data["upstream"]["command"]
+        self.assertIn("/Users/founder", upstream)
+        self.assertNotIn(upstream, printed)
+
+
+class ExplainPresentationTest(ExplainCase):
+    """The key is drawn in the mode the line is drawn in, and says which."""
+
+    def test_the_key_is_drawn_in_the_mode_actually_in_force(self) -> None:
+        # A key printed in glyphs to a reader whose terminal is why they turned
+        # glyphs off is worse than no key: every row is a question rather than an
+        # answer.
+        self.register(self.status(segments=(segment("v", "unknown", "Verification"),)))
+        lifecycle.apply(lifecycle.plan_presentation(lifecycle.read_registry(self.home), glyphs=False))
+
+        report = self.explain()
+
+        self.assertEqual(report["presentation"]["source"], "your saved preference")
+        self.assertFalse(report["presentation"]["mode"].endswith("glyph"))
+        printed = self.printed()
+        self.assertTrue(printed.isascii(), printed)
+
+    def test_the_default_is_named_as_the_default(self) -> None:
+        # So a reader can tell "this is what you asked for" from "this is what you
+        # get when you have asked for nothing", which is the difference between a
+        # preference that did not apply and one that was never set.
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+
+        self.assertEqual(self.explain()["presentation"]["source"], "the default")
+
+    def test_a_preference_this_version_cannot_read_says_so(self) -> None:
+        # A mode written by a newer version, or by hand. The renderer resolves it
+        # to something drawable either way, and reporting that silently would
+        # leave a reader comparing a line against a key for a mode they asked for
+        # and are not getting.
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+        registry = lifecycle.read_registry(self.home)
+        data = registry.data
+        data[lifecycle.PRESENTATION_KEY] = {"mode": "holographic"}
+        registry.path.write_bytes(lifecycle.serialize(data, indent=2))
+
+        presentation = self.explain()["presentation"]
+
+        self.assertIn("not a mode this version knows", presentation["source"])
+        self.assertEqual(presentation["mode"], render.PresentationMode.BALANCED.value)
+
+
+class ExplainCommandLineTest(ExplainCase):
+    """Narrowing the decode, and reaching it through the CLI."""
+
+    def test_naming_a_provider_decodes_only_that_one(self) -> None:
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+        self.register(self.status("libra", segments=(segment("p", "attention", "Preflight"),)))
+
+        report = self.explain(provider="libra")
+
+        self.assertEqual([p["provider"] for p in report["providers"]], ["libra"])
+        self.assertEqual(report["notes"], [])
+
+    def test_an_unregistered_name_is_answered_rather_than_ignored(self) -> None:
+        # Silently printing the key and no readings would read as "that provider
+        # has nothing to say", which is a different and untrue claim.
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+
+        report = self.explain(provider="eltanin")
+
+        self.assertEqual(report["providers"], [])
+        self.assertIn("no provider named 'eltanin'", " ".join(report["notes"]))
+
+    def test_the_subcommand_writes_nothing_and_succeeds(self) -> None:
+        self.register(self.status(segments=(segment("v", "unknown", "Verification"),)))
+        before = self.settings.read_bytes()
+        registry_before = lifecycle.read_registry(self.home).path.read_bytes()
+        stream = io.StringIO()
+
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            code = lifecycle.main(["explain", "--settings", str(self.settings)], stdout=stream)
+
+        # Zero even though the report carries notes. Every state this command can
+        # report is one it was asked to describe, including "nothing of ours is on
+        # your line" -- that is an answer, not a failure to give one.
+        self.assertEqual(code, lifecycle.EXIT_OK)
+        self.assertIn("how to read the line", stream.getvalue())
+        self.assertEqual(self.settings.read_bytes(), before)
+        self.assertEqual(lifecycle.read_registry(self.home).path.read_bytes(), registry_before)
+
+    def test_a_note_is_not_a_refusal(self) -> None:
+        # `doctor` exits non-zero on drift, because it is answering "is this
+        # installed correctly" and the answer is no. This command answers "what is
+        # the line saying", and "nothing of ours, someone else owns the slot" is a
+        # complete answer to that.
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+        data = self._read()
+        data[lifecycle.STATUS_LINE_KEY]["command"] = "/somewhere/else.sh"
+        self.write(data)
+        stream = io.StringIO()
+
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            code = lifecycle.main(["explain", "--settings", str(self.settings)], stdout=stream)
+
+        self.assertEqual(code, lifecycle.EXIT_OK)
+        self.assertIn("note: ", stream.getvalue())
+        self.assertNotEqual(
+            lifecycle.main(["doctor", "--settings", str(self.settings)], stdout=io.StringIO()),
+            lifecycle.EXIT_OK,
+        )
+
+    def test_the_json_form_carries_the_whole_report(self) -> None:
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+        stream = io.StringIO()
+
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            lifecycle.main(
+                ["explain", "--json", "--settings", str(self.settings)], stdout=stream
+            )
+
+        report = json.loads(stream.getvalue())
+        self.assertEqual(
+            sorted(report), ["legend", "notes", "presentation", "providers", "registry_path"]
+        )
+        self.assertEqual(report["providers"][0]["provider"], "fornax")
+
+    def test_the_legend_flag_reaches_the_report(self) -> None:
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+        stream = io.StringIO()
+
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            lifecycle.main(
+                ["explain", "--legend", "--json", "--settings", str(self.settings)], stdout=stream
+            )
+
+        self.assertEqual(json.loads(stream.getvalue())["providers"], [])
+
+    def test_a_provider_name_is_positional_here(self) -> None:
+        # Unlike the mutating subcommands, where naming the provider explicitly is
+        # worth the typing. Here it only narrows a report, and `explain fornax` is
+        # what a reader reaches for.
+        options = lifecycle.build_parser().parse_args(["explain", "fornax"])
+
+        self.assertEqual(options.provider, "fornax")
+        self.assertFalse(options.legend_only)
+
+
+class MigrationTest(LifecycleCase):
+    """The three configurations real users are arriving from.
+
+    Each of these existed before any of this did: Fornax's project-local DogFood
+    wrapper, the founder's hand-written composed wrapper, and a manually edited
+    `settings.json`. The tests are here rather than in the docs because
+    "migration is reversible" is a claim about code, and a document asserting it
+    is a document that can be wrong for a release.
+    """
+
+    def wrapper(self, name: str, body: str) -> pathlib.Path:
+        path = self.root / name
+        path.write_text(f"#!/bin/sh\n{body}")
+        path.chmod(0o755)
+        subprocess.run([str(path)], capture_output=True, timeout=30, check=False)
+        return path
+
+    def provider(self, name: str, label: str) -> pathlib.Path:
+        status = contract.ProviderStatus(
+            provider=name,
+            provider_version="1.0.0",
+            scope=contract.Scope.HOST,
+            availability=contract.Availability.AVAILABLE,
+            segments=(segment("v", "ok", label),),
+        )
+        path = self.root / f"{name}-provider.sh"
+        path.write_text(f"#!/bin/sh\nprintf '%s' {shlex.quote(json.dumps(status.to_wire()))}\n")
+        path.chmod(0o755)
+        subprocess.run([str(path)], capture_output=True, timeout=30, check=False)
+        return path
+
+    def composed(self) -> str:
+        stream = io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            compositor.main(stdin=io.BytesIO(b"{}"), stdout=stream)
+        return stream.getvalue()
+
+    def test_a_manual_configuration_is_migrated_and_handed_back_intact(self) -> None:
+        # The plainest origin, and the one whose reversibility the docs promise
+        # without qualification.
+        script = self.wrapper("hand-rolled.sh", "echo 'my line'\n")
+        data = self._read()
+        data[lifecycle.STATUS_LINE_KEY] = {
+            "type": "command",
+            "command": str(script),
+            "padding": 1,
+            "refreshInterval": 3,
+            "futureUnknownKey": "keep-me",
+        }
+        self.write(data)
+        before, script_before = self._read(), script.read_bytes()
+
+        self.enable("fornax")
+        self.enable("libra")
+        self._uninstall()
+
+        self.assertEqual(self._read(), before)
+        # The one thing no other test here asserts: the file the command points at
+        # was never opened for writing. "Its script will not be edited" is a claim
+        # about a file outside the settings document entirely.
+        self.assertEqual(script.read_bytes(), script_before)
+
+    def test_migration_never_edits_the_composed_wrapper_it_replaces(self) -> None:
+        # The founder's own origin: one hand-written script that shells out to two
+        # products itself. Registering those products does not stop the wrapper
+        # from calling them, so the line legitimately says each thing twice --
+        # which is a thing for the reader to fix in their own script, and exactly
+        # the kind of edit this code may not make for them.
+        wrapper = self.wrapper("composed.sh", "echo 'fornax: VERIFIED | libra: ok'\n")
+        data = self._read()
+        data[lifecycle.STATUS_LINE_KEY]["command"] = str(wrapper)
+        self.write(data)
+        before = wrapper.read_bytes()
+
+        self.enable("fornax", argv=(str(self.provider("fornax", "Verified")),), timeout_ms=2000)
+
+        line = self.composed()
+        self.assertEqual(wrapper.read_bytes(), before)
+        self.assertIn("fornax: VERIFIED", line)
+        self.assertIn("Verified", line)
+        # Named for what it is, so that a later reading of this test does not take
+        # the duplicate for an accident the code should have prevented.
+        self.assertEqual(line.lower().count("fornax"), 2, line)
+
+    def test_a_project_local_wrapper_is_left_for_its_owner_to_retire(self) -> None:
+        # Claude Code's project-local settings replace the global `statusLine`
+        # rather than merging with it, so migrating the global file does not
+        # migrate a project. Deleting the project file to make the global one take
+        # effect would be a destructive mutation of state we do not own.
+        project = self.root / "project" / ".claude" / "settings.local.json"
+        project.parent.mkdir(parents=True)
+        local = {
+            "statusLine": {"type": "command", "command": "scripts/fornax-statusline.sh"},
+            "permissions": {"allow": ["Bash(fornax status)"]},
+        }
+        project.write_bytes(lifecycle.serialize(local, indent=2))
+        before = project.read_bytes()
+
+        self.enable("fornax")
+        self._uninstall()
+
+        self.assertEqual(project.read_bytes(), before)
+
+    def test_a_project_local_wrapper_can_itself_be_migrated_in_place(self) -> None:
+        # And the supported way to retire it: point the lifecycle at that file.
+        # Nothing here is global -- one settings path per invocation -- so the
+        # project keeps its own upstream and its own unrelated keys.
+        project = self.root / "project" / ".claude" / "settings.local.json"
+        project.parent.mkdir(parents=True)
+        wrapper = self.wrapper("fornax-statusline.sh", "echo 'fornax dogfood'\n")
+        project.write_bytes(
+            lifecycle.serialize(
+                {
+                    "statusLine": {"type": "command", "command": str(wrapper)},
+                    "permissions": {"allow": ["Bash(fornax status)"]},
+                },
+                indent=2,
+            )
+        )
+        global_before = self.settings.read_bytes()
+
+        document = lifecycle.read_settings(project)
+        registry = lifecycle.read_registry(self.home)
+        lifecycle.apply(
+            lifecycle.plan_enable(
+                document,
+                registry,
+                lifecycle.ProviderRegistration(
+                    provider="fornax", argv=("/bin/echo", "fornax"), scope="host"
+                ),
+            )
+        )
+
+        self.assertEqual(
+            lifecycle.read_registry(self.home).data["upstream"]["command"], str(wrapper)
+        )
+        self.assertEqual(self.settings.read_bytes(), global_before)
+        self.assertEqual(
+            json.loads(project.read_text())["permissions"]["allow"], ["Bash(fornax status)"]
+        )
+
+    def test_a_presentation_preference_set_before_a_migration_survives_it(self) -> None:
+        # "Migration preserves presentation preferences." A reader who turned
+        # glyphs off because their font renders them as boxes has not changed their
+        # mind by enabling a second product.
+        self.enable("fornax")
+        lifecycle.apply(
+            lifecycle.plan_presentation(lifecycle.read_registry(self.home), glyphs=False)
+        )
+
+        self.enable("libra")
+        self.enable("fornax", timeout_ms=400)
+        self.remove("libra")
+
+        mode = compositor.load_registry(lifecycle.read_registry(self.home).path).mode
+        self.assertFalse(mode.uses_glyphs)
 
 
 class CommandLineTest(LifecycleCase):

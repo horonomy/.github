@@ -108,7 +108,11 @@ see [`engineering/security.md`](./engineering/security.md).
   audit recording which products and host tools can carry a statusline
   segment at all, and the exact reason for every one that cannot
   ([`product/statusline-capability-audit.md`](./product/statusline-capability-audit.md);
-  HORO-1570).
+  HORO-1570), and how a person turns that host on, migrates to it from a
+  configuration that already works, decodes what the line is telling them, and
+  turns it off again without hand-editing JSON
+  ([`product/statusline-onboarding.md`](./product/statusline-onboarding.md);
+  HORO-1571).
 - [`releases/`](./releases/) — release and public-surface invariants, plus
   the [Public Release Surface Contract](./releases/public-release-contract.md)
   (7-state model, per-surface derivation rules; implementation at
