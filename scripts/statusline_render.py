@@ -1037,21 +1037,21 @@ def legend(mode: PresentationMode) -> tuple[LegendSection, ...]:
     """
     return (
         LegendSection(
-            "state — how to read a reading",
+            "state -- how to read a reading",
             tuple(
                 LegendEntry(state_marker(state, mode), STATE_TEXT[state], STATE_MEANINGS[state])
                 for state in STATE_TEXT
             ),
         ),
         LegendSection(
-            "scope — what a reading is about",
+            "scope -- what a reading is about",
             tuple(
                 LegendEntry(scope_marker(scope, mode), SCOPE_TEXT[scope], SCOPE_MEANINGS[scope])
                 for scope in SCOPE_TEXT
             ),
         ),
         LegendSection(
-            "confidence — what a high, medium or low is a confidence in",
+            "confidence -- what a high, medium or low is a confidence in",
             tuple(
                 LegendEntry(
                     format_confidence(_LEGEND_CONFIDENCE, subject, mode),
