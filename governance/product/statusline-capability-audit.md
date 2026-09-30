@@ -216,3 +216,72 @@ That is precisely the `UNAVAILABLE != ZERO` antipattern criterion 6 exists to ke
 out of the statusline. It is recorded here because it is the most concrete
 demonstration available of what criterion 6 prevents, and because a reader
 reasonably asks whether the criterion is theoretical. It is not.
+
+## Host capability
+
+A host is `SUPPORTED` only if it can be configured to run an operator-supplied
+command and render its output. That is a narrow capability, and deliberately so:
+the compositor's whole design depends on owning one configured command slot.
+
+`UNSUPPORTED` and `UNKNOWN` are kept apart here for the reason the vocabulary
+section gives. A host with no such feature is a settled fact; a host nobody could
+examine is not.
+
+| Host | Verdict | Basis |
+|---|---|---|
+| Claude Code | `SUPPORTED` | Native single-slot `statusLine.command`; proven by the shipped host and three providers |
+| Codex | `UNSUPPORTED` for this capability | Has a status line, but its content is a closed set of built-in identifiers |
+| OpenCode | `UNSUPPORTED` for this capability | No statusline or footer key in its configuration schema |
+
+### Claude Code — `SUPPORTED`
+
+One `statusLine.command` per scope, receiving a JSON payload on stdin and
+rendering stdout. This is the capability the compositor was designed against, and
+it is proven end to end rather than from documentation: the merged host composes
+the operator's own command with three providers.
+
+The single-slot property is the reason the whole campaign is shaped as a
+compositor rather than as three independent integrations. It is a constraint, not
+a limitation to route around.
+
+### Codex — `UNSUPPORTED` for this exact capability
+
+This verdict is about the *installed* version, because a capability claim read off
+a changelog is not evidence about the tool the operator is running.
+
+Codex does have a status line, and it is configured on this workstation. But the
+feature composes a closed set of built-in identifiers — model, reasoning, task
+progress, current directory, project name, git branch, used tokens, thread title,
+hostname, pull-request number, branch changes, permissions, approval mode, context
+window size, raw output, workspace headline. There is no `command` or `exec`
+member of that set, and none appears anywhere in the surrounding region of the
+binary. The sibling terminal-title feature rejects unknown identifiers the same
+way, which is consistent with a closed vocabulary rather than an undocumented
+escape hatch.
+
+What was explicitly *not* accepted as support: emitting ANSI sequences or echoing
+from a background process to paint text into Codex's UI. That would produce
+something that looks like a statusline without being one — no defined refresh,
+no payload, and no ownership model — so the campaign's non-destructive and
+truthfulness guarantees would not hold. Per the campaign's own rule, a host is
+recorded as unsupported unless the currently installed version proves a real
+supported equivalent.
+
+Probing was done with invocation-scoped overrides only; the operator's Codex
+configuration was verified unchanged afterwards.
+
+### OpenCode — `UNSUPPORTED` for this capability, with one honestly unresolved question
+
+Assessed from the canonical repository's current development branch, because
+OpenCode is not installed on this workstation. That is a real limitation of the
+evidence and is stated rather than smoothed over.
+
+Its configuration schema has no statusline, status or footer key of any kind. The
+footer is a built-in TUI component, so there is no slot to own and the
+config-driven-command capability is absent.
+
+OpenCode does have a plugin mechanism. Whether a plugin can contribute footer
+content is **not established** by this audit — it was not determined, and
+guessing either way would be worse than recording the gap. If that question is
+answered affirmatively, OpenCode is reassessable, and the answer would be a
+different capability from the one this table measures.
