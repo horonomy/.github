@@ -1397,6 +1397,67 @@ def _appended(upstream: str, block: str) -> str:
     return f"{upstream}{separator}{block}"
 
 
+def _detail_rows(
+    upstream: str,
+    ordered: tuple,
+    mode: PresentationMode,
+    width_budget: int | None,
+) -> str | None:
+    """One provider per row, at the widest allowed style that fits.
+
+    The mode ladder is walked here as well as below because a narrower style is
+    the cheaper concession: dropping the icons costs a reader some scanning speed,
+    while wrapping costs them a row, and only when neither is enough does anything
+    get dropped. `None` means no style could lay these providers out in rows.
+    """
+    for candidate in _mode_candidates(mode):
+        block = _detail_block(ordered, candidate, width_budget)
+        if block is not None:
+            return _appended(upstream, block)
+    return None
+
+
+def _shared_line(
+    upstream: str,
+    ordered: tuple,
+    mode: PresentationMode,
+    width_budget: int | None,
+    depth: InformationDepth,
+) -> str:
+    """Every provider on one shared line, shedding readings until it fits.
+
+    What `CLEAR` uses, and what `DETAIL` falls back to when no row-per-provider
+    layout fits at all. Degradation, in order, and only when a budget is set: take
+    the first allowed style that measures within budget; then shed the least
+    important provider groups, saying how many readings went; then fall back to the
+    single worst state with its label truncated grapheme-safely. If even that
+    cannot be said honestly, the upstream text is returned alone.
+    """
+    candidates = [
+        (candidate, _render_groups(ordered, candidate, depth=depth))
+        for candidate in _mode_candidates(mode)
+    ]
+    chosen_mode, block = candidates[0]
+    if width_budget is not None:
+        for candidate, text in candidates:
+            if display_width(text) <= width_budget:
+                chosen_mode, block = candidate, text
+                break
+        else:
+            chosen_mode, _ = min(candidates, key=lambda pair: display_width(pair[1]))
+            dropped = _fit_by_dropping(ordered, chosen_mode, width_budget, depth)
+            block = (
+                dropped if dropped is not None
+                else _fit_minimal(ordered, chosen_mode, width_budget)
+            )
+
+    if not block:
+        return upstream
+    if not upstream:
+        return block
+    return f"{upstream}{UPSTREAM_SEPARATORS[chosen_mode]}{block}"
+
+
 def compose(
     upstream_text: str | None,
     statuses: object,
@@ -1439,12 +1500,9 @@ def compose(
     budget — does `DETAIL` fall through to the rendering below, which is the one
     that sheds readings and the only way `DETAIL` ever hides anything.
 
-    Degradation, in order, and only when a budget is set: try each allowed mode
-    and take the first that measures within budget; then shed the least
-    important provider groups, saying how many segments went; then fall back to
-    the single worst state with its label truncated grapheme-safely. If even
-    that cannot be said honestly, the upstream text is returned alone — the
-    user's own line is the last thing to go, never the first.
+    The two layouts are `_detail_rows` and `_shared_line`, which is where the
+    degradation each one performs is described. Whichever answers, the user's own
+    line is the last thing to go and never the first.
     """
     ordered = project_to_depth(statuses, depth)
     upstream = upstream_text or ""
@@ -1452,34 +1510,11 @@ def compose(
         return upstream
 
     if depth.shows_supporting_detail:
-        for candidate in _mode_candidates(mode):
-            block = _detail_block(ordered, candidate, width_budget)
-            if block is not None:
-                return _appended(upstream, block)
+        rows = _detail_rows(upstream, ordered, mode, width_budget)
+        if rows is not None:
+            return rows
 
-    candidates = [
-        (candidate, _render_groups(ordered, candidate, depth=depth))
-        for candidate in _mode_candidates(mode)
-    ]
-    chosen_mode, block = candidates[0]
-    if width_budget is not None:
-        for candidate, text in candidates:
-            if display_width(text) <= width_budget:
-                chosen_mode, block = candidate, text
-                break
-        else:
-            chosen_mode, _ = min(candidates, key=lambda pair: display_width(pair[1]))
-            dropped = _fit_by_dropping(ordered, chosen_mode, width_budget, depth)
-            block = (
-                dropped if dropped is not None
-                else _fit_minimal(ordered, chosen_mode, width_budget)
-            )
-
-    if not block:
-        return upstream
-    if not upstream:
-        return block
-    return f"{upstream}{UPSTREAM_SEPARATORS[chosen_mode]}{block}"
+    return _shared_line(upstream, ordered, mode, width_budget, depth)
 
 
 # ------------------------------------------------------------ the explain surface
