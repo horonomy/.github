@@ -1283,13 +1283,16 @@ class Untouched:
     modes: dict[str, int]
 
 
-class DepthSwitchTest(RenderingCase, PresentationCase):
-    """Moving between depths, checked for everything it must not take with it.
+class DepthHost:
+    """A real installation of matrix products, rendered the way the host does.
 
-    Composed from the two existing lifecycle fixtures rather than given a new one:
-    `RenderingCase` runs the configured statusline the way Claude Code does, and
-    `PresentationCase` drives the real planner. A third harness here would let
-    this gate pass against a switching path and a rendering path no user has.
+    Shared by the two classes below rather than owned by either. Both need a host
+    whose products are executables emitting known rows and whose renders can be
+    read as text; they differ only in what they then do to it, and a second copy
+    of this would let one of them pass against a fixture the other has outgrown.
+
+    Mixed in ahead of the lifecycle fixtures, which supply `script`, `enable`,
+    `render` and the planner.
     """
 
     @property
@@ -1324,6 +1327,16 @@ class DepthSwitchTest(RenderingCase, PresentationCase):
         part of the line's shape -- and the shape is what the depth owns.
         """
         return self.render().rstrip("\n")
+
+
+class DepthSwitchTest(DepthHost, RenderingCase, PresentationCase):
+    """Moving between depths, checked for everything it must not take with it.
+
+    Composed from the two existing lifecycle fixtures rather than given a new one:
+    `RenderingCase` runs the configured statusline the way Claude Code does, and
+    `PresentationCase` drives the real planner. A third harness here would let
+    this gate pass against a switching path and a rendering path no user has.
+    """
 
     def install(self, case: SwitchCase) -> None:
         for product in case.products:
