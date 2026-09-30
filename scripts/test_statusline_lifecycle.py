@@ -1363,14 +1363,18 @@ class AtomicWriteTest(LifecycleCase):
             lifecycle._verify(tampered)
 
 
-class HostUsabilityTest(LifecycleCase):
-    """The statusline must actually render after every lifecycle step.
+class RenderingCase(LifecycleCase):
+    """A fixture that runs the configured statusline the way Claude Code does.
 
-    Every other test in this file reads the configuration back. None of them
-    prove the host tool can still use it, and the contract is explicit that "a
-    preservation test that 'reads back clean' but breaks the tool doesn't count".
-    So these run the configured command the way Claude Code does -- through a
-    shell, with a Claude-shaped JSON payload on stdin -- and read the line.
+    Every other fixture here reads the configuration back. None of them prove the
+    host tool can still use it, and the contract is explicit that "a preservation
+    test that 'reads back clean' but breaks the tool doesn't count". So this one
+    runs the configured command through a shell, with a Claude-shaped JSON payload
+    on stdin, and reads the line.
+
+    Shared with `test_statusline_release_gate` rather than copied into it: a
+    second render harness that drifted from this one would let the release gate
+    pass against a rendering path no user has.
     """
 
     PAYLOAD = json.dumps(
@@ -1441,6 +1445,10 @@ class HostUsabilityTest(LifecycleCase):
         data = rich_settings()
         data[lifecycle.STATUS_LINE_KEY]["command"] = str(self.upstream)
         self.write(data)
+
+
+class HostUsabilityTest(RenderingCase):
+    """The statusline must actually render after every lifecycle step."""
 
     def test_the_line_renders_at_every_step_of_the_full_lifecycle(self) -> None:
         self.assertEqual(self.render(), "MY OWN LINE")
