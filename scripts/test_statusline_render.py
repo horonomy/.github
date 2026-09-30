@@ -1922,6 +1922,372 @@ class TestComposeDegradation(unittest.TestCase):
         self.assertIn("Fornax", block)
 
 
+class DetailLayoutCase(unittest.TestCase):
+    """Shared reading of a vertical block: the user's rows first, then ours.
+
+    The fixture is the three real products, whose names are deliberately of three
+    different lengths — a layout that aligns a product column is a layout whose
+    tests are vacuous if every name is the same width.
+    """
+
+    ALL = (fornax_status(), circinus_status(), libra_status())
+    NAMES = ("Fornax", "Circinus", "Libra Governor")
+
+    def compose(self, statuses=None, *, upstream="", mode=render.PresentationMode.BALANCED,
+                budget=None) -> str:
+        return render.compose(
+            upstream,
+            self.ALL if statuses is None else statuses,
+            mode=mode,
+            width_budget=budget,
+            depth=DETAIL,
+        )
+
+    def block_rows(self, statuses=None, *, upstream="", **kwargs) -> list[str]:
+        """The rows the Horonom block added, with the user's own output removed."""
+        out = self.compose(statuses, upstream=upstream, **kwargs)
+        self.assertTrue(out.startswith(upstream))
+        tail = out[len(upstream):]
+        if upstream and tail.startswith(render.ROW_SEPARATOR):
+            tail = tail[len(render.ROW_SEPARATOR):]
+        return tail.split(render.ROW_SEPARATOR) if tail else []
+
+    def product_row(self, rows: list[str], name: str) -> str:
+        """The single row this product opens, asserted to be single."""
+        owned = [row for row in rows if row.startswith(name)]
+        self.assertEqual(len(owned), 1, f"{name} does not open exactly one row: {rows}")
+        return owned[0]
+
+
+class TestDetailLayout(DetailLayoutCase):
+    """One product, one row (HORO-1628).
+
+    The requirement came out of Founder DogFooding: at the diagnostic depth the
+    products with the most to say are the ones a reader most needs, and on one
+    shared line they are exactly the ones that push it off the screen. Vertical
+    space is the resource this depth has, so this is what it buys.
+    """
+
+    def test_every_product_gets_a_row_of_its_own(self):
+        rows = self.block_rows()
+        self.assertEqual(len(rows), len(self.ALL))
+        for name in self.NAMES:
+            self.assertTrue(self.product_row(rows, name))
+
+    def test_the_rows_are_separated_by_a_real_newline(self):
+        # Spelled literally rather than through `ROW_SEPARATOR`, because that
+        # constant is what the rest of this class reads the block with: a
+        # decorative divider standing in for the newline would satisfy every other
+        # assertion here and still put the whole block back on one row, since the
+        # compositor is what turns a newline into a row.
+        out = self.compose(upstream=UPSTREAM)
+        self.assertEqual(out.count("\n"), len(self.ALL))
+        self.assertEqual(out.split("\n")[0], UPSTREAM)
+
+    def test_a_row_names_one_product_and_only_one(self):
+        # The failure this prevents is the one the horizontal layout had: a reader
+        # scanning down the block must not have to work out where one product's
+        # reading stopped and the next one's began.
+        for row in self.block_rows():
+            named = [name for name in self.NAMES if name in row]
+            self.assertEqual(len(named), 1, row)
+
+    def test_the_rows_are_in_the_contract_order_whatever_order_they_arrive_in(self):
+        forward = self.compose(self.ALL)
+        backward = self.compose(tuple(reversed(self.ALL)))
+        self.assertEqual(forward, backward)
+        rows = forward.split(render.ROW_SEPARATOR)
+        self.assertEqual([row.split()[0] for row in rows], ["Fornax", "Circinus", "Libra"])
+
+    def test_a_row_carries_its_own_scope_state_and_supporting_context(self):
+        # "Each line must independently identify product, primary state and any
+        # bounded detail shown" -- asserted on the row, not on the block.
+        row = self.product_row(self.block_rows(), "Fornax")
+        self.assertIn(render.scope_marker("project", render.PresentationMode.BALANCED), row)
+        self.assertIn(render.state_marker("ok", render.PresentationMode.BALANCED), row)
+        self.assertIn("Verified", row)
+        self.assertIn("3 of 3 claims", row)
+        self.assertIn("2m ago", row)
+
+    def test_a_product_with_three_readings_keeps_them_on_its_own_row(self):
+        row = self.product_row(self.block_rows(), "Libra Governor")
+        for reading in ("Awaiting your approval", "Preflight", "Remaining work"):
+            self.assertIn(reading, row)
+
+    def test_nothing_is_hidden_when_nothing_had_to_be(self):
+        # The vertical layout sheds nothing, so it must never claim it did. A
+        # `[+2 more]` here would be the ladder's marker leaking into a layout that
+        # spends rows instead of dropping readings.
+        self.assertNotIn("[+", self.compose())
+
+    def test_one_product_is_one_row(self):
+        self.assertEqual(len(self.block_rows((fornax_status(),))), 1)
+
+    def test_disabling_a_product_removes_exactly_that_row(self):
+        remaining = self.block_rows((fornax_status(), libra_status()))
+        self.assertEqual(len(remaining), len(self.ALL) - 1)
+        self.assertNotIn("Circinus", render.ROW_SEPARATOR.join(remaining))
+        self.assertNotIn("Shadow mode", render.ROW_SEPARATOR.join(remaining))
+        for name in ("Fornax", "Libra Governor"):
+            self.assertTrue(self.product_row(remaining, name))
+
+    def test_re_enabling_a_product_restores_it_to_the_same_position(self):
+        before = self.compose()
+        without = self.compose((fornax_status(), libra_status()))
+        # Re-registered last, which is the realistic case: a provider re-enabled
+        # after the others is still ordered by the contract, not by arrival.
+        after = self.compose((fornax_status(), libra_status(), circinus_status()))
+        self.assertNotEqual(without, before)
+        self.assertEqual(after, before)
+        self.assertEqual(after.split(render.ROW_SEPARATOR)[1].split()[0], "Circinus")
+
+    def test_a_product_that_reported_nothing_still_owns_a_row(self):
+        # Silence reads as all-clear, which is why the host says it out loud --
+        # and it says it on that product's own row rather than anywhere else.
+        quiet = status(provider="quiet", segments=(), order_hint=400)
+        rows = self.block_rows(self.ALL + (quiet,))
+        self.assertEqual(len(rows), len(self.ALL) + 1)
+        self.assertIn(render.NO_SEGMENTS_LABEL, self.product_row(rows, "Quiet"))
+
+    def test_a_products_failure_is_contained_to_its_own_row(self):
+        broken = status(
+            provider="broken",
+            availability=contract.Availability.ERROR,
+            segments=(),
+            fallback_text="Not answering",
+            order_hint=400,
+        )
+        rows = self.block_rows(self.ALL + (broken,))
+        self.assertIn("Not answering", self.product_row(rows, "Broken"))
+        # The neighbours are untouched: same count, same rows, same readings.
+        self.assertEqual(rows[:-1], self.block_rows())
+
+    def test_prose_with_punctuation_and_parentheses_stays_on_one_row(self):
+        wordy = status(
+            provider="wordy",
+            order_hint=400,
+            segments=(
+                segment(
+                    state=contract.SegmentState.ATTENTION,
+                    label="Blocked (policy 'strict') - can't proceed",
+                ),
+            ),
+        )
+        rows = self.block_rows(self.ALL + (wordy,))
+        self.assertEqual(len(rows), len(self.ALL) + 1)
+        self.assertIn(
+            "Blocked (policy 'strict') - can't proceed",
+            self.product_row(rows, "Wordy"),
+        )
+
+    def test_the_product_column_is_measured_in_display_cells(self):
+        # The alignment claim, and the one thing a multi-cell glyph could break:
+        # every row's scope marker begins at the same display column. Measured in
+        # cells rather than characters, so an emoji cannot shift a product's
+        # identity out from under its own row.
+        mode = render.PresentationMode.BALANCED
+        rows = self.block_rows()
+        self.assertGreater(
+            len({render.display_width(name) for name in self.NAMES}),
+            1,
+            "the fixture no longer exercises names of differing widths",
+        )
+        starts = set()
+        for status_ in self.ALL:
+            marker = render.scope_marker(status_.scope.value, mode)
+            self.assertEqual(render.cluster_width(marker), 2, "the fixture lost its wide glyphs")
+            row = self.product_row(rows, render.provider_display_name(status_.provider))
+            starts.add(render.display_width(row[: row.index(marker)]))
+        self.assertEqual(len(starts), 1, rows)
+
+    def test_no_row_contains_an_escape_sequence(self):
+        # Nothing here can be truncated through an ANSI escape because nothing
+        # here emits one: colour is the user's to add to their own output, and a
+        # block that wrote its own would also have to measure it.
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertNotIn("\x1b", self.compose(mode=mode))
+
+    def test_an_upstream_escape_sequence_is_passed_through_untouched(self):
+        coloured = "\x1b[32mmain\x1b[0m ~/proj"
+        out = self.compose(upstream=coloured)
+        self.assertTrue(out.startswith(coloured + render.ROW_SEPARATOR))
+
+    def test_no_upstream_output_means_no_leading_row_break(self):
+        for upstream in (None, ""):
+            with self.subTest(upstream=upstream):
+                out = render.compose(upstream, self.ALL, depth=DETAIL)
+                self.assertFalse(out.startswith(render.ROW_SEPARATOR))
+                self.assertTrue(out.startswith("Fornax"))
+
+    def test_one_product_per_row_holds_in_every_render_style(self):
+        # Detail is an information depth, not a fourth rendering mode: the layout
+        # is the same in balanced, compact and both text styles.
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                rows = self.block_rows(mode=mode)
+                self.assertEqual(len(rows), len(self.ALL))
+                for status_ in self.ALL:
+                    self.product_row(rows, render.provider_display_name(status_.provider))
+
+    def test_a_text_style_row_says_everything_in_words(self):
+        # Read by someone whose terminal cannot show the glyphs, or who is reading
+        # a pasted copy of the block in a bug report. Product, state and scope are
+        # all words; nothing is carried by colour or icon alone.
+        for mode in (render.PresentationMode.PLAIN, render.PresentationMode.COMPACT_PLAIN):
+            for status_ in self.ALL:
+                with self.subTest(mode=mode, provider=status_.provider):
+                    row = self.product_row(
+                        self.block_rows(mode=mode),
+                        render.provider_display_name(status_.provider),
+                    )
+                    self.assertTrue(row.isascii(), row)
+                    self.assertIn(render.SCOPE_TEXT[status_.scope.value], row)
+                    self.assertRegex(row, r"[A-Z]{2,}")
+
+    def test_the_rows_are_the_same_snapshot_the_shared_line_would_have_rendered(self):
+        # One state engine, two layouts. Every reading the horizontal rendering
+        # shows appears in the vertical one and vice versa, so the layout cannot
+        # be a second place where what a product means gets decided.
+        for mode in MODES:
+            block = self.compose(mode=mode)
+            for status_ in self.ALL:
+                _, _, readings = render.provider_parts(status_, mode, DETAIL)
+                for reading in readings:
+                    with self.subTest(mode=mode, reading=reading):
+                        self.assertIn(reading, block)
+
+    def test_rendering_twice_gives_the_same_rows(self):
+        self.assertEqual(self.compose(), self.compose())
+
+
+class TestDetailLayoutUnderPressure(DetailLayoutCase):
+    """What the vertical layout does as the terminal narrows.
+
+    It wraps rather than sheds: rows are the resource this depth has, so losing a
+    reading to save columns would be paying in the wrong currency. Below the width
+    of a single reading it stops being able to lay out at all and hands the problem
+    to the horizontal ladder, which is the one place that drops readings and says
+    so. Both regimes are swept here, and both are asserted to be reached.
+    """
+
+    MAX_BUDGET = 200
+    _sweep = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls._sweep = [
+            (mode, budget, render.compose(
+                UPSTREAM, cls.ALL, mode=mode, width_budget=budget, depth=DETAIL
+            ))
+            for mode in MODES
+            for budget in range(0, cls.MAX_BUDGET)
+        ]
+
+    def rows_of(self, out: str) -> list[str]:
+        self.assertTrue(out.startswith(UPSTREAM))
+        tail = out[len(UPSTREAM):]
+        if tail.startswith(render.ROW_SEPARATOR):
+            return tail[len(render.ROW_SEPARATOR):].split(render.ROW_SEPARATOR)
+        if tail:  # the horizontal ladder's block, still on the user's own row
+            return [tail[len(render.UPSTREAM_SEPARATORS[render.PresentationMode.BALANCED]):]]
+        return []
+
+    def vertical(self):
+        """Every sweep entry whose block is the vertical layout."""
+        for mode, budget, out in self._sweep:
+            tail = out[len(UPSTREAM):]
+            if tail.startswith(render.ROW_SEPARATOR):
+                yield mode, budget, tail[len(render.ROW_SEPARATOR):].split(render.ROW_SEPARATOR)
+
+    def test_no_row_ever_exceeds_the_budget(self):
+        # The invariant the horizontal ladder states per line, stated per row.
+        for mode, budget, rows in self.vertical():
+            for row in rows:
+                if render.display_width(row) > budget:
+                    self.fail(f"{mode.value}/{budget}: {render.display_width(row)} cols: {row}")
+
+    def test_every_product_still_opens_exactly_one_row(self):
+        for mode, budget, rows in self.vertical():
+            for name in self.NAMES:
+                opened = [row for row in rows if row.startswith(name)]
+                self.assertEqual(len(opened), 1, f"{mode.value}/{budget}: {rows}")
+
+    def test_a_continuation_row_is_indented_and_never_looks_like_a_product(self):
+        # This is what keeps a wrapped reading attached to the product above it.
+        # Without it a narrow terminal produces rows whose owner is a guess, which
+        # is the horizontal layout's failure reintroduced one row at a time.
+        for mode, budget, rows in self.vertical():
+            for row in rows:
+                if any(row.startswith(name) for name in self.NAMES):
+                    continue
+                # Leading whitespace asserted literally: reading the indent out of
+                # the constant would make an empty indent pass this test, and an
+                # unindented continuation row is exactly the failure being excluded.
+                self.assertTrue(row.startswith(" "), f"{mode.value}/{budget}: {row!r}")
+                self.assertEqual(row[: len(render.READING_INDENT)], render.READING_INDENT)
+                self.assertFalse(row.strip().startswith(tuple(self.NAMES)))
+
+    def test_a_wrapped_product_never_hides_a_reading(self):
+        for mode, budget, rows in self.vertical():
+            self.assertNotIn("[+", render.ROW_SEPARATOR.join(rows), f"{mode.value}/{budget}")
+
+    def test_the_hypothetical_marker_is_never_wrapped_away_from_its_label(self):
+        # A reading is laid out whole or moved whole, so the marker cannot end up
+        # on a different row from the label it qualifies -- which would leave a row
+        # saying a block happened.
+        for mode, budget, rows in self.vertical():
+            for row in rows:
+                if "Shadow mode" in row:
+                    self.assertIn(
+                        f"[{render.HYPOTHETICAL_TEXT}]", row, f"{mode.value}/{budget}: {row}"
+                    )
+
+    def test_a_text_style_stays_ascii_at_every_width(self):
+        for mode, budget, rows in self.vertical():
+            if not mode.uses_glyphs:
+                for row in rows:
+                    self.assertTrue(row.isascii(), f"{mode.value}/{budget}: {row}")
+
+    def test_no_grapheme_cluster_is_ever_split(self):
+        for mode, budget, rows in self.vertical():
+            for cluster in render.grapheme_clusters(render.ROW_SEPARATOR.join(rows)):
+                self.assertNotIn(cluster, ("‍", "️"), f"{mode.value}/{budget}")
+
+    def test_the_users_own_row_survives_every_width(self):
+        for _, _, out in self._sweep:
+            self.assertTrue(out.startswith(UPSTREAM))
+
+    def test_a_wide_terminal_needs_no_wrapping_at_all(self):
+        widest = max(budget for _, budget, _ in self._sweep)
+        rows = [rows for mode, budget, rows in self.vertical() if budget == widest]
+        self.assertTrue(rows)
+        for laid_out in rows:
+            self.assertEqual(len(laid_out), len(self.ALL))
+
+    def test_wrapping_is_actually_reached_by_this_sweep(self):
+        # Non-vacuity for the four assertions above: a sweep that never wrapped
+        # would pass all of them by never taking the path.
+        self.assertTrue(
+            [budget for _, budget, rows in self.vertical() if len(rows) > len(self.ALL)],
+            "no budget in the sweep wrapped a product",
+        )
+
+    def test_the_fallback_to_the_shared_line_is_actually_reached(self):
+        # And non-vacuity for the regime split itself: some budget is too narrow
+        # for any vertical layout, and there the ladder takes over.
+        fallbacks = [
+            out
+            for _, _, out in self._sweep
+            if out != UPSTREAM and render.ROW_SEPARATOR not in out
+        ]
+        self.assertTrue(fallbacks, "no budget fell back to the horizontal ladder")
+        self.assertTrue(any("[+" in out for out in fallbacks))
+
+    def test_the_narrowest_widths_hand_the_line_back_untouched(self):
+        self.assertEqual([out for _, budget, out in self._sweep if budget == 0], [UPSTREAM] * len(MODES))
+
+
 class TestHypotheticalUnderPressure(unittest.TestCase):
     """A would-have keeps its disclaimer down to the narrowest rung.
 
