@@ -16,6 +16,7 @@ should not be relaxed without reading why they exist:
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import unicodedata
 import unittest
@@ -25,6 +26,8 @@ import statusline_render as render
 
 MODES = tuple(render.PresentationMode)
 DEPTHS = tuple(render.InformationDepth)
+CLEAR = render.InformationDepth.CLEAR
+DETAIL = render.InformationDepth.DETAIL
 
 
 def segment(**overrides) -> contract.Segment:
@@ -892,6 +895,623 @@ class TestRenderSegment(unittest.TestCase):
                     with self.subTest(key=seg.key, mode=mode):
                         text = render.render_segment(seg, mode)
                         self.assertRegex(text, r"[A-Za-z]{3,}")
+
+
+ROLES = tuple(contract.ClearRole)
+
+# The live host as read from the three installed providers on 2026-09-30. Kept
+# distinct from the three fixtures above, which were written against the
+# readability requirements rather than against a running machine: the fixtures
+# have a `critical` and a `hypothetical` the live host does not, and the live host
+# has the two-neutrals-of-equal-severity case the fixtures do not.
+def live_fornax() -> contract.ProviderStatus:
+    return status(
+        provider="fornax",
+        scope=contract.Scope.HOST,
+        order_hint=300,
+        segments=(
+            segment(
+                key="latest_finding",
+                state=contract.SegmentState.ATTENTION,
+                label="Unverified",
+                reason_code="reason_not_recorded",
+                age_seconds=99883,
+            ),
+        ),
+    )
+
+
+def live_circinus() -> contract.ProviderStatus:
+    return status(
+        provider="circinus",
+        scope=contract.Scope.HOST,
+        availability=contract.Availability.UNKNOWN,
+        order_hint=400,
+        segments=(
+            segment(
+                key="availability",
+                state=contract.SegmentState.UNKNOWN,
+                label="Not responding",
+                reason_code="daemon_unreachable",
+                reason_label="Socket exists but did not answer",
+            ),
+        ),
+    )
+
+
+def live_libra() -> contract.ProviderStatus:
+    return status(
+        provider="libra",
+        scope=contract.Scope.HOST,
+        order_hint=500,
+        segments=(
+            segment(
+                key="task",
+                state=contract.SegmentState.NEUTRAL,
+                label="Task 0dd57ff3",
+                order_hint=10,
+            ),
+            segment(
+                key="estimate",
+                state=contract.SegmentState.NEUTRAL,
+                label="Remaining work",
+                duration_seconds=543530,
+                duration_label="P90",
+                confidence=contract.Confidence.HIGH,
+                confidence_of=contract.ConfidenceSubject.PREFLIGHT_ESTIMATE,
+                order_hint=20,
+            ),
+            segment(
+                key="escalation",
+                state=contract.SegmentState.WARN,
+                label="Replan budget spent",
+                reason_code="next_replan_needs_human_approval",
+                order_hint=30,
+            ),
+        ),
+    )
+
+
+LIVE_HOST = (live_fornax, live_circinus, live_libra)
+ALL_FIXTURES = LIVE_HOST + (fornax_status, circinus_status, libra_status)
+
+
+class TestClearRoles(unittest.TestCase):
+    """The fallback that infers a Clear part for a provider that declared none."""
+
+    def roles(self, status_) -> dict:
+        return {
+            seg.key: role
+            for seg, role in zip(contract.order_segments(status_), render.clear_roles(status_))
+        }
+
+    def test_a_state_that_stops_work_is_an_exception_wherever_it_sits(self):
+        # Last in contract order, so position cannot be what promoted it.
+        roles = self.roles(
+            status(
+                segments=(
+                    segment(key="a", label="Routine", order_hint=0),
+                    segment(
+                        key="b",
+                        state=contract.SegmentState.CRITICAL,
+                        label="Stopped",
+                        order_hint=90,
+                    ),
+                )
+            )
+        )
+        self.assertIs(roles["b"], contract.ClearRole.EXCEPTION)
+
+    def test_a_state_waiting_on_the_operator_is_an_exception(self):
+        roles = self.roles(live_fornax())
+        self.assertIs(roles["latest_finding"], contract.ClearRole.EXCEPTION)
+
+    def test_a_warn_state_is_not_an_exception(self):
+        # The live Libra case. `warn` means "something is wrong; work is not
+        # stopped", and Libra's own explain surface says nothing is blocked and
+        # nothing is waiting on an answer. Reading it as an exception would make
+        # the line claim otherwise -- and would drop the estimate beside it,
+        # since an exception is shown alone.
+        roles = self.roles(live_libra())
+        self.assertNotIn(contract.ClearRole.EXCEPTION, roles.values())
+        self.assertIs(roles["escalation"], contract.ClearRole.VITAL)
+
+    def test_a_measurement_outranks_a_bare_fact_of_equal_severity(self):
+        # Both `neutral`, adjacent in order, so neither severity nor position can
+        # separate them. A line that leads with the task id has spent Libra's
+        # whole reading on the least useful thing it knows.
+        roles = self.roles(live_libra())
+        self.assertIs(roles["estimate"], contract.ClearRole.POSTURE)
+        self.assertIs(roles["task"], contract.ClearRole.SUPPORTING)
+
+    def test_the_first_segment_is_the_posture_when_nothing_is_measured(self):
+        roles = self.roles(
+            status(
+                segments=(
+                    segment(key="first", label="Ready", order_hint=1),
+                    segment(key="second", label="Also ready", order_hint=2),
+                )
+            )
+        )
+        self.assertIs(roles["first"], contract.ClearRole.POSTURE)
+        self.assertIs(roles["second"], contract.ClearRole.SUPPORTING)
+
+    def test_exactly_one_posture_is_inferred_per_provider(self):
+        for factory in ALL_FIXTURES:
+            status_ = factory()
+            with self.subTest(provider=status_.provider):
+                roles = render.clear_roles(status_)
+                postures = [r for r in roles if r is contract.ClearRole.POSTURE]
+                self.assertLessEqual(len(postures), 1)
+
+    def test_a_declared_role_is_never_overridden(self):
+        # A provider that calls its stopped-work segment supporting context is
+        # making a claim the host has no standing to correct. Inference exists for
+        # providers written before the field, not as the intended path.
+        roles = self.roles(
+            status(
+                segments=(
+                    segment(
+                        key="b",
+                        state=contract.SegmentState.CRITICAL,
+                        label="Stopped",
+                        clear_role=contract.ClearRole.SUPPORTING,
+                    ),
+                )
+            )
+        )
+        self.assertIs(roles["b"], contract.ClearRole.SUPPORTING)
+
+    def test_a_declared_posture_suppresses_inference_entirely(self):
+        # Without the suppression, the measured segment would be inferred as a
+        # second posture and the provider would get more than it asked for.
+        roles = self.roles(
+            status(
+                segments=(
+                    segment(
+                        key="named",
+                        label="Shadow mode",
+                        clear_role=contract.ClearRole.POSTURE,
+                        order_hint=1,
+                    ),
+                    segment(
+                        key="measured",
+                        label="Decisions",
+                        count=4,
+                        count_label="today",
+                        order_hint=2,
+                    ),
+                )
+            )
+        )
+        self.assertIs(roles["named"], contract.ClearRole.POSTURE)
+        self.assertIsNot(roles["measured"], contract.ClearRole.POSTURE)
+
+    def test_every_segment_gets_a_role(self):
+        for factory in ALL_FIXTURES:
+            status_ = factory()
+            with self.subTest(provider=status_.provider):
+                roles = render.clear_roles(status_)
+                self.assertEqual(len(roles), len(status_.segments))
+                for role in roles:
+                    self.assertIn(role, ROLES)
+
+
+class TestClearReadings(unittest.TestCase):
+    """Which readings survive into Clear, which is where the priority rule lives."""
+
+    def keys(self, status_) -> list:
+        return [seg.key for seg in render.clear_readings(status_)]
+
+    def test_a_provider_that_cannot_read_its_own_state_shows_one_reading(self):
+        self.assertEqual(self.keys(live_circinus()), ["availability"])
+
+    def test_a_cached_outcome_cannot_ride_along_with_an_unreachable_daemon(self):
+        # The defect this rule exists for: `Circinus UNKNOWN Not responding ·
+        # WARN Would have blocked` reads as though shadow evaluation were running,
+        # when the thing that would run it is not answering. The cached outcome is
+        # still in the snapshot and Detail may show it; Clear may not.
+        #
+        # Deliberately a `warn` hypothetical rather than a quiet `neutral` mode
+        # name: a neutral one would be classified supporting and omitted anyway,
+        # so the test would pass with this rule deleted. This one is a reading the
+        # role ladder *would* keep, which is what makes the assertion bite.
+        wedged = dataclasses.replace(
+            live_circinus(),
+            segments=live_circinus().segments
+            + (
+                segment(
+                    key="last_decision",
+                    state=contract.SegmentState.WARN,
+                    label="Would have blocked",
+                    hypothetical=True,
+                    order_hint=50,
+                ),
+            ),
+        )
+        self.assertEqual(self.keys(wedged), ["availability"])
+        clear = render.render_provider(wedged, render.PresentationMode.PLAIN, CLEAR)
+        detail = render.render_provider(wedged, render.PresentationMode.PLAIN, DETAIL)
+        self.assertNotIn("Would have blocked", clear)
+        self.assertIn("Would have blocked", detail)
+
+    def test_an_unavailable_provider_skips_a_hypothetical_even_when_ordered_first(self):
+        # Severity must not decide here, and neither may position. `warn` outranks
+        # `unknown`, and this cache sorts ahead of the admission, so both a
+        # severity-ranked and a position-ranked choice pick the would-have-blocked
+        # -- which is how the line ends up sounding busier than the product that
+        # is not running.
+        wedged = dataclasses.replace(
+            live_circinus(),
+            segments=(
+                segment(
+                    key="last_decision",
+                    state=contract.SegmentState.WARN,
+                    label="Would have blocked",
+                    hypothetical=True,
+                    order_hint=1,
+                ),
+                dataclasses.replace(live_circinus().segments[0], order_hint=50),
+            ),
+        )
+        self.assertEqual(self.keys(wedged), ["availability"])
+
+    def test_an_unavailable_provider_otherwise_leads_with_its_own_first_reading(self):
+        # Nothing hypothetical, so the provider's own ordering decides. Still not
+        # severity: the second segment is the more alarming one, and an invalid
+        # config is the more actionable thing to say.
+        broken = status(
+            availability=contract.Availability.UNAVAILABLE,
+            segments=(
+                segment(
+                    key="config",
+                    state=contract.SegmentState.ATTENTION,
+                    label="Config invalid",
+                    order_hint=1,
+                ),
+                segment(
+                    key="cached",
+                    state=contract.SegmentState.CRITICAL,
+                    label="Last run failed",
+                    order_hint=2,
+                ),
+            ),
+        )
+        self.assertEqual(self.keys(broken), ["config"])
+
+    def test_an_all_hypothetical_unavailable_provider_still_says_something(self):
+        # The last rung. A provider whose every reading is a would-have has broken
+        # the contract, and the host still has to render one line rather than an
+        # attributed nothing -- which would read as "checked, all clear".
+        only_hypothetical = status(
+            availability=contract.Availability.UNKNOWN,
+            segments=(
+                segment(
+                    key="a",
+                    state=contract.SegmentState.UNKNOWN,
+                    label="Cannot tell",
+                    hypothetical=True,
+                    order_hint=2,
+                ),
+                segment(
+                    key="b",
+                    state=contract.SegmentState.WARN,
+                    label="Would have blocked",
+                    hypothetical=True,
+                    order_hint=1,
+                ),
+            ),
+        )
+        self.assertEqual(self.keys(only_hypothetical), ["a"])
+
+    def test_an_exception_is_shown_alone(self):
+        # Nothing is improved by a remaining-work estimate next to an approval
+        # the operator is being asked for.
+        self.assertEqual(self.keys(libra_status()), ["approval"])
+
+    def test_the_worst_exception_wins_when_there_are_two(self):
+        both = status(
+            segments=(
+                segment(
+                    key="waiting",
+                    state=contract.SegmentState.ATTENTION,
+                    label="Awaiting approval",
+                    order_hint=1,
+                ),
+                segment(
+                    key="stopped",
+                    state=contract.SegmentState.CRITICAL,
+                    label="Stopped",
+                    order_hint=2,
+                ),
+            )
+        )
+        self.assertEqual(self.keys(both), ["stopped"])
+
+    def test_a_posture_may_keep_one_vital_beside_it(self):
+        self.assertEqual(self.keys(live_libra()), ["estimate", "escalation"])
+
+    def test_no_provider_contributes_more_than_the_reading_budget(self):
+        for factory in ALL_FIXTURES:
+            status_ = factory()
+            with self.subTest(provider=status_.provider):
+                self.assertLessEqual(
+                    len(render.clear_readings(status_)), render.MAX_CLEAR_READINGS
+                )
+
+    def test_a_stale_secondary_reading_is_dropped(self):
+        fresh = dataclasses.replace(
+            live_libra(),
+            segments=tuple(
+                dataclasses.replace(seg, age_seconds=30, fresh_for_seconds=60)
+                if seg.key == "escalation"
+                else seg
+                for seg in live_libra().segments
+            ),
+        )
+        stale = dataclasses.replace(
+            fresh,
+            segments=tuple(
+                dataclasses.replace(seg, age_seconds=3600, fresh_for_seconds=60)
+                if seg.key == "escalation"
+                else seg
+                for seg in fresh.segments
+            ),
+        )
+        # The only difference between the two snapshots is the age, so the age is
+        # what the assertion is about.
+        self.assertEqual(self.keys(fresh), ["estimate", "escalation"])
+        self.assertEqual(self.keys(stale), ["estimate"])
+
+    def test_a_stale_exception_is_still_shown(self):
+        # Freshness may retire a secondary signal. It may not retire the reason
+        # the operator would have looked: an old unanswered approval request is
+        # still an unanswered approval request.
+        old = status(
+            segments=(
+                segment(
+                    key="waiting",
+                    state=contract.SegmentState.ATTENTION,
+                    label="Awaiting approval",
+                    age_seconds=99999,
+                    fresh_for_seconds=60,
+                ),
+            )
+        )
+        self.assertEqual(self.keys(old), ["waiting"])
+
+    def test_a_reading_with_no_declared_horizon_is_never_stale(self):
+        # `fresh_for_seconds` is opt-in, so an age alone must not retire anything.
+        aged = dataclasses.replace(
+            live_libra(),
+            segments=tuple(
+                dataclasses.replace(seg, age_seconds=10**6)
+                if seg.key == "escalation"
+                else seg
+                for seg in live_libra().segments
+            ),
+        )
+        self.assertIn("escalation", self.keys(aged))
+
+    def test_readings_come_back_in_contract_order(self):
+        for factory in ALL_FIXTURES:
+            status_ = factory()
+            with self.subTest(provider=status_.provider):
+                ordered = list(contract.order_segments(status_))
+                positions = [ordered.index(seg) for seg in render.clear_readings(status_)]
+                self.assertEqual(positions, sorted(positions))
+
+    def test_the_projection_is_idempotent(self):
+        # compose projects for its width accounting and render_provider projects
+        # for its output. If applying it twice could differ, those two would
+        # disagree about what is on the line.
+        for factory in ALL_FIXTURES:
+            status_ = factory()
+            with self.subTest(provider=status_.provider):
+                once = render.clear_readings(status_)
+                twice = render.clear_readings(dataclasses.replace(status_, segments=once))
+                self.assertEqual(once, twice)
+
+    def test_every_clear_reading_is_one_of_the_providers_own_segments(self):
+        # The one-state-engine invariant, stated structurally: Clear selects from
+        # the snapshot, it does not compute a state of its own. An identity check
+        # rather than a state comparison, so no amount of agreeing-by-coincidence
+        # can pass it.
+        for factory in ALL_FIXTURES:
+            status_ = factory()
+            with self.subTest(provider=status_.provider):
+                for reading in render.clear_readings(status_):
+                    self.assertTrue(any(reading is seg for seg in status_.segments))
+
+    def test_clear_never_lowers_the_severity_a_provider_reports(self):
+        # Clear may say less. It may not say "calmer".
+        for factory in ALL_FIXTURES:
+            status_ = factory()
+            with self.subTest(provider=status_.provider):
+                projected = dataclasses.replace(
+                    status_, segments=render.clear_readings(status_)
+                )
+                self.assertEqual(
+                    render.provider_severity(projected), render.provider_severity(status_)
+                )
+
+    def test_a_provider_that_reported_nothing_still_says_so_in_clear(self):
+        empty = status(segments=())
+        self.assertEqual(render.clear_readings(empty), ())
+        text = render.render_provider(empty, render.PresentationMode.PLAIN, CLEAR)
+        self.assertIn(render.NO_SEGMENTS_LABEL, text)
+
+    def test_a_provider_whose_every_segment_is_declared_supporting_still_shows_one(self):
+        # Rendering nothing would be indistinguishable from "this product
+        # reported nothing", which means the opposite.
+        all_supporting = status(
+            segments=(
+                segment(key="a", label="First", clear_role=contract.ClearRole.SUPPORTING),
+                segment(key="b", label="Second", clear_role=contract.ClearRole.SUPPORTING),
+            )
+        )
+        self.assertEqual(self.keys(all_supporting), ["a"])
+
+
+def detail_atoms(text: str) -> set:
+    """The parenthesised supporting phrases of one rendered segment."""
+    if "(" not in text:
+        return set()
+    inner = text[text.index("(") + 1 : text.rindex(")")]
+    return set(inner.split(render.DETAIL_SEPARATOR))
+
+
+class TestDepthFieldGating(unittest.TestCase):
+    """What Clear removes from one reading, and what it may never remove."""
+
+    def clear(self, seg, mode=render.PresentationMode.BALANCED) -> str:
+        return render.render_segment(seg, mode, CLEAR)
+
+    def test_the_state_marker_and_label_survive_every_depth(self):
+        for factory in ALL_FIXTURES:
+            for seg in factory().segments:
+                for mode in MODES:
+                    for depth in DEPTHS:
+                        with self.subTest(key=seg.key, mode=mode, depth=depth):
+                            text = render.render_segment(seg, mode, depth)
+                            self.assertIn(seg.label, text)
+                            self.assertRegex(text, r"[A-Za-z]{3,}")
+
+    def test_clear_drops_a_counter(self):
+        seg = segment(key="c", label="Decisions", count=1520, total=3747, count_label="allowed")
+        self.assertIn("1520", render.render_segment(seg, render.PresentationMode.BALANCED))
+        self.assertNotIn("1520", self.clear(seg))
+
+    def test_clear_drops_confidence(self):
+        seg = segment(
+            key="e",
+            label="Remaining work",
+            confidence=contract.Confidence.HIGH,
+            confidence_of=contract.ConfidenceSubject.PREFLIGHT_ESTIMATE,
+        )
+        self.assertNotEqual(detail_atoms(render.render_segment(seg, MODES[0])), set())
+        self.assertEqual(detail_atoms(self.clear(seg)), set())
+
+    def test_clear_drops_a_reason(self):
+        seg = live_fornax().segments[0]
+        self.assertIn("reason not recorded", render.render_segment(seg, MODES[0]))
+        self.assertNotIn("reason not recorded", self.clear(seg))
+
+    def test_clear_drops_an_age(self):
+        seg = live_fornax().segments[0]
+        self.assertIn("ago", render.render_segment(seg, MODES[0]))
+        self.assertNotIn("ago", self.clear(seg))
+
+    def test_clear_keeps_a_duration_because_the_span_is_the_reading(self):
+        seg = live_libra().segments[1]
+        text = self.clear(seg)
+        self.assertIn("P90", text)
+        # And only the duration: the confidence on the same segment is gone.
+        self.assertEqual(detail_atoms(text), {render.format_duration(543530, "P90")})
+
+    def test_clear_keeps_the_not_enforced_marker(self):
+        # A would-have-blocked that loses its disclaimer is not a shortened
+        # reading of shadow mode. It is a different and false one.
+        seg = circinus_status().segments[0]
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.assertIn(render.HYPOTHETICAL_TEXT, self.clear(seg))
+
+    def test_clear_supporting_material_is_always_a_subset_of_detail(self):
+        # The privacy property, stated as a surface comparison: Clear cannot show
+        # a field Detail does not, so it cannot be a wider surface than the one
+        # already reviewed.
+        for factory in ALL_FIXTURES:
+            for seg in factory().segments:
+                for mode in MODES:
+                    with self.subTest(key=seg.key, mode=mode):
+                        self.assertLessEqual(
+                            detail_atoms(render.render_segment(seg, mode, CLEAR)),
+                            detail_atoms(render.render_segment(seg, mode, DETAIL)),
+                        )
+
+
+class TestComposeDepth(unittest.TestCase):
+    """Depth as it reaches the whole line, including under width pressure."""
+
+    def all_live(self) -> tuple:
+        return tuple(factory() for factory in LIVE_HOST)
+
+    def test_clear_is_shorter_than_detail_on_the_live_host(self):
+        clear = render.compose(UPSTREAM, self.all_live(), depth=CLEAR)
+        detail = render.compose(UPSTREAM, self.all_live(), depth=DETAIL)
+        self.assertLess(render.display_width(clear), render.display_width(detail))
+
+    def test_every_product_is_named_at_every_depth(self):
+        for depth in DEPTHS:
+            for mode in MODES:
+                text = render.compose(UPSTREAM, self.all_live(), mode=mode, depth=depth)
+                for status_ in self.all_live():
+                    with self.subTest(depth=depth, mode=mode, provider=status_.provider):
+                        self.assertIn(render.provider_display_name(status_.provider), text)
+
+    def test_the_upstream_line_is_untouched_at_every_depth(self):
+        for depth in DEPTHS:
+            for mode in MODES:
+                with self.subTest(depth=depth, mode=mode):
+                    self.assertTrue(
+                        render.compose(
+                            UPSTREAM, self.all_live(), mode=mode, depth=depth
+                        ).startswith(UPSTREAM)
+                    )
+
+    def test_the_hidden_marker_counts_only_what_width_took(self):
+        # Clear shows 4 of the live host's 5 readings. A depth-blind ladder would
+        # start its count at 1 and report news the user never lost.
+        statuses = self.all_live()
+        wide = render.compose("", statuses, depth=CLEAR)
+        self.assertNotIn("[+", wide)
+
+    def test_the_hidden_count_is_of_readings_clear_actually_showed(self):
+        # Libra reports three segments; Clear shows two. Squeezed by one column,
+        # exactly one of those two goes, so the line must say `[+1 more]`.
+        #
+        # A ladder that counted the raw snapshot instead would say `[+2 more]` --
+        # claiming the terminal cost the reader something Clear was never going to
+        # show them. That is the difference this asserts, and it is why depth is
+        # applied by projection before the ladder rather than at the point of
+        # rendering text.
+        libra = (live_libra(),)
+        full = render.compose("", libra, depth=CLEAR)
+        squeezed = render.compose(
+            "", libra, depth=CLEAR, width_budget=render.display_width(full) - 1
+        )
+        self.assertIn(render._hidden_marker(1), squeezed)
+        self.assertNotIn(render._hidden_marker(2), squeezed)
+
+    def test_depth_does_not_change_which_rendering_modes_are_tried(self):
+        # The axes are independent: asking for less information is not asking for
+        # a different density or icon style.
+        for mode in MODES:
+            for depth in DEPTHS:
+                with self.subTest(mode=mode, depth=depth):
+                    self.assertEqual(render._mode_candidates(mode), render.MODE_LADDER[mode])
+
+    def test_clear_under_pressure_still_admits_what_it_hid(self):
+        statuses = self.all_live()
+        full = render.compose("", statuses, depth=CLEAR)
+        squeezed = render.compose(
+            "", statuses, depth=CLEAR, width_budget=render.display_width(full) - 20
+        )
+        self.assertIn("[+", squeezed)
+
+    def test_the_worst_state_survives_the_narrowest_rung_at_both_depths(self):
+        # The label may be truncated at this width -- that is the documented
+        # narrowest rung. The *state* may not be: a budget that quietly drops a
+        # `critical` is indistinguishable from a provider reporting all clear.
+        statuses = (libra_status(),)
+        for depth in DEPTHS:
+            with self.subTest(depth=depth):
+                text = render.compose(
+                    "", statuses, mode=render.PresentationMode.PLAIN, depth=depth, width_budget=40
+                )
+                self.assertIn(render.STATE_TEXT["critical"], text)
+                self.assertIn("Awaiting", text)
 
 
 class TestProviderDisplayName(unittest.TestCase):
