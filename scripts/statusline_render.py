@@ -135,6 +135,73 @@ _MODE_BY_AXES = {axes: mode for mode, axes in _MODE_AXES.items()}
 _MODE_ALIASES = {"balanced_plain": PresentationMode.PLAIN}
 
 
+class InformationDepth(enum.Enum):
+    """How much of a provider's snapshot one reading is allowed to show.
+
+    A third axis beside `PresentationMode`'s density and icon style, and
+    deliberately *not* a member of it. The two existing axes answer "how much
+    room may this reading spend"; this one answers "how much is there to say".
+    Those are independent questions \u2014 a reader on a wide terminal may still want
+    one line of posture per product, and a reader on a narrow one may still be
+    mid-diagnosis and want everything \u2014 so folding depth into `PresentationMode`
+    would have produced eight members whose only job was to re-express two
+    orthogonal choices, and every site consulting density would silently also
+    have asserted a depth.
+
+    `CLEAR` is not `DETAIL` minus some fields. It is a per-product executive
+    summary, selected by `clear_readings` from the *same* snapshot, so the
+    primary state a reader sees is identical either way and only the supporting
+    context changes. There is one state engine; this axis chooses how much of
+    its output is rendered, never what it concluded.
+    """
+
+    CLEAR = "clear"
+    DETAIL = "detail"
+
+    @classmethod
+    def parse(cls, value: object, default: "InformationDepth" = None) -> "InformationDepth":
+        """Resolve a configured depth name, falling back rather than raising.
+
+        Same reasoning as `PresentationMode.parse`: an unreadable statusline is
+        worse than an ignored preference. The asymmetry with that method is
+        deliberate, though \u2014 the fallback here is `CLEAR`, the *narrower* mode.
+        A near-miss on a depth preference must not answer with more information
+        than was asked for, because the extra information is the half that could
+        be over-disclosure, whereas a near-miss on icon style only risks looking
+        wrong.
+        """
+        if default is None:
+            default = DEFAULT_INFORMATION_DEPTH
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, str):
+            name = value.strip().lower().replace("-", "_")
+            for member in cls:
+                if member.value == name:
+                    return member
+        return default
+
+    @property
+    def shows_supporting_detail(self) -> bool:
+        """Whether supporting context beside the primary state may be rendered.
+
+        Read as a property rather than compared against a member for the same
+        reason the density and icon-style axes are: the question a call site is
+        actually asking should be visible in the code, so that adding a future
+        depth cannot silently take the wrong branch at a site that happened to
+        be written as `depth is DETAIL`.
+        """
+        return self is InformationDepth.DETAIL
+
+
+# What a fresh install renders, and what an unrecognised preference falls back
+# to. `CLEAR` rather than `DETAIL` because the default has to be the mode that
+# is right for someone who has not asked for anything: a normal user wants to
+# know whether a product needs them, not to read diagnostics. Detail is the
+# deliberate opt-in of someone already looking into something.
+DEFAULT_INFORMATION_DEPTH = InformationDepth.CLEAR
+
+
 _ZWJ = "\u200d"  # ZERO WIDTH JOINER
 _VARIATION_SELECTORS = frozenset(chr(cp) for cp in range(0xFE00, 0xFE10))
 _EMOJI_MODIFIERS = frozenset(chr(cp) for cp in range(0x1F3FB, 0x1F400))
