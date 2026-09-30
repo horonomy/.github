@@ -31,17 +31,17 @@ others with it; wrapper recursion; a provider's timeout blocking the user's own
 line; a missing product reported as healthy; and a secret-shaped field reaching
 the rendered line.
 
-Then the thirteen the information-depth gate is required to demonstrate
+Then the fourteen the information-depth gate is required to demonstrate
 (HORO-1627), which are a different kind of defect: nothing crashes, nothing is
 destroyed, and the line still looks like a statusline. Clear and detail
 disagreeing about a product's state; detail costing an extra provider request;
 detail showing a field no depth is allowed to show; clear losing the product's
 name, its unavailability, its enforcement marker, its reason, or its confidence
-semantics; clear choosing a routine reading over an escalation; and a mode
-switch writing the host settings file, editing the reader's own statusline
-script, restarting a daemon, or having an unrelated operation reset the stored
-preference. Each of those renders something a reader would accept, which is why
-they need a test that does not.
+semantics; clear choosing a routine reading over an escalation; a mode switch
+writing the host settings file, editing the reader's own statusline script or
+restarting a daemon; and an unrelated operation -- adopting a product, or
+dropping one -- resetting the stored preference. Each of those renders something
+a reader would accept, which is why they need a test that does not.
 """
 
 from __future__ import annotations
@@ -714,6 +714,32 @@ def filling_in_the_presentation_defaults_on_every_enable() -> object:
     return unittest.mock.patch.object(lifecycle, "plan_enable", mutated)
 
 
+def normalising_the_presentation_block_when_a_product_leaves() -> object:
+    """And the same completion on the way out.
+
+    The disable side of the defect above, and the one more likely to survive
+    review: a disable already rewrites the provider list, so normalising the rest
+    of the registry while the file is open looks like tidying rather than like
+    resetting somebody's preference. The reader loses the depth they chose by
+    taking a product out -- an operation with no presentation in it at all.
+    """
+    real = lifecycle.plan_remove
+
+    def mutated(document, registry, **kwargs):
+        plan = real(document, registry, **kwargs)
+        if plan.registry_after is None:
+            return plan
+        presentation = dict(plan.registry_after.get(lifecycle.PRESENTATION_KEY) or {})
+        presentation["depth"] = render.DEFAULT_INFORMATION_DEPTH.value
+        return dataclasses.replace(
+            plan,
+            registry_after=dict(plan.registry_after)
+            | {lifecycle.PRESENTATION_KEY: presentation},
+        )
+
+    return unittest.mock.patch.object(lifecycle, "plan_remove", mutated)
+
+
 # --------------------------------------------------------------------------
 # The seven defects.
 # --------------------------------------------------------------------------
@@ -947,7 +973,7 @@ class SecretShapedFieldTest(MutationCase):
 
 
 # --------------------------------------------------------------------------
-# The thirteen depth defects.
+# The fourteen depth defects.
 # --------------------------------------------------------------------------
 
 
@@ -1136,6 +1162,14 @@ class PreferenceMigrationTest(MutationCase):
             lifecycle_tests.PresentationDepthTest,
             "test_enabling_another_provider_preserves_the_depth",
             filling_in_the_presentation_defaults_on_every_enable(),
+            expect="is not <InformationDepth.DETAIL",
+        )
+
+    def test_a_product_leaving_and_resetting_the_preference_is_caught(self) -> None:
+        self.assert_guard_catches(
+            depth_gate.ProviderChurnTest,
+            "test_disabling_a_product_at_detail_takes_nothing_else_with_it",
+            normalising_the_presentation_block_when_a_product_leaves(),
             expect="is not <InformationDepth.DETAIL",
         )
 
