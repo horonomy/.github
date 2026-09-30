@@ -2193,6 +2193,144 @@ class ExplainReadOnlyTest(ExplainCase):
         self.assertNotIn(upstream, printed)
 
 
+class ExplainPresentationTest(ExplainCase):
+    """The key is drawn in the mode the line is drawn in, and says which."""
+
+    def test_the_key_is_drawn_in_the_mode_actually_in_force(self) -> None:
+        # A key printed in glyphs to a reader whose terminal is why they turned
+        # glyphs off is worse than no key: every row is a question rather than an
+        # answer.
+        self.register(self.status(segments=(segment("v", "unknown", "Verification"),)))
+        lifecycle.apply(lifecycle.plan_presentation(lifecycle.read_registry(self.home), glyphs=False))
+
+        report = self.explain()
+
+        self.assertEqual(report["presentation"]["source"], "your saved preference")
+        self.assertFalse(report["presentation"]["mode"].endswith("glyph"))
+        printed = self.printed()
+        self.assertTrue(printed.isascii(), printed)
+
+    def test_the_default_is_named_as_the_default(self) -> None:
+        # So a reader can tell "this is what you asked for" from "this is what you
+        # get when you have asked for nothing", which is the difference between a
+        # preference that did not apply and one that was never set.
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+
+        self.assertEqual(self.explain()["presentation"]["source"], "the default")
+
+    def test_a_preference_this_version_cannot_read_says_so(self) -> None:
+        # A mode written by a newer version, or by hand. The renderer resolves it
+        # to something drawable either way, and reporting that silently would
+        # leave a reader comparing a line against a key for a mode they asked for
+        # and are not getting.
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+        registry = lifecycle.read_registry(self.home)
+        data = registry.data
+        data[lifecycle.PRESENTATION_KEY] = {"mode": "holographic"}
+        registry.path.write_bytes(lifecycle.serialize(data, indent=2))
+
+        presentation = self.explain()["presentation"]
+
+        self.assertIn("not a mode this version knows", presentation["source"])
+        self.assertEqual(presentation["mode"], render.PresentationMode.BALANCED.value)
+
+
+class ExplainCommandLineTest(ExplainCase):
+    """Narrowing the decode, and reaching it through the CLI."""
+
+    def test_naming_a_provider_decodes_only_that_one(self) -> None:
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+        self.register(self.status("libra", segments=(segment("p", "attention", "Preflight"),)))
+
+        report = self.explain(provider="libra")
+
+        self.assertEqual([p["provider"] for p in report["providers"]], ["libra"])
+        self.assertEqual(report["notes"], [])
+
+    def test_an_unregistered_name_is_answered_rather_than_ignored(self) -> None:
+        # Silently printing the key and no readings would read as "that provider
+        # has nothing to say", which is a different and untrue claim.
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+
+        report = self.explain(provider="eltanin")
+
+        self.assertEqual(report["providers"], [])
+        self.assertIn("no provider named 'eltanin'", " ".join(report["notes"]))
+
+    def test_the_subcommand_writes_nothing_and_succeeds(self) -> None:
+        self.register(self.status(segments=(segment("v", "unknown", "Verification"),)))
+        before = self.settings.read_bytes()
+        registry_before = lifecycle.read_registry(self.home).path.read_bytes()
+        stream = io.StringIO()
+
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            code = lifecycle.main(["explain", "--settings", str(self.settings)], stdout=stream)
+
+        # Zero even though the report carries notes. Every state this command can
+        # report is one it was asked to describe, including "nothing of ours is on
+        # your line" -- that is an answer, not a failure to give one.
+        self.assertEqual(code, lifecycle.EXIT_OK)
+        self.assertIn("how to read the line", stream.getvalue())
+        self.assertEqual(self.settings.read_bytes(), before)
+        self.assertEqual(lifecycle.read_registry(self.home).path.read_bytes(), registry_before)
+
+    def test_a_note_is_not_a_refusal(self) -> None:
+        # `doctor` exits non-zero on drift, because it is answering "is this
+        # installed correctly" and the answer is no. This command answers "what is
+        # the line saying", and "nothing of ours, someone else owns the slot" is a
+        # complete answer to that.
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+        data = self._read()
+        data[lifecycle.STATUS_LINE_KEY]["command"] = "/somewhere/else.sh"
+        self.write(data)
+        stream = io.StringIO()
+
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            code = lifecycle.main(["explain", "--settings", str(self.settings)], stdout=stream)
+
+        self.assertEqual(code, lifecycle.EXIT_OK)
+        self.assertIn("note: ", stream.getvalue())
+        self.assertNotEqual(
+            lifecycle.main(["doctor", "--settings", str(self.settings)], stdout=io.StringIO()),
+            lifecycle.EXIT_OK,
+        )
+
+    def test_the_json_form_carries_the_whole_report(self) -> None:
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+        stream = io.StringIO()
+
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            lifecycle.main(
+                ["explain", "--json", "--settings", str(self.settings)], stdout=stream
+            )
+
+        report = json.loads(stream.getvalue())
+        self.assertEqual(
+            sorted(report), ["legend", "notes", "presentation", "providers", "registry_path"]
+        )
+        self.assertEqual(report["providers"][0]["provider"], "fornax")
+
+    def test_the_legend_flag_reaches_the_report(self) -> None:
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+        stream = io.StringIO()
+
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            lifecycle.main(
+                ["explain", "--legend", "--json", "--settings", str(self.settings)], stdout=stream
+            )
+
+        self.assertEqual(json.loads(stream.getvalue())["providers"], [])
+
+    def test_a_provider_name_is_positional_here(self) -> None:
+        # Unlike the mutating subcommands, where naming the provider explicitly is
+        # worth the typing. Here it only narrows a report, and `explain fornax` is
+        # what a reader reaches for.
+        options = lifecycle.build_parser().parse_args(["explain", "fornax"])
+
+        self.assertEqual(options.provider, "fornax")
+        self.assertFalse(options.legend_only)
+
+
 class CommandLineTest(LifecycleCase):
     """The CLI exists so that nobody has to hand-edit JSON, so it is tested as the surface."""
 
