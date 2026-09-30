@@ -151,10 +151,9 @@ to the implementer to rediscover:
 - `plist_path` must not appear in the document. It is the one field in the
   product's own output that criterion 5 excludes.
 
-HORO-1577 exists because criterion 2 of *this audit's* acceptance — every
-`SUPPORTED` product names a shipped provider or an owning ticket — is not
-satisfied by a verdict alone. A `SUPPORTED` row with no owner is how an audit
-turns into a wish list.
+HORO-1577 exists because this audit is required to name an owner for every
+`SUPPORTED` product, and a verdict alone does not name one. A `SUPPORTED` row with
+no owner is how an audit turns into a wish list.
 
 ## Products — `BLOCKED`
 
