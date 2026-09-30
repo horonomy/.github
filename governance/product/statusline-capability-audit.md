@@ -51,9 +51,9 @@ be cleared by guessing.
 Every verdict below was reached by reading the product's current `main` and, where
 the product is installed, by running its own read-only surface. Ticket
 descriptions and prior DogFood notes were used to decide *what to check*, never as
-the evidence itself — two of the three standing hypotheses turned out to be true
-for a different and deeper reason than the one recorded, which is why the
-distinction matters.
+the evidence itself. Of the two standing DogFood hypotheses, one held exactly as
+recorded and one held for a different and deeper reason than the one recorded —
+which is why the distinction matters.
 
 ## Products — `SUPPORTED`, already shipped
 
