@@ -56,6 +56,7 @@ import sys
 
 import statusline_compositor as compositor
 import statusline_contract as contract
+import statusline_render as render
 
 # The key Claude Code reads, and the only key in the settings file this module
 # is ever allowed to write.
@@ -73,6 +74,12 @@ SUPPORTED_STATUS_LINE_TYPE = "command"
 MARKER_KEY = "_horonom"
 MARKER_OWNER = "horonom-statusline"
 MARKER_VERSION = 1
+
+# Where the reader's presentation preference lives, in our own registry rather
+# than in the host's settings file. It is not host configuration -- Claude Code
+# neither reads nor writes it -- so putting it there would mean mutating a shared
+# file for something only we consume.
+PRESENTATION_KEY = "presentation"
 
 DEFAULT_SETTINGS_PATH = "~/.claude/settings.json"
 
@@ -650,6 +657,11 @@ def _lifecycle_of(registry: RegistryDocument) -> dict:
     return block if isinstance(block, dict) else {}
 
 
+def _presentation_of(registry: RegistryDocument) -> dict:
+    block = (registry.data or {}).get(PRESENTATION_KEY)
+    return block if isinstance(block, dict) else {}
+
+
 def _provider_ids(registry: RegistryDocument) -> tuple[str, ...]:
     entries = (registry.data or {}).get("providers", [])
     if not isinstance(entries, list):
@@ -906,6 +918,132 @@ def plan_enable(
         registry_fingerprint=registry.fingerprint,
         settings_after=None if settings_after == document.data else settings_after,
         registry_after=None if registry_after == registry.data else registry_after,
+    )
+
+
+# How each axis reads in a plan. Spelled out rather than printing the stored mode
+# name, because `compact_plain` tells a reader neither which of the two things it
+# means nor that there were two.
+_DENSITY_WORDS = {False: "balanced", True: "compact"}
+_ICON_WORDS = {False: "text only", True: "emoji"}
+
+
+def _presentation_refusal(registry: RegistryDocument) -> tuple[str | None, tuple[str, ...]]:
+    """Why a preference change must not proceed, or `(None, ())` if it may.
+
+    Both refusals are the same judgement: a rendering preference is the least
+    consequential thing this module writes, so it is never worth spending the
+    record of the user's original statusline on.
+
+    That is also why an absent registry is refused rather than created. `enable`
+    refuses when the compositor owns the slot and the registry has gone missing,
+    precisely because that record is the only copy -- so a registry conjured by a
+    cosmetic command would clear a safety refusal without anyone being told.
+    """
+    if not registry.present:
+        return (
+            "no provider registry exists, so there is no installation to set a preference on",
+            ("enable a provider first; the preference can be set immediately afterwards",),
+        )
+    if not registry.usable:
+        return (
+            f"the provider registry is unusable ({registry.problem}), and rewriting it for a "
+            "rendering preference would discard both the registered providers and the recorded "
+            "original statusline command",
+            (
+                "run `doctor` to see the observed state",
+                f"repair or remove {registry.path.name} by hand",
+            ),
+        )
+    return (None, ())
+
+
+def plan_presentation(
+    registry: RegistryDocument, *, compact: bool | None = None, glyphs: bool | None = None
+) -> Plan:
+    """What changing the reader's presentation preference would do, without doing it.
+
+    `None` means leave that axis alone, so one knob can be set without stating
+    the other -- a user who only knows that their font renders emoji badly should
+    not have to decide about density to say so.
+
+    The two axes are resolved here into the single `mode` the compositor already
+    reads, rather than stored as two fields beside it: fields that must agree are
+    fields that can disagree, and the one that loses would be deciding how the
+    line renders.
+
+    Nothing else calls this. Upgrades in particular do not, which is what "do not
+    auto-rewrite user preferences on upgrade" amounts to in code: a stored
+    preference changes only when the user asks for it to.
+    """
+    refusal, remediation = _presentation_refusal(registry)
+    if refusal is not None:
+        return Plan(
+            operation="presentation",
+            settings_path=None,
+            ownership=None,
+            changes=(Change(ChangeKind.BLOCKED_UNKNOWN, PRESENTATION_KEY, refusal),),
+            fingerprint=None,
+            registry_path=registry.path,
+            registry_fingerprint=registry.fingerprint,
+            refusal=refusal,
+            remediation=remediation,
+        )
+
+    stored = _presentation_of(registry)
+    before = render.PresentationMode.parse(stored.get("mode"))
+    after = render.PresentationMode.for_axes(
+        compact=before.is_compact if compact is None else compact,
+        glyphs=before.uses_glyphs if glyphs is None else glyphs,
+    )
+    # Copied and updated rather than rebuilt, so `width_budget` and anything a
+    # later version puts here survive a change to a neighbouring key. Same rule
+    # as the settings file: we own `mode` and nothing else in this object.
+    presentation = dict(stored)
+    presentation["mode"] = after.value
+    registry_after = dict(registry.data)
+    registry_after[PRESENTATION_KEY] = presentation
+
+    changes = [
+        Change(
+            ChangeKind.UPDATE if "mode" in stored else ChangeKind.ADD,
+            f"registry.{PRESENTATION_KEY}.mode",
+            f"density {_DENSITY_WORDS[after.is_compact]}, "
+            f"icons {_ICON_WORDS[after.uses_glyphs]}",
+        )
+    ]
+    kept = [key for key in stored if key != "mode"]
+    if kept:
+        changes.append(
+            Change(
+                ChangeKind.PRESERVED_USER,
+                f"registry.{PRESENTATION_KEY}",
+                f"{len(kept)} other preference key(s) unchanged: {', '.join(kept)}",
+            )
+        )
+    providers = _provider_ids(registry)
+    if providers:
+        changes.append(
+            Change(
+                ChangeKind.PRESERVED_OTHER_PRODUCT,
+                "registry.providers",
+                f"{len(providers)} provider(s) left registered: {', '.join(providers)}",
+            )
+        )
+
+    return Plan(
+        operation="presentation",
+        settings_path=None,
+        ownership=None,
+        changes=tuple(changes),
+        fingerprint=None,
+        registry_path=registry.path,
+        registry_fingerprint=registry.fingerprint,
+        registry_after=None if registry_after == registry.data else registry_after,
+        notes=(
+            "the host configuration is not read or written by this operation, so it "
+            "cannot be affected by it",
+        ),
     )
 
 
