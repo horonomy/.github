@@ -767,7 +767,7 @@ def _enable_refusal(
                 "upgrade Horonom if this shape is newer than this version",
             ),
         )
-    if ownership is Ownership.DRIFTED:
+    if ownership is Ownership.DRIFTED and not adopt:
         return (
             "CONFIG_DRIFT: the statusLine carries a Horonom ownership marker but its "
             "command is not the compositor, so it was changed outside this lifecycle",
@@ -865,7 +865,14 @@ def _taking_the_slot(
             [Change(ChangeKind.ADD, STATUS_LINE_KEY, "created; no statusline was configured")],
         )
 
-    if ownership is Ownership.USER_OWNED:
+    # Drift joins this branch rather than the one below, and the distinction is
+    # the whole of what repairing drift means. The command on disk is one the user
+    # chose after the marker was written, so it is theirs in exactly the way an
+    # unmarked one is, and it is what must be recorded as upstream. Falling
+    # through to the "no proven record" path instead would take the slot and
+    # remember nothing -- discarding the command they had just chosen, which is
+    # the clobber this whole lifecycle exists to prevent.
+    if ownership in (Ownership.USER_OWNED, Ownership.DRIFTED):
         changes.append(
             Change(
                 ChangeKind.UPDATE,
@@ -874,6 +881,15 @@ def _taking_the_slot(
                 "upstream provider, run first, and its output kept at the front of the line",
             )
         )
+        if ownership is Ownership.DRIFTED and _upstream_of(registry) is not None:
+            changes.append(
+                Change(
+                    ChangeKind.UPDATE,
+                    "registry.upstream",
+                    "the previously recorded original is replaced by the command configured "
+                    "now, which is the one the user chose most recently",
+                )
+            )
         return dict(before), before["command"], False, changes
 
     # Only a proven prior install may hand down a recorded original. An adopted

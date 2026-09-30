@@ -1099,6 +1099,44 @@ class FailSafeTest(LifecycleCase):
         self.assertNotIn("upstream", self._registry())
         self.assertIsNone(self._registry()["lifecycle"]["created_status_line"])
 
+    def test_repairing_drift_records_the_command_the_user_chose_most_recently(self) -> None:
+        """The route the drift refusal advertises has to exist, and has to be safe.
+
+        `--adopt` on a drifted configuration is a user saying "take the slot back".
+        The command sitting in the file is one they chose after our marker was
+        written, so it is theirs, and recording it as upstream is the only outcome
+        that neither discards it nor resurrects the older command we remembered.
+        """
+        self.enable("fornax")
+        theirs = "/Users/founder/.claude/a different statusline.sh"
+        drifted = self._read()
+        drifted[lifecycle.STATUS_LINE_KEY]["command"] = theirs
+        self.write(drifted)
+        self.assertIs(
+            lifecycle.classify(lifecycle.read_settings(self.settings)),
+            lifecycle.Ownership.DRIFTED,
+        )
+
+        plan = self.plan_enable("circinus", adopt=True)
+        self.assertIsNone(plan.refusal)
+        lifecycle.apply(plan)
+
+        # Not the command recorded before the drift: that one stopped being their
+        # statusline the moment they changed it.
+        self.assertEqual(self._registry()["upstream"]["command"], theirs)
+        self.assertEqual(
+            lifecycle.classify(lifecycle.read_settings(self.settings)),
+            lifecycle.Ownership.HORONOM_OWNED,
+        )
+        self.assertTrue(
+            any(change.target == "registry.upstream" for change in plan.changes),
+            "replacing the recorded original is a disclosed change, not a silent one",
+        )
+        # And the whole point of repairing rather than refusing forever: uninstall
+        # now puts *their* command back.
+        self._uninstall()
+        self.assertEqual(self._read()[lifecycle.STATUS_LINE_KEY]["command"], theirs)
+
 
 class MalformedConfigTest(LifecycleCase):
     MALFORMED = (
