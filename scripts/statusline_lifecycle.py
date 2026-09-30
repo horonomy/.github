@@ -2009,6 +2009,19 @@ def explain(
 
     parsed = compositor.parse_registry(registry.data or empty_registry())
     details = _explain_commands(registry)
+    registered = {entry.provider for entry in parsed.providers}
+    # What a reader has in front of them is the line, and the line advertises
+    # segment keys like `libra.estimate`. Refusing that -- truthfully, because no
+    # provider is named after a whole key -- sent them to `list` to work out a
+    # name they were never shown. The provider half of a segment key is the
+    # answer, so accept it and say that is what was done.
+    if provider is not None and provider not in registered and "." in provider:
+        head = provider.split(".", 1)[0]
+        if head in registered:
+            report["notes"].append(
+                f"{provider!r} is a segment key, not a provider; decoding {head!r}, which owns it"
+            )
+            provider = head
     for entry in parsed.providers:
         if provider is not None and entry.provider != provider:
             continue

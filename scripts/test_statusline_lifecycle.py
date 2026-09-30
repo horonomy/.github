@@ -2353,6 +2353,30 @@ class ExplainCommandLineTest(ExplainCase):
         self.assertEqual(report["providers"], [])
         self.assertIn("no provider named 'eltanin'", " ".join(report["notes"]))
 
+    def test_a_segment_key_off_the_line_decodes_its_provider(self) -> None:
+        """The key a reader actually has is the one the line showed them.
+
+        Segments carry `explain_key` values like `fornax.verification`, so that is
+        what gets typed here. Answering "no provider named 'fornax.verification'"
+        was true and useless: it sent the reader to `list` to discover a name they
+        were never shown, to reach documentation that was already reachable.
+        """
+        self.register(self.status(segments=(segment("verification", "ok", "Verified"),)))
+
+        report = self.explain(provider="fornax.verification")
+
+        self.assertEqual([p["provider"] for p in report["providers"]], ["fornax"])
+        self.assertIn("is a segment key", " ".join(report["notes"]))
+
+    def test_a_dotted_name_with_no_provider_behind_it_is_still_refused(self) -> None:
+        # The split must not become a way to match anything with a dot in it.
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+
+        report = self.explain(provider="eltanin.estimate")
+
+        self.assertEqual(report["providers"], [])
+        self.assertIn("no provider named 'eltanin.estimate'", " ".join(report["notes"]))
+
     def test_the_subcommand_writes_nothing_and_succeeds(self) -> None:
         self.register(self.status(segments=(segment("v", "unknown", "Verification"),)))
         before = self.settings.read_bytes()
