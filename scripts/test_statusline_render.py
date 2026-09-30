@@ -1298,5 +1298,64 @@ class TestNoUnknownFieldIsRendered(unittest.TestCase):
             segment(label="/Users/someone/secrets/config.json")
 
 
+class TestLegendCompleteness(unittest.TestCase):
+    """Every token the line can show has a meaning, and vice versa.
+
+    Both directions matter and they fail differently. A token with no meaning is
+    a reader looking up the one symbol that is not in the key; a meaning with no
+    token is dead prose that will eventually describe something the line stopped
+    doing.
+    """
+
+    def test_state_meanings_cover_exactly_the_contract_states(self):
+        self.assertEqual(
+            set(render.STATE_MEANINGS), {member.value for member in contract.SegmentState}
+        )
+
+    def test_scope_meanings_cover_exactly_the_contract_scopes(self):
+        self.assertEqual(set(render.SCOPE_MEANINGS), {member.value for member in contract.Scope})
+
+    def test_confidence_meanings_cover_exactly_the_contract_subjects(self):
+        self.assertEqual(
+            set(render.CONFIDENCE_SUBJECT_MEANINGS),
+            {member.value for member in contract.ConfidenceSubject},
+        )
+
+    def test_confidence_meanings_match_the_phrasings_that_are_printed(self):
+        # The subject tables decide what the line says; a meaning keyed to a
+        # subject the renderer has no phrasing for would explain a token nobody
+        # ever sees.
+        self.assertEqual(
+            set(render.CONFIDENCE_SUBJECT_MEANINGS), set(render.CONFIDENCE_SUBJECT_TEXT)
+        )
+
+    def test_no_meaning_merely_restates_its_own_token(self):
+        # The defect this whole surface exists to fix is a token that means
+        # nothing to a reader. Glossing `attention` as "attention" reproduces it.
+        for table, tokens in (
+            (render.STATE_MEANINGS, render.STATE_TEXT),
+            (render.SCOPE_MEANINGS, render.SCOPE_TEXT),
+        ):
+            for key, meaning in table.items():
+                with self.subTest(key=key):
+                    self.assertGreater(len(meaning.split()), 3)
+                    self.assertNotEqual(meaning.strip().lower(), tokens[key].strip().lower())
+                    self.assertNotEqual(meaning.strip().lower(), key)
+
+    def test_unknown_is_explained_as_not_being_all_clear(self):
+        # The one meaning with a specific job. `unknown` is the state a reader is
+        # most likely to take for good news, and the contract is explicit that it
+        # is never a stand-in for `ok`.
+        self.assertIn("all clear", render.STATE_MEANINGS["unknown"])
+
+    def test_host_scope_is_explained_as_reaching_other_sessions(self):
+        # Host-wide state read as session-scoped is the concrete misreading
+        # `scope_marker` exists to prevent, so the key has to say so in words.
+        self.assertIn("other", render.SCOPE_MEANINGS["host"])
+
+    def test_a_preflight_confidence_is_explained_as_not_a_risk_level(self):
+        self.assertIn("Not a risk level", render.CONFIDENCE_SUBJECT_MEANINGS["preflight_estimate"])
+
+
 if __name__ == "__main__":
     unittest.main()
