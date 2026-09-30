@@ -1745,17 +1745,50 @@ class TestComposeUpstreamPreservation(unittest.TestCase):
         out = render.compose(UPSTREAM, (fornax_status(),), width_budget=1)
         self.assertEqual(out, UPSTREAM)
 
-    def test_the_upstream_text_is_divided_by_the_strongest_separator(self):
+    def test_a_summary_block_is_divided_by_the_strongest_separator(self):
         for mode in MODES:
             with self.subTest(mode=mode):
-                out = render.compose(UPSTREAM, (fornax_status(),), mode=mode)
+                out = render.compose(UPSTREAM, (fornax_status(),), mode=mode, depth=CLEAR)
                 self.assertTrue(out.startswith(UPSTREAM + render.UPSTREAM_SEPARATORS[mode]))
+
+    def test_a_detail_block_begins_on_the_row_after_the_upstream_output(self):
+        # The vertical layout's answer to the same question. A product line that
+        # shared a row with the user's own output would not be a product line.
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                out = render.compose(UPSTREAM, (fornax_status(),), mode=mode, depth=DETAIL)
+                self.assertTrue(out.startswith(UPSTREAM + render.ROW_SEPARATOR))
+                self.assertNotIn(render.UPSTREAM_SEPARATORS[mode], out)
+
+    def test_an_upstream_trailing_newline_is_used_rather_than_doubled(self):
+        # Their command ended the row; ours does not need to end it again, and a
+        # blank row between the two would read as a gap in the output.
+        out = render.compose(UPSTREAM + "\n", (fornax_status(),), depth=DETAIL)
+        self.assertTrue(out.startswith(UPSTREAM + "\n"))
+        self.assertNotIn("\n\n", out)
+
+    def test_every_upstream_row_is_preserved_exactly(self):
+        # A command that printed three rows meant to print three rows. Ours are
+        # appended after the last of them, not woven into them.
+        upstream = "row one\n  row two indented\nrow three"
+        out = render.compose(upstream, (fornax_status(), circinus_status()), depth=DETAIL)
+        rows = out.split(render.ROW_SEPARATOR)
+        self.assertEqual(rows[: len(upstream.split("\n"))], upstream.split("\n"))
 
 
 class TestComposeDegradation(unittest.TestCase):
+    """The horizontal ladder: what one shared line does as it runs out of room.
+
+    Pinned to `CLEAR`, the depth that layout belongs to. `DETAIL` spends rows
+    rather than shedding readings, and has its own sweep in
+    `TestDetailLayoutUnderPressure` — including the narrow budgets at which it
+    gives the problem back to this ladder.
+    """
+
     ALL = (fornax_status(), circinus_status(), libra_status())
     HIDDEN = re.compile(r"\[\+(\d+) more\]")
     MAX_BUDGET = 240
+    DEPTH = CLEAR
     _sweep = None
 
     @classmethod
@@ -1766,7 +1799,9 @@ class TestComposeDegradation(unittest.TestCase):
         for mode in MODES:
             separator = render.UPSTREAM_SEPARATORS[mode]
             for budget in range(0, cls.MAX_BUDGET):
-                out = render.compose(UPSTREAM, cls.ALL, mode=mode, width_budget=budget)
+                out = render.compose(
+                    UPSTREAM, cls.ALL, mode=mode, width_budget=budget, depth=cls.DEPTH
+                )
                 tail = out[len(UPSTREAM):]
                 cls._sweep.append((mode, budget, out, tail[len(separator):] if tail else ""))
 
@@ -1838,7 +1873,13 @@ class TestComposeDegradation(unittest.TestCase):
                 )
 
     def test_a_wide_budget_shows_every_provider_with_nothing_hidden(self):
-        out = render.compose(UPSTREAM, self.ALL, mode=render.PresentationMode.BALANCED, width_budget=400)
+        out = render.compose(
+            UPSTREAM,
+            self.ALL,
+            mode=render.PresentationMode.BALANCED,
+            width_budget=400,
+            depth=self.DEPTH,
+        )
         block = self.block_of(out, render.PresentationMode.BALANCED)
         for name in ("Fornax", "Circinus", "Libra Governor"):
             self.assertIn(name, block)
@@ -1853,7 +1894,12 @@ class TestComposeDegradation(unittest.TestCase):
             for mode, _, _, block in self.each_budget()
             if block and mode is render.PresentationMode.BALANCED
         )
-        self.assertIn(render.STATE_TEXT["critical"], narrowest)
+        # Asserted as the marker rather than the word: which candidate mode the
+        # narrowest rung lands in is the ladder's business, and only the text modes
+        # spell the state out. The claim is that the state survived, not how.
+        self.assertIn(
+            render.state_marker("critical", render.PresentationMode.BALANCED), narrowest
+        )
         self.assertIn("Awa", narrowest)
         for other in ("Verified", "Shadow mode", "Preflight"):
             self.assertNotIn(other, narrowest)
@@ -1868,7 +1914,9 @@ class TestComposeDegradation(unittest.TestCase):
                 )
 
     def test_no_budget_means_no_degradation(self):
-        out = render.compose(UPSTREAM, self.ALL, mode=render.PresentationMode.BALANCED)
+        out = render.compose(
+            UPSTREAM, self.ALL, mode=render.PresentationMode.BALANCED, depth=self.DEPTH
+        )
         block = self.block_of(out, render.PresentationMode.BALANCED)
         self.assertNotRegex(block, self.HIDDEN)
         self.assertIn("Fornax", block)
@@ -2182,10 +2230,16 @@ class TestLegendTokens(unittest.TestCase):
                 self.assertIn(row.token, rendered)
 
     def test_the_divider_token_appears_between_an_upstream_line_and_the_block(self):
+        # At `CLEAR`, where the block shares the user's row and therefore needs a
+        # token to divide it. The key is a vocabulary — "if you see this, it means
+        # that" — so a `DETAIL` reader whose block is divided by a row break
+        # instead is not being told something false; they are being told what the
+        # divider would mean. The row-break form is asserted in
+        # `TestComposeUpstreamPreservation`.
         for mode in MODES:
             row = next(r for r in self.rows(mode, "markers") if r.name == "divider")
             with self.subTest(mode=mode):
-                composed = render.compose("mine", (status(),), mode=mode)
+                composed = render.compose("mine", (status(),), mode=mode, depth=CLEAR)
                 self.assertIn(f"mine{render.UPSTREAM_SEPARATORS[mode]}", composed)
                 self.assertIn(row.token, composed)
 
