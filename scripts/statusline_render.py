@@ -956,6 +956,12 @@ STATE_MEANINGS = {
     ),
 }
 
+# Named, unlike the other three marker meanings in the key below, because this is
+# the one a reader may meet on a single reading rather than on the line as a
+# whole -- so a surface explaining one segment has to be able to quote it, and a
+# second copy of this particular sentence is the copy that must not drift.
+HYPOTHETICAL_MEANING = "what a policy would have done. Nothing was blocked and nothing was stopped"
+
 SCOPE_MEANINGS = {
     "host": "everything on this machine, including sessions other than this one",
     "session": "this Claude Code session only",
@@ -1058,12 +1064,7 @@ def legend(mode: PresentationMode) -> tuple[LegendSection, ...]:
         LegendSection(
             "markers the host adds",
             (
-                LegendEntry(
-                    f"[{HYPOTHETICAL_TEXT}]",
-                    "hypothetical",
-                    "what a policy would have done. Nothing was blocked and nothing "
-                    "was stopped",
-                ),
+                LegendEntry(f"[{HYPOTHETICAL_TEXT}]", "hypothetical", HYPOTHETICAL_MEANING),
                 LegendEntry(
                     _hidden_marker(_LEGEND_HIDDEN),
                     "hidden",
