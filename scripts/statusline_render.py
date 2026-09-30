@@ -62,15 +62,24 @@ class PresentationMode(enum.Enum):
         statusline is a worse outcome than an ignored preference, and unlike
         the provider contract's `scope` there is no wrong-answer risk here —
         every mode conveys the same semantics.
+
+        The fallback is exactly why the accepted spellings are generous. It
+        resolves to a glyph mode, so a near-miss on a *text* preference answers a
+        request for plain text with emoji — the one failure that is visibly
+        broken rather than merely unwanted. A hyphen instead of an underscore
+        must not cost a reader that.
         """
         if default is None:
             default = cls.BALANCED
         if isinstance(value, cls):
             return value
         if isinstance(value, str):
+            name = value.strip().lower().replace("-", "_")
             for member in cls:
-                if member.value == value.strip().lower():
+                if member.value == name:
                     return member
+            if name in _MODE_ALIASES:
+                return _MODE_ALIASES[name]
         return default
 
     @property
@@ -97,6 +106,12 @@ _MODE_AXES = {
     PresentationMode.PLAIN: (False, False),
     PresentationMode.COMPACT_PLAIN: (True, False),
 }
+
+# Names that are not wire values but mean one. `balanced_plain` is what naming
+# the two axes independently produces for the mode whose value is historically
+# `plain`; both spellings must resolve, because a reader who writes the
+# symmetric one is asking for text and the fallback would give them glyphs.
+_MODE_ALIASES = {"balanced_plain": PresentationMode.PLAIN}
 
 
 _ZWJ = "\u200d"  # ZERO WIDTH JOINER

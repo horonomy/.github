@@ -161,6 +161,18 @@ class TestPresentationModeParse(unittest.TestCase):
             render.PresentationMode.parse("  COMPACT "), render.PresentationMode.COMPACT
         )
 
+    def test_the_symmetric_name_for_plain_resolves_to_it(self):
+        # Not an alias for convenience: the fallback is a glyph mode, so a text
+        # preference that misses would render emoji on a terminal that cannot.
+        self.assertIs(
+            render.PresentationMode.parse("balanced_plain"), render.PresentationMode.PLAIN
+        )
+
+    def test_a_hyphen_is_accepted_where_a_member_uses_an_underscore(self):
+        for spelling in ("compact-plain", "balanced-plain"):
+            with self.subTest(spelling=spelling):
+                self.assertFalse(render.PresentationMode.parse(spelling).uses_glyphs)
+
     def test_unrecognised_input_falls_back_rather_than_raising(self):
         for value in ("", "verbose", None, 7, [], object()):
             self.assertIs(render.PresentationMode.parse(value), render.PresentationMode.BALANCED)
