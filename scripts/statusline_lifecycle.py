@@ -2499,11 +2499,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     shared(uninstall)
 
-    # Two independent flags rather than one `--mode compact_plain`, because the
-    # stored value is a resolved pair and a user thinking about their terminal is
-    # not. Either may be omitted, which is what makes "my font is bad" expressible
-    # on its own; `presentation` with neither is a legitimate no-op that prints
-    # the current setting.
+    # Three independent flags rather than one `--mode compact_plain_detail`,
+    # because the stored value is a resolved pair plus a depth and a user thinking
+    # about their terminal is not. Any may be omitted, which is what makes "my font
+    # is bad" expressible on its own; `presentation` with none of them is a
+    # legitimate no-op that prints the current setting.
     presentation = subcommands.add_parser(
         "presentation", help="choose how the line is rendered for this reader"
     )
@@ -2517,6 +2517,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("emoji", "text"),
         dest="icon_style",
         help="text is for terminals whose font or width handling makes emoji unreliable",
+    )
+    presentation.add_argument(
+        "--depth",
+        choices=tuple(member.value for member in render.InformationDepth),
+        help="clear is one summary per product; detail adds supporting context "
+        "(unchanged if omitted)",
     )
     shared(presentation, settings=False)
 
@@ -2591,6 +2597,12 @@ def main(argv: list[str] | None = None, stdout: object = None) -> int:
             read_registry(),
             compact=_DENSITY_FLAG.get(options.density),
             glyphs=_ICON_FLAG.get(options.icon_style),
+            # Parsed strictly here rather than through `InformationDepth.parse`:
+            # argparse has already restricted this to a known value, and a lenient
+            # parse would silently turn a future misspelling into `clear`.
+            depth=(
+                None if options.depth is None else render.InformationDepth(options.depth)
+            ),
         )
         return _run_plan(plan, options, stream)
 
