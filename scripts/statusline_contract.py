@@ -189,6 +189,36 @@ _CONFIDENCE_SUBJECT_LABEL = {
 }
 
 
+class ClearRole(enum.Enum):
+    """What part a segment plays in its product's one-line executive summary.
+
+    A Clear-mode reading is not Detail with fields removed; it is the answer to
+    "if this product gets one short phrase, which of its facts earns it". Only
+    the product knows that. A task id and a delivery estimate are both `neutral`
+    facts of equal severity, but one is an operator's whole reason to look at the
+    line and the other is noise, and no amount of host-side severity arithmetic
+    can tell them apart. So the judgement is declared here rather than inferred,
+    and the host owns only the ladder that consumes it — which keeps Clear a
+    single shared code path instead of one branch per product.
+
+    Declaring it on the *segment* rather than shipping a per-product table in the
+    host is what makes that true for a product the host has never heard of. The
+    host's fallback for an undeclared segment (`statusline_render.clear_role`)
+    exists for providers written before this field, not as the intended path.
+
+    `EXCEPTION` is the top rung and deliberately narrow: the product is broken,
+    unavailable, or genuinely waiting on the operator. It is not "the worst thing
+    currently true" — a warn-state budget posture is still a posture, and
+    promoting it to an exception is how a line starts claiming work is blocked
+    when nothing is.
+    """
+
+    EXCEPTION = "exception"
+    POSTURE = "posture"
+    VITAL = "vital"
+    SUPPORTING = "supporting"
+
+
 class HostCapability(enum.Enum):
     """Whether a given agent host tool can support a composed statusline.
 
@@ -375,6 +405,42 @@ MAX_LABEL_CHARS = 48
 _LABEL_EXTRA_CHARS = frozenset(" .,'-—()%+?!≤≥")
 
 
+# A digit immediately before a percent sign, optionally spaced as some locales
+# write it. Matched on the label as a whole rather than on tokens, because the
+# defect is about the label having no noun anywhere, not about adjacency.
+_PERCENTAGE_RE = re.compile(r"\d\s*%")
+
+# Any run of letters long enough to be a word. Two rather than one, so a stray
+# initial or a unit letter does not pass as the missing noun.
+_LABEL_WORD_RE = re.compile(r"[A-Za-z]{2,}")
+
+
+def require_percentage_axis(value: str, field: str) -> str:
+    """Refuse a percentage that never says what it is a percentage *of*.
+
+    `62%` is the budget-display defect in its purest form: the reader cannot
+    tell whether 62 percent has been used or 62 percent remains, and those are
+    opposite readings of the same glanced-at number. The fix is not a longer
+    label but a named axis — `62% budget used` or `38% budget left` — and this
+    is the same rule as `count` needing `count_label` and `duration_seconds`
+    needing `duration_label`, applied to the one quantity that can be embedded
+    in a label instead of carried in its own field.
+
+    Deliberately a "has a word" test rather than an allowlist of axis words. An
+    allowlist would have rejected `97% verified`, which is a perfectly
+    unambiguous label, and every such rejection pushes a product towards
+    phrasing that satisfies the validator instead of the reader. What cannot be
+    tolerated is a number with no noun at all, and that is exactly what this
+    catches.
+    """
+    if _PERCENTAGE_RE.search(value) and not _LABEL_WORD_RE.search(value):
+        raise ContractViolation(
+            f"{field} contains a percentage with no word saying what it measures; "
+            "a bare 62% could mean used or left, which are opposite readings"
+        )
+    return value
+
+
 def require_label(
     value: object, field: str = "label", max_chars: int = MAX_LABEL_CHARS
 ) -> str:
@@ -532,8 +598,16 @@ def assert_privacy_safe(value: str, field: str) -> str:
 def require_safe_label(
     value: object, field: str, max_chars: int = MAX_LABEL_CHARS
 ) -> str:
-    """Validate a human label for both shape and privacy."""
-    return assert_privacy_safe(require_label(value, field, max_chars), field)
+    """Validate a human label for shape, privacy, and unit honesty.
+
+    The percentage rule is applied here rather than only to `segment.label`
+    because a bare number is ambiguous wherever it is rendered, and this is the
+    one function every provider-emitted human string passes through. Adding it
+    to a single field would have left the same defect reachable via a reason or
+    a fallback rendering.
+    """
+    checked = assert_privacy_safe(require_label(value, field, max_chars), field)
+    return require_percentage_axis(checked, field)
 
 
 # A segment is one fact. A provider showing more than a handful of them is
@@ -598,6 +672,30 @@ class Segment:
     hypothetical: bool = False
     explain_key: str | None = None
     order_hint: int = 0
+    # Optional because it arrived after the first three providers shipped, and a
+    # segment that does not declare a part still has to render. `None` means "the
+    # provider has not judged this", which the host answers with a documented
+    # default -- not with a guess dressed up as a declaration.
+    clear_role: ClearRole | None = None
+    # How long this reading stays worth acting on. Declared by the provider for
+    # the same reason `clear_role` is: only the product knows whether five
+    # minutes is stale. A shared host guess would be one number applied to a
+    # security verification and a policy decision alike.
+    fresh_for_seconds: int | None = None
+
+    @property
+    def is_stale(self) -> bool:
+        """Whether this reading has outlived the horizon its provider declared.
+
+        `False` when either half is missing, and deliberately so: a segment that
+        declared no horizon has made no claim to be judged against, and treating
+        silence as staleness would hide readings whose provider never said they
+        expire. The contract refuses the one combination that would make this
+        answer a guess -- a horizon with no age.
+        """
+        if self.fresh_for_seconds is None or self.age_seconds is None:
+            return False
+        return self.age_seconds > self.fresh_for_seconds
 
     def __post_init__(self) -> None:
         require_token(self.key, "segment.key")
@@ -618,6 +716,29 @@ class Segment:
         if self.explain_key is not None:
             require_explain_key(self.explain_key)
         require_bounded_int(self.order_hint, "segment.order_hint", MAX_ORDER_HINT)
+        if self.clear_role is not None and not isinstance(self.clear_role, ClearRole):
+            raise ContractViolation("segment.clear_role must be a ClearRole")
+        self._validate_freshness()
+
+    def _validate_freshness(self) -> None:
+        """A horizon with nothing to measure against cannot be judged, so refuse it.
+
+        Same shape as the count and duration rules above, and the same reason: a
+        field that can only be read in combination with another must not be
+        settable alone. The specific failure is that the host would have to pick
+        between two wrong answers -- treat an unmeasurable reading as fresh and
+        show a possibly stale secondary, or treat it as stale and hide a good
+        one -- and neither is a choice the host is entitled to make silently.
+        """
+        if self.fresh_for_seconds is not None:
+            require_bounded_int(
+                self.fresh_for_seconds, "segment.fresh_for_seconds", MAX_AGE_SECONDS
+            )
+            if self.age_seconds is None:
+                raise ContractViolation(
+                    "segment.fresh_for_seconds requires segment.age_seconds; a "
+                    "freshness horizon with no age cannot be judged either way"
+                )
 
     def _validate_confidence(self) -> None:
         """A confidence without its subject reads as risk; forbid the pair split."""
@@ -934,7 +1055,7 @@ def _segment_to_wire(segment: Segment) -> dict:
         value = getattr(segment, name)
         if value is not None:
             payload[name] = value
-    for name in ("age_seconds", "count", "total", "duration_seconds"):
+    for name in ("age_seconds", "count", "total", "duration_seconds", "fresh_for_seconds"):
         value = getattr(segment, name)
         if value is not None:
             payload[name] = value
@@ -946,6 +1067,8 @@ def _segment_to_wire(segment: Segment) -> dict:
         payload["hypothetical"] = True
     if segment.order_hint:
         payload["order_hint"] = segment.order_hint
+    if segment.clear_role is not None:
+        payload["clear_role"] = segment.clear_role.value
     return payload
 
 
@@ -1021,6 +1144,27 @@ def _parse_enum_lenient(enum_cls: type, value: object, field: str, unknown):
     return unknown
 
 
+def _parse_clear_role(value: object) -> ClearRole | None:
+    """Parse an optional `clear_role`, treating anything unrecognised as undeclared.
+
+    A third parsing policy beside the strict and lenient ones above, because
+    neither is right here. Strict would reject a whole provider payload over a
+    presentation hint, which is a health claim lost to a cosmetic field. Lenient
+    needs an `unknown` member to degrade to, and this enum deliberately has none:
+    every member is a real editorial judgement, so a made-up one would either
+    promote a routine reading to an exception or hide one that matters.
+
+    Undeclared is already a state the host handles correctly, with a documented
+    default, so an unrecognised value resolves to exactly that.
+    """
+    if value is None:
+        return None
+    for member in ClearRole:
+        if member.value == value:
+            return member
+    return None
+
+
 def _segment_from_wire(payload: object, index: int) -> Segment:
     """Parse one segment, ignoring fields this contract version does not know."""
     if not isinstance(payload, dict):
@@ -1061,6 +1205,8 @@ def _segment_from_wire(payload: object, index: int) -> Segment:
         hypothetical=bool(payload.get("hypothetical", False)),
         explain_key=payload.get("explain_key"),
         order_hint=payload.get("order_hint", 0),
+        clear_role=_parse_clear_role(payload.get("clear_role")),
+        fresh_for_seconds=payload.get("fresh_for_seconds"),
     )
 
 

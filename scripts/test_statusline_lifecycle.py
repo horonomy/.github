@@ -712,14 +712,13 @@ class DisableTest(LifecycleCase):
         self.assertEqual(self.settings.read_bytes(), settings_before)
 
 
-class PresentationTest(LifecycleCase):
-    """The reader's own rendering preference, which lives in our registry.
+class PresentationCase(LifecycleCase):
+    """Shared ground for the two axes of the reader's presentation preference.
 
-    Two properties carry the weight here. It must survive every other operation,
-    since a preference that is quietly reset by the next `enable` is not a
-    preference; and the value written must be one the compositor honours, which
-    the compositor's deliberate fall-back on an unrecognised mode would otherwise
-    hide behind a line that renders perfectly in the wrong style.
+    Both axes live in the same registry object and are written by the same
+    operation, so they are exercised against one fixture -- but in separate
+    classes, because a subclass would re-run the other axis's cases without
+    asserting anything new about its own.
     """
 
     def plan_presentation(self, **kwargs) -> lifecycle.Plan:
@@ -734,6 +733,21 @@ class PresentationTest(LifecycleCase):
     def effective(self) -> render.PresentationMode:
         """The mode the compositor will actually render in."""
         return compositor.load_registry(lifecycle.read_registry(self.home).path).mode
+
+    def effective_depth(self) -> render.InformationDepth:
+        """The depth the compositor will actually render at."""
+        return compositor.load_registry(lifecycle.read_registry(self.home).path).depth
+
+
+class PresentationTest(PresentationCase):
+    """The reader's own rendering preference, which lives in our registry.
+
+    Two properties carry the weight here. It must survive every other operation,
+    since a preference that is quietly reset by the next `enable` is not a
+    preference; and the value written must be one the compositor honours, which
+    the compositor's deliberate fall-back on an unrecognised mode would otherwise
+    hide behind a line that renders perfectly in the wrong style.
+    """
 
     def test_every_preference_this_can_write_is_one_the_compositor_honours(self) -> None:
         self.enable("fornax")
@@ -877,6 +891,169 @@ class PresentationTest(LifecycleCase):
         # litter, not a courtesy.
         self.assertFalse(lifecycle.read_registry(self.home).present)
         self.assertEqual(self._read(), self.original)
+
+
+class PresentationDepthTest(PresentationCase):
+    """The information-depth half of the same preference.
+
+    Shares the fixture above deliberately: depth is stored in the same object,
+    written by the same operation and must survive the same events, so anything
+    that is true of the mode is shown true of this beside it rather than in a
+    fixture where only depth exists.
+    """
+
+    def test_every_depth_this_can_write_is_one_the_compositor_honours(self) -> None:
+        self.enable("fornax")
+        for depth in render.InformationDepth:
+            with self.subTest(depth=depth):
+                self.presentation(depth=depth)
+                # Read back through the compositor's parser for the same reason the
+                # mode is: it falls back rather than failing, so a spelling only
+                # this module understands would show up as a line rendered at the
+                # depth the reader did not ask for, with nothing reporting it.
+                self.assertIs(self.effective_depth(), depth)
+
+    def test_depth_can_be_set_without_restating_the_rendering_axes(self) -> None:
+        self.enable("fornax")
+        self.presentation(compact=True, glyphs=False)
+
+        self.presentation(depth=render.InformationDepth.DETAIL)
+
+        # The three axes are independent: asking for supporting context back is not
+        # a statement about density or about the reader's font.
+        self.assertIs(self.effective_depth(), render.InformationDepth.DETAIL)
+        self.assertEqual(self.effective(), render.PresentationMode.COMPACT_PLAIN)
+
+    def test_a_rendering_change_leaves_a_stored_depth_alone(self) -> None:
+        self.enable("fornax")
+        self.presentation(depth=render.InformationDepth.DETAIL)
+
+        self.presentation(glyphs=False)
+
+        self.assertIs(self.effective_depth(), render.InformationDepth.DETAIL)
+
+    def test_it_switches_back_as_readily_as_it_switched(self) -> None:
+        # A one-way door is not a preference. Detail is the mode a reader turns on
+        # to diagnose something, which means the common case is turning it off
+        # again afterwards.
+        self.enable("fornax")
+        self.presentation(depth=render.InformationDepth.DETAIL)
+        self.presentation(depth=render.InformationDepth.CLEAR)
+
+        self.assertIs(self.effective_depth(), render.InformationDepth.CLEAR)
+
+    def test_a_fresh_installation_starts_clear(self) -> None:
+        # Nobody has asked for anything yet, and the first line a new user sees
+        # should be the summary rather than the diagnostic.
+        self.enable("fornax")
+
+        self.assertIs(self.effective_depth(), render.InformationDepth.CLEAR)
+
+    def test_setting_the_depth_already_in_force_writes_nothing(self) -> None:
+        self.enable("fornax")
+        self.presentation(depth=render.InformationDepth.DETAIL)
+        before = lifecycle.read_registry(self.home).path.read_bytes()
+
+        plan = self.plan_presentation(depth=render.InformationDepth.DETAIL)
+        result = lifecycle.apply(plan)
+
+        self.assertFalse(plan.mutates)
+        self.assertFalse(result.registry_written)
+        self.assertEqual(lifecycle.read_registry(self.home).path.read_bytes(), before)
+        self.assertIn("already detail", str(plan.to_json()))
+
+    def test_each_axis_is_reported_as_its_own_change(self) -> None:
+        # A user who changed only the depth should not have to read a density they
+        # did not touch to work out whether it moved.
+        self.enable("fornax")
+        plan = self.plan_presentation(depth=render.InformationDepth.DETAIL)
+
+        targets = {change.target for change in plan.changes}
+
+        self.assertIn(f"registry.{lifecycle.PRESENTATION_KEY}.mode", targets)
+        self.assertIn(f"registry.{lifecycle.PRESENTATION_KEY}.depth", targets)
+
+    def test_a_depth_change_does_not_touch_the_host_settings_file(self) -> None:
+        # The whole point of storing this in our own registry. Which fields of a
+        # line are visible is not a fact about how the host launches a command, so
+        # there is nothing in their file to change -- and a presentation switch
+        # that edited it would be editing configuration we do not own to do
+        # something it has no bearing on.
+        self.enable("fornax")
+        before = self.settings.read_bytes()
+
+        with self.deny_reads(self.settings):
+            self.presentation(depth=render.InformationDepth.DETAIL)
+
+        self.assertIs(self.effective_depth(), render.InformationDepth.DETAIL)
+        self.assertEqual(self.settings.read_bytes(), before)
+
+    def test_switching_depth_writes_the_registry_and_nothing_else(self) -> None:
+        # "Takes effect on the next render": no daemon restarted, no provider
+        # reinstalled, no binary rebuilt. Stated here as the file-level fact that
+        # makes those true -- one file is written, and it is ours.
+        self.enable("fornax")
+        registry_path = lifecycle.read_registry(self.home).path
+
+        def others() -> dict:
+            return {
+                path: path.read_bytes()
+                for path in self.root.rglob("*")
+                if path.is_file() and path != registry_path
+            }
+
+        before = others()
+        result = self.presentation(depth=render.InformationDepth.DETAIL)
+
+        self.assertTrue(result.registry_written)
+        self.assertFalse(result.settings_written)
+        # Contents *and* the set of paths, so a file appearing counts as well as a
+        # file changing. A preference switch that dropped a lock, a marker or a
+        # queued job somewhere is doing more than recording a preference.
+        self.assertEqual(others(), before)
+
+    def test_a_registered_provider_is_not_re_run_to_change_the_depth(self) -> None:
+        # A preference change that re-ran the providers would be paying a render's
+        # cost to decide how the next render looks.
+        self.enable("fornax")
+        with unittest.mock.patch.object(
+            compositor, "run_provider", side_effect=AssertionError("provider run")
+        ):
+            self.presentation(depth=render.InformationDepth.DETAIL)
+
+        self.assertIs(self.effective_depth(), render.InformationDepth.DETAIL)
+
+    def test_other_keys_survive_a_depth_change(self) -> None:
+        self.enable("fornax")
+        registry = self._registry()
+        registry[lifecycle.PRESENTATION_KEY] = {"width_budget": 96, "futureUnknownKey": "keep-me"}
+        lifecycle.read_registry(self.home).path.write_bytes(lifecycle.serialize(registry))
+
+        self.presentation(depth=render.InformationDepth.DETAIL)
+
+        self.assertEqual(self.stored()["width_budget"], 96)
+        self.assertEqual(self.stored()["futureUnknownKey"], "keep-me")
+        self.assertEqual(self.stored()["depth"], render.InformationDepth.DETAIL.value)
+
+    def test_enabling_another_provider_preserves_the_depth(self) -> None:
+        self.enable("fornax")
+        self.presentation(depth=render.InformationDepth.DETAIL)
+
+        self.enable("circinus")
+
+        # "Do not silently change an explicit existing presentation preference" --
+        # which in code means no operation but the presentation one may move it.
+        self.assertIs(self.effective_depth(), render.InformationDepth.DETAIL)
+
+    def test_a_depth_this_version_cannot_read_falls_back_to_the_narrower_one(self) -> None:
+        self.enable("fornax")
+        registry = self._registry()
+        registry[lifecycle.PRESENTATION_KEY] = {"depth": "forensic"}
+        lifecycle.read_registry(self.home).path.write_bytes(lifecycle.serialize(registry))
+
+        # A near miss on a depth must not answer with *more* information than was
+        # asked for: the extra half is the half that could be over-disclosure.
+        self.assertIs(self.effective_depth(), render.InformationDepth.CLEAR)
 
 
 class RestorationTest(LifecycleCase):
@@ -1724,6 +1901,36 @@ class DoctorTest(LifecycleCase):
         self.assertFalse(report["mutation_outlook"]["enabling_another_provider_changes_settings"])
         self.assertTrue(report["mutation_outlook"]["disabling_one_provider_changes_settings"])
 
+    def test_it_says_which_information_depth_the_line_is_at(self) -> None:
+        # The question behind most "why does my line not say why" reports. At
+        # `clear` the missing field is a setting, not a failure, and the diagnostic
+        # is where a reader looks to be told which of the two it is.
+        self.enable("fornax")
+
+        report = lifecycle.doctor(self.settings, self.home)
+
+        self.assertEqual(report["presentation"]["depth"], render.InformationDepth.CLEAR.value)
+        self.assertEqual(report["presentation"]["depth_source"], "the default")
+        printed = lifecycle._describe_doctor(report)
+        self.assertIn("information depth clear", printed)
+
+    def test_it_reports_the_depth_even_when_the_settings_file_cannot_be_read(self) -> None:
+        # The preference is in our registry, so a settings file we cannot read is
+        # no reason to be unable to answer -- and a user whose configuration is
+        # already broken is the likeliest one asking.
+        self.enable("fornax")
+        lifecycle.apply(
+            lifecycle.plan_presentation(
+                lifecycle.read_registry(self.home), depth=render.InformationDepth.DETAIL
+            )
+        )
+
+        with self.deny_reads(self.settings):
+            report = lifecycle.doctor(self.settings, self.home)
+
+        self.assertEqual(report["presentation"]["depth"], render.InformationDepth.DETAIL.value)
+        self.assertEqual(report["presentation"]["depth_source"], "your saved preference")
+
     def test_it_reports_drift_and_proposes_a_step_without_taking_one(self) -> None:
         self.enable("fornax")
         data = self._read()
@@ -2373,6 +2580,143 @@ class ExplainPresentationTest(ExplainCase):
 
         self.assertIn("not a mode this version knows", presentation["source"])
         self.assertEqual(presentation["mode"], render.PresentationMode.BALANCED.value)
+
+
+class ExplainDepthTest(ExplainCase):
+    """The decode against the depth the line is actually rendered at.
+
+    Two things have to hold at once here, and they pull in opposite directions:
+    what is quoted back must be what the reader is looking at, and what is
+    explained must be everything behind it. Explain is the rung past `detail`, so
+    narrowing the decode to match a narrowed line would make the deepest surface
+    the least informative one.
+    """
+
+    def set_depth(self, depth: render.InformationDepth) -> None:
+        lifecycle.apply(
+            lifecycle.plan_presentation(lifecycle.read_registry(self.home), depth=depth)
+        )
+
+    def diagnostic_status(self) -> contract.ProviderStatus:
+        """A provider with more to say than `clear` will show.
+
+        Ordered explicitly, the way a provider that cares which of its readings
+        leads would order it -- the contract falls back to sorting by key, and a
+        fixture that relied on that would be asserting against an alphabetical
+        accident rather than against a stated intent.
+        """
+        return self.status(
+            segments=(
+                segment(
+                    "verification",
+                    "attention",
+                    "Unverified",
+                    reason_code="no_evidence",
+                    age_seconds=3600,
+                    order_hint=10,
+                ),
+                segment(
+                    "events", "neutral", "Events", count=42, count_label="seen", order_hint=20
+                ),
+            )
+        )
+
+    def composed(self) -> str:
+        stream = io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            compositor.main(stdin=io.BytesIO(b"{}"), stdout=stream)
+        return stream.getvalue()
+
+    def test_it_reports_the_depth_and_where_the_preference_came_from(self) -> None:
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+
+        self.assertEqual(
+            self.explain()["presentation"]["depth"], render.InformationDepth.CLEAR.value
+        )
+        self.assertEqual(self.explain()["presentation"]["depth_source"], "the default")
+
+        self.set_depth(render.InformationDepth.DETAIL)
+
+        presentation = self.explain()["presentation"]
+        self.assertEqual(presentation["depth"], render.InformationDepth.DETAIL.value)
+        self.assertEqual(presentation["depth_source"], "your saved preference")
+        self.assertIn("information depth: detail", self.printed())
+
+    def test_a_depth_this_version_cannot_read_says_so(self) -> None:
+        self.register(self.status(segments=(segment("v", "ok", "Verified"),)))
+        registry = lifecycle.read_registry(self.home)
+        data = registry.data
+        data[lifecycle.PRESENTATION_KEY] = {"depth": "forensic"}
+        registry.path.write_bytes(lifecycle.serialize(data, indent=2))
+
+        presentation = self.explain()["presentation"]
+
+        self.assertIn("not a depth this version knows", presentation["depth_source"])
+        self.assertEqual(presentation["depth"], render.InformationDepth.CLEAR.value)
+
+    def test_every_reading_on_the_line_is_quoted_verbatim_at_either_depth(self) -> None:
+        # The tie that keeps this a decode of the user's line rather than a second
+        # renderer's opinion of it, now that there are two depths for it to be
+        # wrong about.
+        self.register(self.diagnostic_status())
+        for depth in render.InformationDepth:
+            with self.subTest(depth=depth):
+                self.set_depth(depth)
+                line = self.composed()
+                for reading in self.explain()["providers"][0]["readings"]:
+                    if reading["on_your_line"]:
+                        self.assertIn(reading["rendered"], line)
+
+    def test_a_reading_clear_leaves_out_is_still_decoded_and_marked(self) -> None:
+        self.register(self.diagnostic_status())
+        self.set_depth(render.InformationDepth.CLEAR)
+
+        readings = self.explain()["providers"][0]["readings"]
+
+        # Every reading the provider reported, not only the visible one: a reader at
+        # `clear` came here *because* the line was terse.
+        self.assertEqual([reading["key"] for reading in readings], ["verification", "events"])
+        self.assertEqual([reading["on_your_line"] for reading in readings], [True, False])
+        self.assertIn("not on your line at this information depth", self.printed())
+
+    def test_at_detail_every_reading_is_on_the_line(self) -> None:
+        self.register(self.diagnostic_status())
+        self.set_depth(render.InformationDepth.DETAIL)
+
+        readings = self.explain()["providers"][0]["readings"]
+
+        self.assertTrue(all(reading["on_your_line"] for reading in readings))
+        self.assertNotIn("not on your line at this information depth", self.printed())
+
+    def test_the_decode_is_full_at_clear_even_where_the_line_is_not(self) -> None:
+        # The reason and the age are absent from the fragment by configuration, and
+        # present below it because the provider did report them. Suppressing them
+        # here would leave a reader with no surface at all that answers "why".
+        self.register(self.diagnostic_status())
+        self.set_depth(render.InformationDepth.CLEAR)
+
+        reading = self.explain()["providers"][0]["readings"][0]
+
+        self.assertNotIn("no evidence", reading["rendered"].lower())
+        self.assertIn("reason", reading)
+        self.assertIn("freshness", reading)
+
+    def test_the_states_it_decodes_do_not_change_with_the_depth(self) -> None:
+        # One state engine. Depth chooses how much of its output is rendered, never
+        # what it concluded, and a decode that disagreed across depths would be the
+        # symptom of a second one.
+        self.register(self.diagnostic_status())
+        decoded = {}
+        for depth in render.InformationDepth:
+            self.set_depth(depth)
+            decoded[depth] = [
+                (reading["key"], reading["state"])
+                for reading in self.explain()["providers"][0]["readings"]
+            ]
+
+        self.assertEqual(
+            decoded[render.InformationDepth.CLEAR], decoded[render.InformationDepth.DETAIL]
+        )
 
 
 class ExplainCommandLineTest(ExplainCase):

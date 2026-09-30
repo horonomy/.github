@@ -981,6 +981,20 @@ _ICON_WORDS = {False: "text only", True: "emoji"}
 _DENSITY_FLAG = {"balanced": False, "compact": True}
 _ICON_FLAG = {"emoji": True, "text": False}
 
+# How much of each provider's snapshot one reading shows. A third axis rather
+# than more modes, because it answers a different question from the two above:
+# those are about how much room a reading may spend, this is about how much there
+# is to say. Every combination is reachable.
+_DEPTH_WORDS = {
+    render.InformationDepth.CLEAR: "clear (one summary per product)",
+    render.InformationDepth.DETAIL: "detail (supporting context as well)",
+}
+
+# The keys inside the presentation object this module owns and will rewrite.
+# Anything else a later version or another reader put there is preserved, same
+# rule as the settings file.
+_OWNED_PRESENTATION_KEYS = ("mode", "depth")
+
 
 def _presentation_refusal(registry: RegistryDocument) -> tuple[str | None, tuple[str, ...]]:
     """Why a preference change must not proceed, or `(None, ())` if it may.
@@ -1012,19 +1026,52 @@ def _presentation_refusal(registry: RegistryDocument) -> tuple[str | None, tuple
     return (None, ())
 
 
+def _presentation_change(stored: dict, key: str, value: str, wording: str) -> Change:
+    """One axis of the preference, said the way it actually turned out.
+
+    Running the command with no flags, or with flags already in effect, is a
+    legitimate way to ask what the current setting is. Reporting that as a change
+    which is not happening is the honest answer to that question, and it is why
+    this returns `PRESERVED_USER` rather than nothing at all.
+    """
+    if stored.get(key) == value:
+        return Change(
+            ChangeKind.PRESERVED_USER,
+            f"registry.{PRESENTATION_KEY}.{key}",
+            f"already {wording}",
+        )
+    return Change(
+        ChangeKind.UPDATE if key in stored else ChangeKind.ADD,
+        f"registry.{PRESENTATION_KEY}.{key}",
+        wording,
+    )
+
+
 def plan_presentation(
-    registry: RegistryDocument, *, compact: bool | None = None, glyphs: bool | None = None
+    registry: RegistryDocument,
+    *,
+    compact: bool | None = None,
+    glyphs: bool | None = None,
+    depth: render.InformationDepth | None = None,
 ) -> Plan:
     """What changing the reader's presentation preference would do, without doing it.
 
     `None` means leave that axis alone, so one knob can be set without stating
-    the other -- a user who only knows that their font renders emoji badly should
-    not have to decide about density to say so.
+    the others -- a user who only knows that their font renders emoji badly should
+    not have to decide about density or information depth to say so.
 
-    The two axes are resolved here into the single `mode` the compositor already
-    reads, rather than stored as two fields beside it: fields that must agree are
-    fields that can disagree, and the one that loses would be deciding how the
-    line renders.
+    The two *rendering* axes are resolved here into the single `mode` the
+    compositor already reads, rather than stored as two fields beside it: fields
+    that must agree are fields that can disagree, and the one that loses would be
+    deciding how the line renders. Information depth is stored separately because
+    it is genuinely independent of those two -- it changes what there is to say,
+    not how much room a reading may spend saying it.
+
+    Writes to our own registry and nothing else. In particular it does not go near
+    the host's settings file: which fields of a reader's status line are visible is
+    not a fact about how the host launches the command, so there is nothing there
+    to change. That also means switching takes effect on the next render, with no
+    daemon restarted, no provider reinstalled and no binary rebuilt.
 
     Nothing else calls this. Upgrades in particular do not, which is what "do not
     auto-rewrite user preferences on upgrade" amounts to in code: a stored
@@ -1050,37 +1097,28 @@ def plan_presentation(
         compact=before.is_compact if compact is None else compact,
         glyphs=before.uses_glyphs if glyphs is None else glyphs,
     )
+    before_depth = render.InformationDepth.parse(stored.get("depth"))
+    after_depth = before_depth if depth is None else depth
     # Copied and updated rather than rebuilt, so `width_budget` and anything a
     # later version puts here survive a change to a neighbouring key. Same rule
-    # as the settings file: we own `mode` and nothing else in this object.
+    # as the settings file: we own the two keys below and nothing else here.
     presentation = dict(stored)
     presentation["mode"] = after.value
+    presentation["depth"] = after_depth.value
     registry_after = dict(registry.data)
     registry_after[PRESENTATION_KEY] = presentation
 
     setting = (
         f"density {_DENSITY_WORDS[after.is_compact]}, icons {_ICON_WORDS[after.uses_glyphs]}"
     )
-    if stored.get("mode") == after.value:
-        # Running this with no flags, or with the flags already in effect, is a
-        # legitimate way to ask what the current setting is. Reporting it as a
-        # change that is not happening is the honest answer to that question.
-        changes = [
-            Change(
-                ChangeKind.PRESERVED_USER,
-                f"registry.{PRESENTATION_KEY}.mode",
-                f"already {setting}",
-            )
-        ]
-    else:
-        changes = [
-            Change(
-                ChangeKind.UPDATE if "mode" in stored else ChangeKind.ADD,
-                f"registry.{PRESENTATION_KEY}.mode",
-                setting,
-            )
-        ]
-    kept = [key for key in stored if key != "mode"]
+    # Reported per axis rather than as one line, because the axes are set
+    # independently and a user who changed only the depth should not have to read
+    # a density they did not touch to find out whether it moved.
+    changes = [
+        _presentation_change(stored, "mode", after.value, setting),
+        _presentation_change(stored, "depth", after_depth.value, _DEPTH_WORDS[after_depth]),
+    ]
+    kept = [key for key in stored if key not in _OWNED_PRESENTATION_KEYS]
     if kept:
         changes.append(
             Change(
@@ -1682,6 +1720,19 @@ def doctor(
         },
         "registry_path": str(registry.path),
     }
+    # Before the settings file is read, so the unreadable-settings path below
+    # reports it too. The preference lives in our own registry, so a broken
+    # settings file is no reason to be unable to say which depth is in force --
+    # and "why can I not see the reason for this?" is a question that arrives
+    # alongside every other kind of breakage.
+    mode, mode_source = _presentation_in_force(registry)
+    depth, depth_source = _depth_in_force(registry)
+    report["presentation"] = {
+        "mode": mode.value,
+        "source": mode_source,
+        "depth": depth.value,
+        "depth_source": depth_source,
+    }
 
     try:
         document = read_settings(path)
@@ -1845,7 +1896,13 @@ def _wire_value(value: object) -> str | None:
     return getattr(value, "value", value)
 
 
-def _reading(segment: object, mode: render.PresentationMode) -> dict:
+def _reading(
+    segment: object,
+    mode: render.PresentationMode,
+    depth: render.InformationDepth = render.InformationDepth.DETAIL,
+    *,
+    on_line: bool = True,
+) -> dict:
     """One segment, as the line shows it and as the words behind its tokens.
 
     Every value comes either from the segment or from the host's own meaning
@@ -1855,14 +1912,20 @@ def _reading(segment: object, mode: render.PresentationMode) -> dict:
     first is true. Freshness likewise appears only where the provider dated its
     reading.
 
-    `rendered` is produced by the renderer at the same mode as the line, so the
-    fragment quoted back to the reader is the fragment they are looking at rather
-    than a description of it.
+    `rendered` is produced by the renderer at the same mode *and depth* as the
+    line, so the fragment quoted back to the reader is the fragment they are
+    looking at rather than a description of it. The decode around it is always
+    full, though: explain is the rung past `detail`, and a reader whose line is at
+    `clear` came here precisely because the line did not say why. So a field
+    absent from `rendered` may still be reported below it -- and `on_your_line`
+    marks a reading the current depth leaves out altogether, because otherwise
+    that reader would hunt their line for a fragment that is not on it.
     """
     state = _wire_value(segment.state) or render.UNKNOWN_STATE
     reading = {
         "key": segment.key,
-        "rendered": render.render_segment(segment, mode),
+        "rendered": render.render_segment(segment, mode, depth),
+        "on_your_line": on_line,
         "state": state,
         "state_token": render.state_marker(state, mode),
         # An unrecognised state is described as unknown rather than left without
@@ -1927,11 +1990,32 @@ def _presentation_in_force(registry: RegistryDocument) -> tuple[render.Presentat
     return mode, "your saved preference"
 
 
+def _depth_in_force(registry: RegistryDocument) -> tuple[render.InformationDepth, str]:
+    """The information depth the line is rendered at, and where that came from.
+
+    Reported for the same reason as the mode, and it is the more useful of the two
+    to report: someone who cannot see a reason or an age is looking at a line that
+    is working exactly as configured, and the fastest way to tell them so is to say
+    which depth is in force.
+
+    A fresh install has no stored value and reads as `CLEAR`, which is the intended
+    default for someone who did not ask for a diagnostic surface.
+    """
+    stored = _presentation_of(registry).get("depth")
+    depth = render.InformationDepth.parse(stored)
+    if stored is None:
+        return depth, "the default"
+    if depth.value != stored:
+        return depth, "the default; the saved preference is not a depth this version knows"
+    return depth, "your saved preference"
+
+
 def _explain_provider(
     entry: object,
     explain_argv: tuple[str, ...] | None,
     mode: render.PresentationMode,
     home: pathlib.Path | None,
+    depth: render.InformationDepth = render.InformationDepth.DETAIL,
 ) -> dict:
     """One provider: its live group as rendered, decoded, then its own words.
 
@@ -1939,8 +2023,20 @@ def _explain_provider(
     the fragment shown and the explanation of it cannot describe different
     moments. That status may come from Horonom's own provider cache, which is the
     honest thing to decode -- it is what the line is showing.
+
+    Every reading the provider reported is decoded, including the ones the current
+    depth omits from the line. Listing only what is visible would make the deepest
+    rung of disclosure the narrowest view of the snapshot, which is backwards; the
+    omitted ones are marked instead.
     """
     status = compositor.run_provider(entry, entry.timeout_ms, home)
+    # Asked of the renderer rather than recomputed here, so there is no second
+    # opinion about which readings the line is showing.
+    on_line = (
+        contract.order_segments(status)
+        if depth.shows_supporting_detail
+        else render.clear_readings(status)
+    )
     scope = _wire_value(status.scope) or entry.scope.value
     report = {
         "provider": status.provider,
@@ -1949,9 +2045,10 @@ def _explain_provider(
         "scope_token": render.scope_marker(scope, mode),
         "scope_means": render.SCOPE_MEANINGS.get(scope, "a scope this version does not know"),
         "availability": _wire_value(status.availability),
-        "rendered": render.render_provider(status, mode),
+        "rendered": render.render_provider(status, mode, depth),
         "readings": [
-            _reading(segment, mode) for segment in contract.order_segments(status)
+            _reading(segment, mode, depth, on_line=any(shown is segment for shown in on_line))
+            for segment in contract.order_segments(status)
         ],
     }
     if explain_argv is None:
@@ -2028,9 +2125,15 @@ def explain(
     path = pathlib.Path(settings_path or DEFAULT_SETTINGS_PATH).expanduser()
     registry = read_registry(home)
     mode, mode_source = _presentation_in_force(registry)
+    depth, depth_source = _depth_in_force(registry)
     report: dict = {
         "registry_path": str(registry.path),
-        "presentation": {"mode": mode.value, "source": mode_source},
+        "presentation": {
+            "mode": mode.value,
+            "source": mode_source,
+            "depth": depth.value,
+            "depth_source": depth_source,
+        },
         "legend": [
             {
                 "title": section.title,
@@ -2073,7 +2176,7 @@ def explain(
         if provider is not None and entry.provider != provider:
             continue
         report["providers"].append(
-            _explain_provider(entry, details.get(entry.provider), mode, home)
+            _explain_provider(entry, details.get(entry.provider), mode, home, depth)
         )
     if provider is not None and not report["providers"]:
         report["notes"].append(
@@ -2139,6 +2242,12 @@ def _describe_doctor(report: dict) -> str:
     lines.append(
         f"original statusline: recorded={upstream.get('recorded')} name={upstream.get('name')}"
     )
+    presentation = report.get("presentation")
+    if presentation:
+        lines.append(
+            f"presentation: {presentation['mode']} ({presentation['source']}), "
+            f"information depth {presentation['depth']} ({presentation['depth_source']})"
+        )
     providers = report["providers"]
     lines.append(f"providers registered: {len(providers)}")
     for provider in providers:
@@ -2191,6 +2300,12 @@ def _reading_lines(reading: dict) -> list[str]:
     helped by a denser one.
     """
     lines = [f"    {reading['rendered']}"]
+    # Said first, before any of the facts, because it changes what the fact lines
+    # are: for a reading that is not on the line they are an explanation of
+    # something the reader cannot see, and hunting the line for it is the failure
+    # this saves them from.
+    if not reading.get("on_your_line", True):
+        lines.append("      not on your line at this information depth")
     lines.append(f"      state: {reading['state']} -- {reading['state_means']}")
     if "reason" in reading:
         lines.append(f"      why: {reading['reason']}")
@@ -2236,6 +2351,9 @@ def _describe_explain(report: dict) -> str:
     presentation = report["presentation"]
     lines = [
         f"presentation: {presentation['mode']} ({presentation['source']})",
+        # Second because it is the line a reader looking for a missing field needs:
+        # at `clear` a reason or an age is absent by configuration, not by failure.
+        f"information depth: {presentation['depth']} ({presentation['depth_source']})",
         "",
         "how to read the line",
     ]
@@ -2381,11 +2499,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     shared(uninstall)
 
-    # Two independent flags rather than one `--mode compact_plain`, because the
-    # stored value is a resolved pair and a user thinking about their terminal is
-    # not. Either may be omitted, which is what makes "my font is bad" expressible
-    # on its own; `presentation` with neither is a legitimate no-op that prints
-    # the current setting.
+    # Three independent flags rather than one `--mode compact_plain_detail`,
+    # because the stored value is a resolved pair plus a depth and a user thinking
+    # about their terminal is not. Any may be omitted, which is what makes "my font
+    # is bad" expressible on its own; `presentation` with none of them is a
+    # legitimate no-op that prints the current setting.
     presentation = subcommands.add_parser(
         "presentation", help="choose how the line is rendered for this reader"
     )
@@ -2399,6 +2517,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("emoji", "text"),
         dest="icon_style",
         help="text is for terminals whose font or width handling makes emoji unreliable",
+    )
+    presentation.add_argument(
+        "--depth",
+        choices=tuple(member.value for member in render.InformationDepth),
+        help="clear is one summary per product; detail adds supporting context "
+        "(unchanged if omitted)",
     )
     shared(presentation, settings=False)
 
@@ -2473,6 +2597,12 @@ def main(argv: list[str] | None = None, stdout: object = None) -> int:
             read_registry(),
             compact=_DENSITY_FLAG.get(options.density),
             glyphs=_ICON_FLAG.get(options.icon_style),
+            # Parsed strictly here rather than through `InformationDepth.parse`:
+            # argparse has already restricted this to a known value, and a lenient
+            # parse would silently turn a future misspelling into `clear`.
+            depth=(
+                None if options.depth is None else render.InformationDepth(options.depth)
+            ),
         )
         return _run_plan(plan, options, stream)
 
