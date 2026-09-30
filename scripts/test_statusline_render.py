@@ -1054,7 +1054,7 @@ class TestComposeDegradation(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        # Every test here walks the same three-mode budget sweep, so it is
+        # Every test here walks the same budget sweep over every mode, so it is
         # rendered once rather than once per assertion.
         cls._sweep = []
         for mode in MODES:
