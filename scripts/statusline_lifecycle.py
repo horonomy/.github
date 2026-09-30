@@ -1970,6 +1970,27 @@ def _explain_provider(
     return report
 
 
+def _provider_behind(asked: str, registered: frozenset[str] | set[str]) -> tuple[str, str | None]:
+    """The provider a reader meant, given what they had in front of them.
+
+    What they have is the line, and the line advertises segment keys like
+    `libra.estimate`. Refusing that name -- truthfully, because no provider is
+    called after a whole key -- sent them to `list` to work out a name they had
+    never been shown. The provider half of a segment key is the answer.
+
+    Returns the name to decode and, when it is not the one asked for, the note
+    saying so. Nothing is guessed: the half before the first dot has to be a
+    registered provider, or the original name is handed back untouched to be
+    refused where every other unknown name is.
+    """
+    if asked in registered or "." not in asked:
+        return asked, None
+    head = asked.split(".", 1)[0]
+    if head not in registered:
+        return asked, None
+    return head, f"{asked!r} is a segment key, not a provider; decoding {head!r}, which owns it"
+
+
 def explain(
     settings_path: str | os.PathLike | None = None,
     home: pathlib.Path | None = None,
@@ -2041,19 +2062,12 @@ def explain(
 
     parsed = compositor.parse_registry(registry.data or empty_registry())
     details = _explain_commands(registry)
-    registered = {entry.provider for entry in parsed.providers}
-    # What a reader has in front of them is the line, and the line advertises
-    # segment keys like `libra.estimate`. Refusing that -- truthfully, because no
-    # provider is named after a whole key -- sent them to `list` to work out a
-    # name they were never shown. The provider half of a segment key is the
-    # answer, so accept it and say that is what was done.
-    if provider is not None and provider not in registered and "." in provider:
-        head = provider.split(".", 1)[0]
-        if head in registered:
-            report["notes"].append(
-                f"{provider!r} is a segment key, not a provider; decoding {head!r}, which owns it"
-            )
-            provider = head
+    if provider is not None:
+        provider, decoded = _provider_behind(
+            provider, {entry.provider for entry in parsed.providers}
+        )
+        if decoded is not None:
+            report["notes"].append(decoded)
     for entry in parsed.providers:
         if provider is not None and entry.provider != provider:
             continue
