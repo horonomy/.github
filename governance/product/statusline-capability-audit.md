@@ -248,11 +248,16 @@ the compositor's whole design depends on owning one configured command slot.
 section gives. A host with no such feature is a settled fact; a host nobody could
 examine is not.
 
-| Host | Verdict | Basis |
-|---|---|---|
-| Claude Code | `SUPPORTED` | Native single-slot `statusLine.command`; proven by the shipped host and three providers |
-| Codex | `UNSUPPORTED` for this capability | Has a status line, but its content is a closed set of built-in identifiers |
-| OpenCode | `UNSUPPORTED` for this capability | No statusline or footer key in its configuration schema |
+| Host | Version assessed | Verdict | Basis |
+|---|---|---|---|
+| Claude Code | 2.1.226, installed | `SUPPORTED` | Native single-slot `statusLine.command`; proven by the shipped host and three providers |
+| Codex | 0.154.0, installed | `UNSUPPORTED` for this capability | Has a status line, but its content is a closed set of built-in identifiers |
+| OpenCode | current development branch, not installed | `UNSUPPORTED` for this capability | No statusline or footer key in its configuration schema |
+
+The version column is load-bearing. A host capability verdict is only a claim
+about the version examined, and every one of these three could change in a
+release — so a reader with a newer version should treat the row as a starting
+point and the criterion as the durable part.
 
 ### Claude Code — `SUPPORTED`
 
