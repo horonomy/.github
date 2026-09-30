@@ -931,3 +931,45 @@ def compose(
     if not upstream:
         return block
     return f"{upstream}{UPSTREAM_SEPARATORS[chosen_mode]}{block}"
+
+
+# ------------------------------------------------------------ the explain surface
+#
+# A glanceable line is one that leaves its own key out. These tables are that key.
+# They live beside the glyph tables rather than in the command that prints them,
+# for the same reason the glyphs are here at all: the vocabulary is host-owned, so
+# a new state should have exactly one place to be described, next to the line that
+# gives it an icon.
+
+# Phrased as what the token means for the reader, never as a synonym for its own
+# name. `attention` glossed as "needs attention" is the opaque-abbreviation problem
+# again, one indirection later.
+STATE_MEANINGS = {
+    "ok": "checked, and nothing here needs you",
+    "attention": "something is waiting on a decision or an action from you",
+    "warn": "something is wrong; work is not stopped",
+    "critical": "something is wrong and is stopping work",
+    "neutral": "a fact with no health claim, such as a mode name or a task id",
+    "unknown": (
+        "the provider could not determine its own state; this is not a quiet way of "
+        "saying all clear"
+    ),
+}
+
+SCOPE_MEANINGS = {
+    "host": "everything on this machine, including sessions other than this one",
+    "session": "this Claude Code session only",
+    "project": "this project or working directory only",
+}
+
+# Each entry says what the confidence is a confidence *in*, which is the entire
+# reason the field exists — see `CONFIDENCE_SUBJECT_TEXT`.
+CONFIDENCE_SUBJECT_MEANINGS = {
+    "preflight_estimate": (
+        "how far the product trusts its own estimate, made before the work runs. "
+        "Not a risk level and not a severity"
+    ),
+    "verification": "how far the product trusts a verification result it has not confirmed",
+    "policy_decision": "how far the product trusts a decision it reached",
+    "unspecified": "the product did not say what the confidence is about",
+}
