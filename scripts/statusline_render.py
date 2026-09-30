@@ -973,3 +973,112 @@ CONFIDENCE_SUBJECT_MEANINGS = {
     "policy_decision": "how far the product trusts a decision it reached",
     "unspecified": "the product did not say what the confidence is about",
 }
+
+
+@dataclasses.dataclass(frozen=True)
+class LegendEntry:
+    """One row of the key: the token as it appears, its word, and what it means.
+
+    `token` is produced by the same functions that render the line, at the same
+    mode, rather than written out. A key that shows glyphs to a reader whose line
+    is in text is worse than no key at all — it explains something they are not
+    looking at, and the modes exist precisely because that reader's terminal
+    cannot be trusted with the glyph.
+
+    `name` is the machine word for the same thing, so the row is still usable
+    when the token is a glyph the reader cannot see.
+    """
+
+    token: str
+    name: str
+    meaning: str
+
+
+@dataclasses.dataclass(frozen=True)
+class LegendSection:
+    """A group of rows under the question it answers."""
+
+    title: str
+    entries: tuple[LegendEntry, ...]
+
+
+# The example age used by the freshness row. Not a round number, so the row
+# demonstrates that the format rounds down to one coarse unit — `120` would render
+# as an exact `2m` and teach the reader the opposite.
+_LEGEND_AGE_SECONDS = 135
+
+# The example confidence used by the confidence rows. Any value would do; `high`
+# is the one most often misread as risk, which is what those rows exist to correct.
+_LEGEND_CONFIDENCE = "high"
+
+# The example hidden-segment count. Plural, because the singular would leave a
+# reader to guess whether the marker ever carries a number.
+_LEGEND_HIDDEN = 2
+
+
+def legend(mode: PresentationMode) -> tuple[LegendSection, ...]:
+    """The key to the line, rendered in the mode the line is rendered in.
+
+    Derived from the rendering tables rather than listed, so a state, scope or
+    confidence subject that exists cannot be missing from the key, and a token
+    shown here cannot differ from the token shown in the line. The meaning tables
+    are keyed identically and the test suite asserts that in both directions,
+    which is what makes completeness a property rather than a promise.
+
+    Pure, like everything else in this module: no provider is consulted and
+    nothing is read. This is the half of the explain surface that is true before
+    anything has been measured.
+    """
+    return (
+        LegendSection(
+            "state — how to read a reading",
+            tuple(
+                LegendEntry(state_marker(state, mode), STATE_TEXT[state], STATE_MEANINGS[state])
+                for state in STATE_TEXT
+            ),
+        ),
+        LegendSection(
+            "scope — what a reading is about",
+            tuple(
+                LegendEntry(scope_marker(scope, mode), SCOPE_TEXT[scope], SCOPE_MEANINGS[scope])
+                for scope in SCOPE_TEXT
+            ),
+        ),
+        LegendSection(
+            "confidence — what a high, medium or low is a confidence in",
+            tuple(
+                LegendEntry(
+                    format_confidence(_LEGEND_CONFIDENCE, subject, mode),
+                    subject,
+                    CONFIDENCE_SUBJECT_MEANINGS[subject],
+                )
+                for subject in CONFIDENCE_SUBJECT_TEXT
+            ),
+        ),
+        LegendSection(
+            "markers the host adds",
+            (
+                LegendEntry(
+                    f"[{HYPOTHETICAL_TEXT}]",
+                    "hypothetical",
+                    "what a policy would have done. Nothing was blocked and nothing "
+                    "was stopped",
+                ),
+                LegendEntry(
+                    _hidden_marker(_LEGEND_HIDDEN),
+                    "hidden",
+                    "the line ran out of room, and this many readings are not shown",
+                ),
+                LegendEntry(
+                    format_age(_LEGEND_AGE_SECONDS, mode),
+                    "freshness",
+                    "how old the reading is, rounded down so it is never overstated",
+                ),
+                LegendEntry(
+                    UPSTREAM_SEPARATORS[mode].strip(),
+                    "divider",
+                    "everything to the left of this is your own statusline, verbatim",
+                ),
+            ),
+        ),
+    )
