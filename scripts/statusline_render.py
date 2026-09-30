@@ -694,6 +694,209 @@ def render_segment(segment: object, mode: PresentationMode) -> str:
     return f"{head} ({DETAIL_SEPARATOR.join(details)})"
 
 
+# --------------------------------------------------------- the clear projection
+#
+# Which of a provider's facts earn its one Clear-mode phrase. This is the only
+# place that decision is made, for every product, from declared semantics plus
+# one documented fallback -- so Clear is a shared ladder rather than a branch per
+# product, and a product the host has never heard of is summarised by the same
+# rules as the three it ships with.
+
+# The states that mean the operator is implicated, not merely informed. Taken
+# from `STATE_MEANINGS` rather than from severity order, because severity and
+# "does this need me" are different questions: `warn` is "something is wrong;
+# work is not stopped", which is a posture worth showing beside the primary
+# reading, whereas `critical` stops work and `attention` waits on a decision.
+#
+# Reading `warn` as action-required is the specific defect this set exists to
+# prevent: Libra's live escalation segment is a warn-state replan-budget posture
+# while Libra's own explain surface says nothing is blocked and nothing is
+# waiting on an answer. Promoting it would make the line claim otherwise.
+ACTION_REQUIRED_STATES = frozenset({"attention", "critical"})
+
+# How many readings one provider may contribute to Clear: the primary state, and
+# at most one secondary signal that changes how the primary reads. Not a layout
+# budget -- a narrow terminal is handled by the width ladder -- but an editorial
+# one. A third reading is a diagnosis, and the escalation path for a diagnosis is
+# Detail, then explain.
+MAX_CLEAR_READINGS = 2
+
+
+def _has_quantified_reading(segment: object) -> bool:
+    """Whether this segment carries a measurement rather than only a name.
+
+    The one product-agnostic signal that distinguishes a fact worth a reader's
+    one glance from a fact that merely identifies something. Libra's `task` and
+    `estimate` segments are both `neutral` and adjacent in order, so severity and
+    position cannot separate them — but one carries a remaining-work span and the
+    other carries an id, and a statusline that leads with the id has spent the
+    product's whole line on the least useful thing it knows.
+    """
+    if segment.count is not None and segment.count_label:
+        return True
+    duration = getattr(segment, "duration_seconds", None)
+    return duration is not None and getattr(segment, "duration_label", None) is not None
+
+
+def _has_live_readings(status: object) -> bool:
+    """Whether this provider's segment values may be read as current.
+
+    Accepts an enum or the raw wire string, like every other reader here, so a
+    hand-built stub in a test still resolves. Anything unrecognised is treated as
+    *not* live: the cost of being wrong in that direction is a reading suppressed
+    from Clear, and the cost of being wrong in the other is a cached posture
+    rendered as though the daemon behind it were answering.
+    """
+    availability = getattr(status, "availability", None)
+    live = getattr(availability, "has_live_readings", None)
+    if isinstance(live, bool):
+        return live
+    return _enum_value(availability) == "available"
+
+
+def _worst_index(segments: tuple, indices: list) -> int:
+    """The index of the highest-severity segment, earliest in contract order on a tie."""
+    return max(
+        indices,
+        key=lambda i: (
+            STATE_SEVERITY.get(_enum_value(segments[i].state), STATE_SEVERITY[UNKNOWN_STATE]),
+            -i,
+        ),
+    )
+
+
+def clear_roles(status: object) -> tuple:
+    """The Clear-mode part each of this provider's segments plays, in contract order.
+
+    A provider's own `clear_role` declaration always wins; this fills in the rest.
+    The fallback is deliberately documented behaviour rather than a guess, in this
+    order:
+
+    1. A state that stops work or waits on the operator is an exception wherever
+       it sits. Position cannot demote it, because the whole point of the top rung
+       is that it is not competing with routine readings.
+    2. Exactly one posture, if no segment claimed the part: the first remaining
+       segment that carries a measurement, else simply the first remaining one.
+       Preferring a measurement is what keeps a task id from taking the line off a
+       delivery estimate of equal severity.
+    3. Everything left is a vital signal if it carries a measurement or an
+       emphatic state, and supporting context otherwise.
+
+    Rule 2's "if no segment claimed the part" matters for stability: a declared
+    posture suppresses inference entirely, so a provider that adopts the field
+    gets exactly what it asked for and nothing extra.
+    """
+    segments = statusline_contract.order_segments(status)
+    roles: list = [getattr(segment, "clear_role", None) for segment in segments]
+
+    for index, segment in enumerate(segments):
+        if roles[index] is None and _enum_value(segment.state) in ACTION_REQUIRED_STATES:
+            roles[index] = statusline_contract.ClearRole.EXCEPTION
+
+    if statusline_contract.ClearRole.POSTURE not in roles:
+        free = [index for index, role in enumerate(roles) if role is None]
+        quantified = [index for index in free if _has_quantified_reading(segments[index])]
+        for index in (quantified or free)[:1]:
+            roles[index] = statusline_contract.ClearRole.POSTURE
+
+    for index, segment in enumerate(segments):
+        if roles[index] is None:
+            roles[index] = (
+                statusline_contract.ClearRole.VITAL
+                if _has_quantified_reading(segment)
+                or _enum_value(segment.state) in EMPHATIC_STATES
+                else statusline_contract.ClearRole.SUPPORTING
+            )
+    return tuple(roles)
+
+
+def clear_readings(status: object) -> tuple:
+    """The segments Clear mode shows for one provider, in contract order.
+
+    Clear is an executive summary, not Detail with fields removed — which is why
+    this selects *segments* and `render_segment` separately restricts *fields*.
+    The primary state it picks is the same state Detail leads with, because both
+    read the same snapshot through the same role ladder; only the supporting
+    material differs.
+
+    Order of precedence, which is the shared priority rule for every product:
+
+    1. A provider that could not read its own state shows exactly one reading.
+       Not "the unavailability plus what we last knew" — a cached mode or outcome
+       beside an unreachable daemon is read as current, which is how a line ends
+       up implying enforcement that is not running.
+    2. Otherwise, one exception if there is one, and nothing else. Something that
+       stops work or waits on the operator is not improved by having a routine
+       estimate next to it.
+    3. Otherwise the posture, plus at most one still-fresh vital signal.
+
+    Returned in contract order rather than in role order, so the rendered text is
+    stable and so applying this twice is a no-op — `compose` projects for its
+    width accounting and `render_provider` projects for its output, and the two
+    must not be able to disagree.
+    """
+    segments = statusline_contract.order_segments(status)
+    if not segments:
+        return ()
+    everything = list(range(len(segments)))
+    if not _has_live_readings(status):
+        kept = {_worst_index(segments, everything)}
+    else:
+        roles = clear_roles(status)
+        exceptions = [
+            index
+            for index in everything
+            if roles[index] is statusline_contract.ClearRole.EXCEPTION
+        ]
+        if exceptions:
+            kept = {_worst_index(segments, exceptions)}
+        else:
+            kept = {
+                index
+                for index in everything
+                if roles[index] is statusline_contract.ClearRole.POSTURE
+            }
+            fresh_vitals = [
+                index
+                for index in everything
+                if roles[index] is statusline_contract.ClearRole.VITAL
+                and not getattr(segments[index], "is_stale", False)
+            ]
+            if fresh_vitals:
+                kept.add(_worst_index(segments, fresh_vitals))
+            if not kept:
+                # Every segment was declared supporting. Showing nothing would
+                # read as "this product reported nothing", so the provider's own
+                # first reading stands in rather than its absence.
+                kept = {0}
+    return tuple(segments[index] for index in sorted(kept))
+
+
+def project_to_depth(statuses: object, depth: InformationDepth) -> tuple:
+    """Reduce every provider to the readings the requested depth shows.
+
+    Detail is the identity: it shows the snapshot as the provider ordered it.
+    Clear replaces each provider's segments with its Clear readings, which is
+    what lets the width-pressure ladder below account for, drop and count the
+    same readings the user is actually looking at. Without this, a Clear line
+    under pressure would report `[+3 more]` for segments Clear was never going to
+    show, which says there is news when there is none.
+
+    A provider left with no readings is dropped entirely rather than rendered as
+    an attributed nothing, matching `_without_dropped` — an empty group reads as
+    "checked, all clear".
+    """
+    ordered = statusline_contract.order_providers(statuses)
+    if depth.shows_supporting_detail:
+        return ordered
+    projected = []
+    for status in ordered:
+        readings = clear_readings(status)
+        if readings:
+            projected.append(dataclasses.replace(status, segments=readings))
+    return tuple(projected)
+
+
 def provider_display_name(provider_id: str) -> str:
     """Turn a contract provider id into something a human reads as a product.
 
