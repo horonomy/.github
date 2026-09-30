@@ -421,13 +421,23 @@ class Plan:
     `settings_after` and `registry_after` are the complete documents to be
     written, not patches: the diffing has already happened, so there is no second
     interpretation step between deciding and writing.
+
+    `settings_path`, `ownership` and `fingerprint` are absent together for an
+    operation that has nothing to do with the shared settings file -- changing a
+    presentation preference in our own registry, for instance. They are one
+    decision rather than three because naming a settings file implies it is in
+    scope: a plan that reported a path, a scope and an owner for a change that
+    cannot touch any of them would be describing a blast radius it does not have.
+    Absence also has a second effect, which is the point of separating them:
+    `apply` does not read the settings file for such a plan, so an unparseable
+    settings file cannot block a preference that does not depend on it.
     """
 
     operation: str
-    settings_path: pathlib.Path
-    ownership: Ownership
+    settings_path: pathlib.Path | None
+    ownership: Ownership | None
     changes: tuple[Change, ...]
-    fingerprint: str
+    fingerprint: str | None
     registry_path: pathlib.Path | None = None
     registry_fingerprint: str | None = None
     settings_after: dict | None = None
@@ -437,9 +447,35 @@ class Plan:
     refusal: str | None = None
     remediation: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        """Enforce the all-or-nothing rule the three settings fields share.
+
+        Checked rather than documented because the dangerous half is silent: a
+        plan that writes `settings_after` without a fingerprint would skip the
+        staleness check in `apply` and overwrite whatever arrived in between,
+        which is the exact clobber this lifecycle exists to prevent.
+        """
+        present = {
+            self.settings_path is not None,
+            self.ownership is not None,
+            self.fingerprint is not None,
+        }
+        if len(present) != 1:
+            raise ValueError(
+                "settings_path, ownership and fingerprint describe one settings read "
+                "and must be supplied or omitted together"
+            )
+        if self.settings_after is not None and self.fingerprint is None:
+            raise ValueError("a plan that writes the settings file must carry its fingerprint")
+
     @property
     def scope(self) -> str:
-        return settings_scope(self.settings_path)
+        # A registry-only plan is host-wide by construction: the registry lives
+        # under one directory per machine, not one per Claude Code scope, so a
+        # preference set here applies to every project. That is a wider blast
+        # radius than a project settings file, and saying so is the whole reason
+        # this property exists.
+        return "host" if self.settings_path is None else settings_scope(self.settings_path)
 
     @property
     def mutates(self) -> bool:
@@ -452,13 +488,13 @@ class Plan:
     def to_json(self) -> dict:
         return {
             "operation": self.operation,
-            "settings_path": str(self.settings_path),
+            "settings_path": None if self.settings_path is None else str(self.settings_path),
             "scope": self.scope,
             # Never "whole_artifact". The settings file is shared with the host
             # tool and with every other product, so the answer to "what does
             # uninstall do" is always "removes entries", never "removes a file".
             "ownership_model": "shared_artifact",
-            "current_owner": self.ownership.value,
+            "current_owner": None if self.ownership is None else self.ownership.value,
             "would_mutate": self.mutates,
             # Stated as its own field, separate from any automation consent, so
             # that a caller passing a --yes equivalent cannot read this as
@@ -1029,11 +1065,18 @@ def apply(plan: Plan) -> ApplyResult:
     if not plan.mutates:
         return ApplyResult(plan=plan, settings_written=False, registry_written=False, verified=True)
 
-    current = read_settings(plan.settings_path)
-    if current.fingerprint != plan.fingerprint:
-        raise ConcurrentModificationError(
-            f"{plan.settings_path} changed after this plan was formed; nothing was written"
-        )
+    # Skipped entirely for a plan that carries no settings fingerprint, which is
+    # a plan that never read the file. Re-reading it anyway would make an
+    # unparseable settings file fail an operation that does not depend on it --
+    # and the user whose settings file is broken is the one most likely to need
+    # to change how the line renders.
+    current = None
+    if plan.fingerprint is not None:
+        current = read_settings(plan.settings_path)
+        if current.fingerprint != plan.fingerprint:
+            raise ConcurrentModificationError(
+                f"{plan.settings_path} changed after this plan was formed; nothing was written"
+            )
     if plan.registry_path is not None and plan.registry_fingerprint is not None:
         if read_registry_at(plan.registry_path).fingerprint != plan.registry_fingerprint:
             raise ConcurrentModificationError(
@@ -1452,8 +1495,10 @@ EXIT_FAILED = 3
 
 def _describe(plan: Plan, result: ApplyResult | None) -> str:
     """The plan as prose, for a reader who is about to trust it with their config."""
-    lines = [f"{plan.operation}: {plan.settings_path} ({plan.scope} scope)"]
-    lines.append(f"  current owner: {plan.ownership.value}")
+    target = plan.settings_path if plan.settings_path is not None else "no host configuration"
+    lines = [f"{plan.operation}: {target} ({plan.scope} scope)"]
+    if plan.ownership is not None:
+        lines.append(f"  current owner: {plan.ownership.value}")
     if plan.refusal is not None:
         lines.append(f"  REFUSED: {plan.refusal}")
         lines.extend(f"  next: {step}" for step in plan.remediation)

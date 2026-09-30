@@ -356,6 +356,50 @@ class SettingsScopeTest(unittest.TestCase):
                 self.assertEqual(lifecycle.settings_scope(path), expected)
 
 
+class PlanShapeTest(unittest.TestCase):
+    """The invariant tying a plan's three settings fields together.
+
+    Asserted structurally rather than through an operation because the dangerous
+    combination is one no current caller produces: the guard exists so that a
+    future one cannot introduce a settings write with no staleness check.
+    """
+
+    def plan(self, **kwargs) -> lifecycle.Plan:
+        fields = {
+            "operation": "presentation",
+            "settings_path": None,
+            "ownership": None,
+            "changes": (),
+            "fingerprint": None,
+        }
+        return lifecycle.Plan(**{**fields, **kwargs})
+
+    def test_a_plan_may_omit_the_settings_file_entirely(self) -> None:
+        plan = self.plan()
+        self.assertIsNone(plan.to_json()["settings_path"])
+        self.assertIsNone(plan.to_json()["current_owner"])
+
+    def test_omitting_the_settings_file_is_disclosed_as_host_wide(self) -> None:
+        # The registry is one directory per machine, so a plan that writes only
+        # the registry reaches every project -- a wider blast radius than the
+        # "project" a settings path would have reported.
+        self.assertEqual(self.plan().scope, "host")
+
+    def test_the_three_settings_fields_cannot_be_supplied_apart(self) -> None:
+        for partial in (
+            {"settings_path": pathlib.Path("/work/repo/.claude/settings.json")},
+            {"ownership": lifecycle.Ownership.ABSENT},
+            {"fingerprint": "deadbeef"},
+        ):
+            with self.subTest(partial=sorted(partial)), self.assertRaises(ValueError):
+                self.plan(**partial)
+
+    def test_a_settings_write_cannot_be_planned_without_a_fingerprint(self) -> None:
+        # The combination that would skip the staleness check in `apply`.
+        with self.assertRaises(ValueError):
+            self.plan(settings_after={"statusLine": {}})
+
+
 class EnablePreservationTest(LifecycleCase):
     """What enabling a provider must leave exactly as it found it."""
 
