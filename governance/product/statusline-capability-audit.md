@@ -125,3 +125,67 @@ HORO-1577 exists because criterion 2 of *this audit's* acceptance — every
 `SUPPORTED` product names a shipped provider or an owning ticket — is not
 satisfied by a verdict alone. A `SUPPORTED` row with no owner is how an audit
 turns into a wish list.
+
+## Products — `BLOCKED`
+
+Each entry names the exact missing prerequisite and the criterion it fails.
+`BLOCKED` is not a soft `NOT_APPLICABLE`: these products would be eligible if the
+named prerequisite existed, so each entry doubles as the specification of what
+would unblock it.
+
+### Ophiuchus — `BLOCKED` on criterion 1
+
+**Missing prerequisite:** a persisted, locally readable record of relay activity.
+
+`ophiuchus status` returns the version plus a redacted view of *configuration*.
+Configuration is not session state — it does not change while the operator works,
+so even if it were richer it would fail criterion 2.
+
+The state a statusline would want is relay receipts, and receipts are transient by
+design: they are validated and printed, never stored. Usage history is
+relay-operator-side and off by default. The product's own docstring for that path
+states the problem more precisely than this audit could — a relay that should be
+recording and is not looks exactly like a relay nobody used. That is criterion 6
+failing at the source rather than in the rendering: a provider cannot distinguish
+unavailable from a healthy zero when the underlying store cannot either.
+
+This confirms the standing DogFood hypothesis as recorded.
+
+### Eltanin — `BLOCKED` on criterion 1, for a deeper reason than the recorded hypothesis
+
+**Missing prerequisite:** a read-only status surface that returns state rather
+than liveness — which means a deliberate protocol decision would have to be
+revisited, not a bug fixed.
+
+The recorded hypothesis was that Eltanin is simply inactive and unconfigured here.
+That is true — its CLI exits 69, there is no state directory, no `agentd`, and no
+socket — but it is the secondary reason, and recording only it would leave the
+impression that activating Eltanin would make a provider possible.
+
+It would not. `AgentStatusView` carries a protocol version and nothing else, and
+its own documentation says it deliberately omits the agent's issuer instance
+identity. The surrounding protocol is coarsened in the same direction on purpose:
+denial reasons are generalized, release outcomes collapse to a single refusal, and
+the error type carries no free-text field, specifically so that an unprivileged
+client cannot enumerate policy or leases. A statusline provider *is* an
+unprivileged client. Everything criterion 1 would need is the thing Eltanin's
+protocol is designed not to disclose.
+
+So the prerequisite is a product decision — a separate, explicitly authorized
+read-only projection scoped to what a local operator may see — and not a matter of
+starting a daemon. This is the audit's clearest example of why criterion 1 says
+inventing a state surface is a product decision rather than statusline wiring.
+
+### Eridanus — `BLOCKED` on criteria 1 and 4
+
+**Missing prerequisite:** a local read-only projection over the Edge buffer.
+
+Eridanus's only Claude Code surface today is a write-path capture hook. It
+requires a tenant identifier, a bearer token and a gateway endpoint, which fails
+criterion 4 (a remote call on the hot path) and sits uncomfortably against
+criterion 5 (credential handling in a process that runs on every statusline
+refresh).
+
+There is no read-only projection over the Edge buffer to read instead. If one is
+added and is genuinely local, Eridanus becomes reassessable — the buffer's depth
+and lag are exactly the kind of state criterion 2 wants.
