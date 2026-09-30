@@ -1767,6 +1767,66 @@ def _product_detail(argv: tuple[str, ...]) -> dict:
     return detail
 
 
+def _wire_value(value: object) -> str | None:
+    """The wire string behind a contract enum member, or the string itself.
+
+    Accepting both is what lets this decode a status built by hand in a test as
+    readily as one parsed off a provider's stdout.
+    """
+    if value is None:
+        return None
+    return getattr(value, "value", value)
+
+
+def _reading(segment: object, mode: render.PresentationMode) -> dict:
+    """One segment, as the line shows it and as the words behind its tokens.
+
+    Every value comes either from the segment or from the host's own meaning
+    tables, keyed by what the segment reported. Nothing is inferred: a segment
+    that carried no reason clause reports no reason, because "the provider did
+    not say why" and "the host worked out why" are different claims and only the
+    first is true. Freshness likewise appears only where the provider dated its
+    reading.
+
+    `rendered` is produced by the renderer at the same mode as the line, so the
+    fragment quoted back to the reader is the fragment they are looking at rather
+    than a description of it.
+    """
+    state = _wire_value(segment.state) or render.UNKNOWN_STATE
+    reading = {
+        "key": segment.key,
+        "rendered": render.render_segment(segment, mode),
+        "state": state,
+        "state_token": render.state_marker(state, mode),
+        # An unrecognised state is described as unknown rather than left without
+        # a meaning. The contract refuses one on parse, so this fires only for a
+        # hand-built value, and the honest gloss for a state the host has no word
+        # for is the one that says so.
+        "state_means": render.STATE_MEANINGS.get(
+            state, render.STATE_MEANINGS[render.UNKNOWN_STATE]
+        ),
+    }
+    if getattr(segment, "hypothetical", False):
+        reading["hypothetical"] = render.HYPOTHETICAL_MEANING
+    confidence = _wire_value(segment.confidence)
+    if confidence is not None:
+        subject = _wire_value(segment.confidence_of)
+        if subject not in render.CONFIDENCE_SUBJECT_MEANINGS:
+            subject = "unspecified"
+        reading["confidence"] = {
+            "rendered": render.format_confidence(confidence, subject, mode),
+            "means": render.CONFIDENCE_SUBJECT_MEANINGS[subject],
+        }
+    reason = render.format_reason(segment.reason_code, segment.reason_label)
+    if reason:
+        reading["reason"] = reason
+    if segment.age_seconds is not None:
+        reading["freshness"] = render.format_age(segment.age_seconds, mode)
+    if segment.explain_key:
+        reading["explain_key"] = segment.explain_key
+    return reading
+
+
 EXIT_OK = 0
 EXIT_REFUSED = 1
 EXIT_FAILED = 3
