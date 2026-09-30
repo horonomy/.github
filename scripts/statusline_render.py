@@ -643,14 +643,26 @@ def _enum_value(value: object) -> str | None:
     return getattr(value, "value", value)
 
 
-def render_segment(segment: object, mode: PresentationMode) -> str:
+def render_segment(
+    segment: object,
+    mode: PresentationMode,
+    depth: InformationDepth = InformationDepth.DETAIL,
+) -> str:
     """Render one provider segment as a single readable phrase.
 
     Takes a `statusline_contract.Segment` (or anything with the same
     attributes), so the renderer stays usable against a hand-built stub in
     tests. Every value it reads has already passed the contract's privacy
     allowlist; this function adds no field of its own, so it cannot widen that
-    surface.
+    surface — and `depth` can only ever *remove* fields here, so Clear cannot be
+    a wider surface than Detail either.
+
+    `depth` defaults to `DETAIL` rather than to the product default of `CLEAR`
+    because this function's job is to render the segment it was handed; choosing
+    how much to show is the caller's, and a silent default of `CLEAR` would drop
+    fields from every existing direct caller. The state marker, the label and the
+    hypothetical marker are never depth-gated: they are what makes the reading a
+    reading at all.
 
     The hypothetical marker is placed outside the parenthesised details, welded
     to the label, so no degradation step and no careless reading can separate
@@ -661,8 +673,12 @@ def render_segment(segment: object, mode: PresentationMode) -> str:
     if getattr(segment, "hypothetical", False):
         head = f"{head} [{HYPOTHETICAL_TEXT}]"
 
+    supporting = depth.shows_supporting_detail
     details: list[str] = []
-    if segment.count is not None and segment.count_label:
+    # Counters are supporting material even when they look like a headline. A
+    # Circinus decision tally is the clearest case: `1520/3747` tells an operator
+    # nothing they can act on, and spends the product's whole Clear line doing it.
+    if supporting and segment.count is not None and segment.count_label:
         details.append(format_count(segment.count, segment.total, segment.count_label, mode))
     # Beside the count rather than beside the age: both are quantities the
     # segment is reporting, whereas the age qualifies the whole reading and so
@@ -672,21 +688,33 @@ def render_segment(segment: object, mode: PresentationMode) -> str:
     # this function's contract is "anything with the same attributes" and these
     # two arrived after that promise was made — a segment object from an older
     # copy of the contract must still render, minus the field it cannot supply.
+    #
+    # The one quantity Clear keeps. A duration carries its own noun -- "P90 6d7h"
+    # -- and for a scheduling product the span *is* the reading; dropping it would
+    # leave `Remaining work` saying nothing at all. Contrast the count above,
+    # which is a tally of things the operator did not ask about.
     duration = getattr(segment, "duration_seconds", None)
     duration_label = getattr(segment, "duration_label", None)
     if duration is not None and duration_label:
         details.append(format_duration(duration, duration_label))
+    # Confidence qualifies an estimate for someone deciding whether to trust it,
+    # which is a Detail question. In Clear it also reads dangerously like severity
+    # -- a bare "high" next to a state marker invites "high risk".
     confidence = _enum_value(segment.confidence)
-    if confidence is not None:
+    if supporting and confidence is not None:
         details.append(format_confidence(confidence, _enum_value(segment.confidence_of), mode))
 
     reason = format_reason(segment.reason_code, segment.reason_label)
     # A compact mode spends its remaining columns on exceptions only: a reason
     # for an `ok` segment is the least useful thing on the line, and a reason for
     # a `critical` one is the most.
-    if reason and (not mode.is_compact or state in EMPHATIC_STATES):
+    if supporting and reason and (not mode.is_compact or state in EMPHATIC_STATES):
         details.append(reason)
-    if segment.age_seconds is not None:
+    # Clear is freshness-*aware* rather than freshness-*annotated*: staleness
+    # decides in `clear_readings` whether a secondary reading survives at all, and
+    # the reading that does survive says its state plainly instead of asking the
+    # reader to date it. The age is one of the first things Detail adds back.
+    if supporting and segment.age_seconds is not None:
         details.append(format_age(segment.age_seconds, mode))
 
     if not details:
@@ -930,12 +958,27 @@ def scope_marker(scope: str, mode: PresentationMode) -> str:
 NO_SEGMENTS_LABEL = "No status reported"
 
 
-def render_provider(status: object, mode: PresentationMode) -> str:
+def render_provider(
+    status: object,
+    mode: PresentationMode,
+    depth: InformationDepth = InformationDepth.DETAIL,
+) -> str:
     """Render one provider's whole group: attribution, scope, then segments.
 
     Takes a `statusline_contract.ProviderStatus`. Segments are ordered by the
     contract's own `order_segments`, so ordering is the contract's concern and
     identical for every caller.
+
+    At `CLEAR` this selects the provider's Clear readings itself, so a direct
+    caller gets a correct summary without having to remember a second call. That
+    makes it a second application of `clear_readings` when `compose` has already
+    projected — which is safe because `clear_readings` is idempotent, and is worth
+    the redundancy: the alternative is a public function that silently renders
+    everything at `CLEAR` unless you knew to project first.
+
+    The provider's name is always rendered, at every depth. Clear is a shorter
+    reading, not an anonymous one — `🛡 Verified` is a sentence with the subject
+    removed, and on a line with three products it is a guess.
 
     A provider with no segments does not render as nothing. The contract asks
     providers to always emit at least one segment precisely because silence
@@ -945,8 +988,10 @@ def render_provider(status: object, mode: PresentationMode) -> str:
     primary one.
     """
     segments = statusline_contract.order_segments(status)
+    if segments and not depth.shows_supporting_detail:
+        segments = clear_readings(status)
     if segments:
-        body = SEGMENT_SEPARATORS[mode].join(render_segment(s, mode) for s in segments)
+        body = SEGMENT_SEPARATORS[mode].join(render_segment(s, mode, depth) for s in segments)
     elif getattr(status, "fallback_text", None):
         body = f"{state_marker(UNKNOWN_STATE, mode)} {status.fallback_text}"
     else:
@@ -1033,8 +1078,13 @@ def _segment_count(statuses: tuple) -> int:
     return sum(len(getattr(s, "segments", ()) or ()) for s in statuses)
 
 
-def _render_groups(statuses: "tuple", mode: PresentationMode, hidden: int = 0) -> str:
-    text = SEGMENT_SEPARATORS[mode].join(render_provider(s, mode) for s in statuses)
+def _render_groups(
+    statuses: "tuple",
+    mode: PresentationMode,
+    hidden: int = 0,
+    depth: InformationDepth = InformationDepth.DETAIL,
+) -> str:
+    text = SEGMENT_SEPARATORS[mode].join(render_provider(s, mode, depth) for s in statuses)
     if hidden:
         marker = _hidden_marker(hidden)
         text = f"{text}{SEGMENT_SEPARATORS[mode]}{marker}" if text else marker
@@ -1060,7 +1110,12 @@ def _without_dropped(statuses: tuple, dropped: set) -> tuple:
     return tuple(rebuilt)
 
 
-def _fit_by_dropping(statuses: tuple, mode: PresentationMode, budget: int) -> str | None:
+def _fit_by_dropping(
+    statuses: tuple,
+    mode: PresentationMode,
+    budget: int,
+    depth: InformationDepth = InformationDepth.DETAIL,
+) -> str | None:
     """Shed the least important segments until the block fits.
 
     Works one segment at a time rather than one provider at a time, so a
@@ -1099,7 +1154,7 @@ def _fit_by_dropping(statuses: tuple, mode: PresentationMode, budget: int) -> st
             break
         dropped.add((p_index, s_index))
         remaining = _without_dropped(statuses, dropped)
-        text = _render_groups(remaining, mode, hidden=len(dropped))
+        text = _render_groups(remaining, mode, hidden=len(dropped), depth=depth)
         if display_width(text) <= budget:
             return text
     return None
@@ -1164,6 +1219,7 @@ def compose(
     *,
     mode: PresentationMode = PresentationMode.BALANCED,
     width_budget: int | None = None,
+    depth: InformationDepth = InformationDepth.DETAIL,
 ) -> str:
     """Build the final statusline from the user's own output plus provider state.
 
@@ -1179,6 +1235,18 @@ def compose(
     the Horonom block alone. So is no provider state: an empty `statuses`
     returns the upstream text untouched, byte for byte.
 
+    `depth` is applied *before* any of that, by reducing each provider to the
+    readings that depth shows. Everything below then measures, sheds and counts
+    the same readings the user is looking at — so `[+2 more]` in Clear means two
+    readings lost to a narrow terminal, not two that Clear was never going to
+    show. A depth-blind ladder would report news where there was none.
+
+    Like the two functions it calls, `depth` defaults to `DETAIL`: this module
+    renders what it is handed, and the product default of `CLEAR` for a fresh
+    install belongs to whoever resolves the user's stored preference. Erring
+    toward `DETAIL` here also makes a caller that forgets the argument verbose
+    rather than quiet.
+
     Degradation, in order, and only when a budget is set: try each allowed mode
     and take the first that measures within budget; then shed the least
     important provider groups, saying how many segments went; then fall back to
@@ -1186,12 +1254,15 @@ def compose(
     that cannot be said honestly, the upstream text is returned alone — the
     user's own line is the last thing to go, never the first.
     """
-    ordered = statusline_contract.order_providers(statuses)
+    ordered = project_to_depth(statuses, depth)
     upstream = upstream_text or ""
     if not ordered:
         return upstream
 
-    candidates = [(candidate, _render_groups(ordered, candidate)) for candidate in _mode_candidates(mode)]
+    candidates = [
+        (candidate, _render_groups(ordered, candidate, depth=depth))
+        for candidate in _mode_candidates(mode)
+    ]
     chosen_mode, block = candidates[0]
     if width_budget is not None:
         for candidate, text in candidates:
@@ -1200,7 +1271,7 @@ def compose(
                 break
         else:
             chosen_mode, _ = min(candidates, key=lambda pair: display_width(pair[1]))
-            dropped = _fit_by_dropping(ordered, chosen_mode, width_budget)
+            dropped = _fit_by_dropping(ordered, chosen_mode, width_budget, depth)
             block = (
                 dropped if dropped is not None
                 else _fit_minimal(ordered, chosen_mode, width_budget)
