@@ -171,10 +171,14 @@ class TestPresentationModeParse(unittest.TestCase):
             render.PresentationMode.PLAIN,
         )
 
-    def test_only_plain_declines_glyphs(self):
-        self.assertFalse(render.PresentationMode.PLAIN.uses_glyphs)
-        self.assertTrue(render.PresentationMode.BALANCED.uses_glyphs)
-        self.assertTrue(render.PresentationMode.COMPACT.uses_glyphs)
+    def test_density_and_icon_style_are_independent(self):
+        # Every combination of the two axes is reachable. The one that matters is
+        # compact-and-text: a narrow terminal and an unreliable emoji font are
+        # different problems, and a reader with both must not have to pick one.
+        self.assertEqual(
+            {(mode.is_compact, mode.uses_glyphs) for mode in MODES},
+            {(False, True), (True, True), (False, False), (True, False)},
+        )
 
 
 class TestGraphemeClusters(unittest.TestCase):
@@ -634,9 +638,13 @@ class TestSeparatorHierarchy(unittest.TestCase):
                     3,
                 )
 
-    def test_plain_mode_separators_are_ascii(self):
-        self.assertTrue(render.SEGMENT_SEPARATORS[render.PresentationMode.PLAIN].isascii())
-        self.assertTrue(render.UPSTREAM_SEPARATORS[render.PresentationMode.PLAIN].isascii())
+    def test_text_mode_separators_are_ascii(self):
+        for mode in MODES:
+            if mode.uses_glyphs:
+                continue
+            with self.subTest(mode=mode):
+                self.assertTrue(render.SEGMENT_SEPARATORS[mode].isascii())
+                self.assertTrue(render.UPSTREAM_SEPARATORS[mode].isascii())
         self.assertTrue(render.DETAIL_SEPARATOR.isascii())
 
     def test_every_mode_has_a_separator_at_every_level(self):
@@ -909,21 +917,40 @@ class TestModeLadder(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.assertIs(render._mode_candidates(mode)[0], mode)
 
-    def test_the_ladder_never_reintroduces_a_glyph_a_plain_request_declined(self):
-        for candidate in render._mode_candidates(render.PresentationMode.PLAIN):
-            self.assertFalse(candidate.uses_glyphs)
+    def test_the_ladder_never_reintroduces_a_glyph_a_text_request_declined(self):
+        for mode in MODES:
+            if mode.uses_glyphs:
+                continue
+            for candidate in render._mode_candidates(mode):
+                with self.subTest(mode=mode, candidate=candidate):
+                    self.assertFalse(candidate.uses_glyphs)
 
-    def test_a_compact_request_is_not_re_expanded_to_balanced(self):
-        self.assertNotIn(
-            render.PresentationMode.BALANCED,
-            render._mode_candidates(render.PresentationMode.COMPACT),
-        )
+    def test_a_compact_request_is_never_re_expanded(self):
+        # Including via a text fallback: falling from COMPACT to PLAIN would drop
+        # the glyphs and hand the prose back, which is the trade COMPACT_PLAIN
+        # exists to make unnecessary.
+        for mode in MODES:
+            if not mode.is_compact:
+                continue
+            for candidate in render._mode_candidates(mode):
+                with self.subTest(mode=mode, candidate=candidate):
+                    self.assertTrue(candidate.is_compact)
 
-    def test_the_ladder_is_a_suffix_of_the_declared_order(self):
+    def test_every_candidate_list_follows_the_declared_preference_order(self):
         for mode in MODES:
             candidates = render._mode_candidates(mode)
             with self.subTest(mode=mode):
-                self.assertEqual(candidates, render.MODE_LADDER[render.MODE_LADDER.index(mode):])
+                positions = [render.MODE_PREFERENCE.index(c) for c in candidates]
+                self.assertEqual(positions, sorted(positions))
+                self.assertEqual(len(set(candidates)), len(candidates))
+
+    def test_a_text_request_can_still_be_tightened(self):
+        # The ladder must not run out of rungs for a text reader: a plain request
+        # on a narrow terminal has somewhere to go.
+        self.assertIn(
+            render.PresentationMode.COMPACT_PLAIN,
+            render._mode_candidates(render.PresentationMode.PLAIN),
+        )
 
 
 class TestComposeUpstreamPreservation(unittest.TestCase):
@@ -1037,10 +1064,10 @@ class TestComposeDegradation(unittest.TestCase):
             if match:
                 self.assertTrue(1 <= int(match.group(1)) < total, f"{mode.value}/{budget}")
 
-    def test_plain_mode_stays_ascii_under_every_budget(self):
+    def test_a_text_mode_stays_ascii_under_every_budget(self):
         for mode, budget, _, block in self.each_budget():
-            if mode is render.PresentationMode.PLAIN:
-                self.assertTrue(block.isascii(), f"budget={budget}: {block}")
+            if not mode.uses_glyphs:
+                self.assertTrue(block.isascii(), f"{mode.value}/{budget}: {block}")
 
     def test_a_non_empty_block_always_carries_a_readable_word(self):
         for mode, budget, _, block in self.each_budget():

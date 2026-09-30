@@ -32,14 +32,27 @@ import statusline_contract
 class PresentationMode(enum.Enum):
     """How much room the host is willing to spend on being legible.
 
-    Ordered least to most compressed. `PLAIN` is not a degraded mode — it is
-    the correct mode for a terminal whose font or width handling makes emoji
-    unreliable, and it must carry exactly the same state meaning as `BALANCED`.
+    Two independent axes, not one scale: **density** (how many columns a reading
+    is allowed) and **icon style** (whether glyphs may be used at all). They are
+    independent because the constraints behind them are — a narrow terminal and a
+    terminal whose font renders emoji badly are different problems, and a reader
+    can easily have both. Every combination is therefore a member, so a user who
+    needs a tight line *and* plain text can ask for exactly that instead of being
+    handed whichever half the enum happened to offer.
+
+    A text mode is not a degraded mode. It is the correct mode for a terminal
+    whose font or width handling makes emoji unreliable, and it carries exactly
+    the same state meaning as its glyph counterpart.
     """
 
     BALANCED = "balanced"
     COMPACT = "compact"
+    # `plain` rather than `balanced_plain`, which would be the symmetric name:
+    # registries written before the axes were separated already carry this value,
+    # and renaming it would silently fall back to a glyph mode for anyone who had
+    # asked for text. `parse` accepts the symmetric spelling as an alias.
     PLAIN = "plain"
+    COMPACT_PLAIN = "compact_plain"
 
     @classmethod
     def parse(cls, value: object, default: "PresentationMode" = None) -> "PresentationMode":
@@ -82,6 +95,7 @@ _MODE_AXES = {
     PresentationMode.BALANCED: (False, True),
     PresentationMode.COMPACT: (True, True),
     PresentationMode.PLAIN: (False, False),
+    PresentationMode.COMPACT_PLAIN: (True, False),
 }
 
 
@@ -339,8 +353,8 @@ def format_age(age_seconds: int, mode: PresentationMode) -> str:
     seconds or days old, and the extra precision costs columns that a provider
     label needs more. Rounds *down*, so "2m" never overstates freshness.
 
-    BALANCED and PLAIN say "ago" because a bare "2m" beside a count reads as a
-    duration or a budget rather than an age.
+    The balanced-density modes say "ago" because a bare "2m" beside a count reads
+    as a duration or a budget rather than an age.
     """
     age_seconds = max(0, int(age_seconds))
     for limit, unit, divisor in ((60, "s", 1), (3600, "m", 60), (86400, "h", 3600)):
@@ -653,26 +667,48 @@ def provider_severity(status: object) -> int:
     )
 
 
-# Tried in order when a budget is set. Deliberately *measured* rather than
-# assumed to shrink: COMPACT can be wider than BALANCED, because an emphatic
-# state gains its word there, and that is the intended trade — an exception
-# becomes more explicit under pressure, not less. So the ladder picks the first
-# candidate that actually fits instead of trusting the order.
-MODE_LADDER = (PresentationMode.BALANCED, PresentationMode.COMPACT, PresentationMode.PLAIN)
+# Preference order when a budget is set: keep glyphs as long as they fit, and
+# tighten density before abandoning them. Deliberately *measured* rather than
+# assumed to shrink: a compact mode can be wider than a balanced one, because an
+# emphatic state gains its word there, and that is the intended trade — an
+# exception becomes more explicit under pressure, not less. So the ladder picks
+# the first candidate that actually fits instead of trusting the order.
+MODE_PREFERENCE = (
+    PresentationMode.BALANCED,
+    PresentationMode.COMPACT,
+    PresentationMode.PLAIN,
+    PresentationMode.COMPACT_PLAIN,
+)
+
+# What the ladder may try, per requested mode. Derived from the two axes rather
+# than hand-listed per mode, so the rule below is stated once and cannot drift
+# from the lists that implement it.
+MODE_LADDER = {
+    requested: tuple(
+        candidate
+        for candidate in MODE_PREFERENCE
+        if (candidate.is_compact or not requested.is_compact)
+        and (requested.uses_glyphs or not candidate.uses_glyphs)
+    )
+    for requested in PresentationMode
+}
 
 
 def _mode_candidates(mode: PresentationMode) -> tuple[PresentationMode, ...]:
     """The modes the ladder may try, given what the user asked for.
 
-    Strictly downward: the ladder never hands back something the user declined.
-    A PLAIN request is a statement about what the terminal can render, not about
-    width, so no width pressure may reintroduce a glyph — that would produce
-    exactly the broken output PLAIN exists to avoid. A COMPACT request is not
-    re-expanded to BALANCED either, since the user asked for compactness and
-    running out of room is not a reason to give them more prose.
+    Strictly downward on both axes: the ladder never hands back something the
+    user declined. A text request is a statement about what the terminal can
+    render, not about width, so no width pressure may reintroduce a glyph — that
+    would produce exactly the broken output the text modes exist to avoid. A
+    compact request is not re-expanded either, since the user asked for
+    compactness and running out of room is not a reason to give them more prose.
+
+    The second rule is why the two axes have to be independent: before
+    `COMPACT_PLAIN` existed, a compact request under width pressure could only
+    shed its glyphs by falling to `PLAIN`, which quietly gave the prose back.
     """
-    start = MODE_LADDER.index(mode)
-    return MODE_LADDER[start:]
+    return MODE_LADDER[mode]
 
 
 def _hidden_marker(count: int) -> str:
