@@ -836,6 +836,9 @@ class CircinusStage:
         settings = self.home / ".claude" / "settings.json"
         data = json.loads(settings.read_text())
         hooks = data.get("hooks", {})
+        # `list()` is load-bearing, not habit: the loop `del`s from `hooks`, so
+        # iterating the live view raises `RuntimeError`. A linter that reads it as
+        # a redundant copy is wrong.
         for event, matchers in list(hooks.items()):
             kept = []
             for matcher in matchers:
