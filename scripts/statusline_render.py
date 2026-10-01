@@ -782,6 +782,30 @@ def _has_live_readings(status: object) -> bool:
     return _enum_value(availability) == "available"
 
 
+# The two roles that can stand as a provider's primary reading. Kept here rather
+# than inside one function because both the Clear projection and the width ladder
+# have to agree on it: the contract refuses a declared projection with no primary
+# (`_validate_clear_authority` rule 4), so any host-side reduction that rebuilds a
+# status has to leave one of these behind or it produces a snapshot the contract
+# would not have accepted from the provider.
+_PRIMARY_ROLES = (
+    statusline_contract.ClearRole.EXCEPTION,
+    statusline_contract.ClearRole.POSTURE,
+)
+
+
+def _declares_primary(segment: object) -> bool:
+    """Whether the provider itself nominated this segment as a primary reading.
+
+    Deliberately reads `Segment.clear_role` rather than `clear_roles`: inferred
+    roles are the host's own reading and exist for every segment of every payload,
+    so treating them as declarations would make every caller below behave
+    differently for providers that declared nothing — which is the behaviour
+    change this is meant not to make.
+    """
+    return getattr(segment, "clear_role", None) in _PRIMARY_ROLES
+
+
 def _worst_index(segments: tuple, indices: list) -> int:
     """The index of the highest-severity segment, earliest in contract order on a tie."""
     return max(
@@ -805,23 +829,38 @@ def _unavailability_index(segments: tuple) -> int:
 
     So, in order:
 
-    1. The first segment in contract order that is not `hypothetical`. Contract
+    1. The first non-`hypothetical` segment the provider declared a primary role
+       on. A provider that named its own primary reading has already answered the
+       question this function otherwise has to guess at, and the guess can pick a
+       supporting reading — an install path or a counter — leaving the one reading
+       the provider says matters out of a projection that is allowed exactly one.
+       It also keeps the result something the contract would accept: a declared
+       projection reduced to a lone supporting segment violates rule 4 of
+       `_validate_clear_authority`, so `project_to_depth` rebuilding it would
+       raise rather than render. Providers that declare nothing skip this rung
+       entirely and are read exactly as before.
+    2. The first segment in contract order that is not `hypothetical`. Contract
        order rather than severity, because the provider's own ordering is what
        this module defers to everywhere else, and because a provider whose config
        is invalid should lead with *that* rather than with a vaguer "could not
        determine". Excluding the hypothetical is the actual fix: a would-have is
        the one reading that cannot be a current statement about a product that is
        not running.
-    2. Failing that, the first segment whose state is `unknown` — the contract's
+    3. Failing that, the first segment whose state is `unknown` — the contract's
        word for "the provider could not determine its own state", and so the
        reading that is certainly about now.
-    3. Failing that, the first segment, so this always returns something.
+    4. Failing that, the first segment, so this always returns something.
 
-    Rule 1 makes `Segment.hypothetical` load-bearing here rather than decorative:
+    Rule 2 makes `Segment.hypothetical` load-bearing here rather than decorative:
     a provider that reports a shadow outcome without marking it has already
     broken the contract, and there is no second signal the host could use to
-    recognise it.
+    recognise it. Rule 1 inherits that exclusion rather than overriding it — a
+    declared posture that is also a would-have is still not a statement about a
+    product that is not running.
     """
+    for index, segment in enumerate(segments):
+        if not getattr(segment, "hypothetical", False) and _declares_primary(segment):
+            return index
     for index, segment in enumerate(segments):
         if not getattr(segment, "hypothetical", False):
             return index
@@ -887,6 +926,23 @@ def clear_roles(status: object) -> tuple:
     return tuple(roles)
 
 
+def _is_current(segment: object) -> bool:
+    """Whether a reading is recent enough for Clear to present it as the state now.
+
+    Named rather than inlined because both of Clear's vital rungs have to answer it
+    the same way, and they reach their candidates by different routes — rule 2 keys
+    on what the product *declared* vital, rule 3 on what the role ladder *inferred*.
+    Those predicates must stay separate, but the freshness question in front of them
+    is one question: a reading past its `cache_ttl_seconds` is not news about now, so
+    Clear drops it and Detail keeps it with its age.
+
+    `getattr` rather than attribute access so a provider-shaped stand-in without the
+    property is treated as current rather than crashing the render; the contract's
+    own `Segment` always has it.
+    """
+    return not getattr(segment, "is_stale", False)
+
+
 def _declared_fresh_vitals(segments: tuple, indices: list) -> list:
     """The still-fresh vital signals the *product itself* nominated, in contract order.
 
@@ -907,7 +963,7 @@ def _declared_fresh_vitals(segments: tuple, indices: list) -> list:
         for index in indices
         if getattr(segments[index], "clear_role", None)
         is statusline_contract.ClearRole.VITAL
-        and not getattr(segments[index], "is_stale", False)
+        and _is_current(segments[index])
     ]
 
 
@@ -969,7 +1025,7 @@ def clear_readings(status: object) -> tuple:
                 index
                 for index in everything
                 if roles[index] is statusline_contract.ClearRole.VITAL
-                and not getattr(segments[index], "is_stale", False)
+                and _is_current(segments[index])
             ]
             if fresh_vitals:
                 kept.add(_worst_index(segments, fresh_vitals))
@@ -1302,6 +1358,46 @@ def _detail_block(statuses: tuple, mode: PresentationMode, budget: int | None) -
     return ROW_SEPARATOR.join(min(laid_out, key=len))
 
 
+def _kept_segments(status: object, p_index: int, dropped: set) -> tuple:
+    """One provider's segments that `dropped` has not taken."""
+    return tuple(
+        segment
+        for s_index, segment in enumerate(getattr(status, "segments", ()) or ())
+        if (p_index, s_index) not in dropped
+    )
+
+
+def _next_droppable(statuses: tuple, order: list, dropped: set) -> tuple | None:
+    """The next segment in shed order that will not strand a declared primary.
+
+    Scans rather than indexes because the skipped candidates become droppable
+    later: a provider's primary is passed over while its other readings remain and
+    taken once they are gone, so the pass cannot be a single walk down `order`.
+
+    There is always a droppable candidate while more than one segment remains.
+    Stranding needs a provider holding two or more readings of which exactly one
+    is primary, and that provider's other readings are droppable by definition —
+    so the `None` here is a guard against a future caller, not a reachable rung.
+
+    Providers that declared no primary are unaffected: `before` has no primary
+    reading either, so the test short-circuits and the severity order stands.
+    """
+    for p_index, s_index, _ in order:
+        if (p_index, s_index) in dropped:
+            continue
+        status = statuses[p_index]
+        before = _kept_segments(status, p_index, dropped)
+        after = _kept_segments(status, p_index, dropped | {(p_index, s_index)})
+        if (
+            after
+            and any(_declares_primary(segment) for segment in before)
+            and not any(_declares_primary(segment) for segment in after)
+        ):
+            continue
+        return (p_index, s_index)
+    return None
+
+
 def _without_dropped(statuses: tuple, dropped: set) -> tuple:
     """Rebuild the provider tuple minus the `(provider, segment)` pairs in `dropped`.
 
@@ -1339,6 +1435,17 @@ def _fit_by_dropping(
     important. Never drops below one segment, because a block consisting only of
     `[+3 more]` says there is news without saying any of it.
 
+    One exception to that order: a segment the provider declared its primary is
+    shed only once the rest of that provider's readings are gone, so a surviving
+    product never shows a supporting counter while its own mode is the thing that
+    was dropped. Severity alone gets this backwards — Circinus's `neutral`
+    "Observing, not enforcing" is lower-severity than the `warn` block counter
+    beside it, so the unmodified order sheds the mode and keeps the count. It also
+    produced a crash rather than a narrow line: `_without_dropped` rebuilds each
+    shed provider, and a declared projection reduced to supporting readings is one
+    `_validate_clear_authority` refuses, so every budget narrow enough to shed
+    Circinus's mode raised `ContractViolation` instead of rendering.
+
     Returns `None` when even a single segment will not fit, so the caller can
     move to the next rung. It deliberately does *not* truncate: a rendered
     segment is shown whole or not at all. Cutting one mid-way produces fragments
@@ -1360,10 +1467,11 @@ def _fit_by_dropping(
         ),
     )
     dropped: set = set()
-    for p_index, s_index, _ in order:
-        if total - len(dropped) <= 1:
+    while total - len(dropped) > 1:
+        candidate = _next_droppable(statuses, order, dropped)
+        if candidate is None:
             break
-        dropped.add((p_index, s_index))
+        dropped.add(candidate)
         remaining = _without_dropped(statuses, dropped)
         text = _render_groups(remaining, mode, hidden=len(dropped), depth=depth)
         if display_width(text) <= budget:

@@ -1,0 +1,1 @@
+{"availability":"available","clear_authority":"provider","contract_version":1,"order_hint":300,"provider":"fornax","provider_version":"0.0.8","scope":"host","segments":[{"clear_role":"posture","explain_key":"fornax.latest_finding","key":"latest_finding","label":"No findings yet","state":"neutral"}]}

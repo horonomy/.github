@@ -1,0 +1,1 @@
+{"availability":"error","clear_authority":"provider","contract_version":1,"order_hint":300,"provider":"fornax","provider_version":"0.0.8","scope":"host","segments":[{"clear_role":"exception","explain_key":"fornax.availability","key":"availability","label":"Answer unreadable","reason_code":"response_not_understood","state":"warn"}]}
