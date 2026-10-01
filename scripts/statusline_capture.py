@@ -127,11 +127,8 @@ AF_UNIX_MAX = 104
 # its own to blow the cap, so `tempfile.mkdtemp()` is not available for the socket
 # root. A short, named path is therefore a requirement.
 #
-# What that requirement does *not* imply is a world-writable one, which is the
-# mistake these guards exist to close: a predictable name under `$HOME` can only
-# be pre-created by its owner, while the same name under `/tmp` can be
-# pre-created by anybody — as a symlink to something of the owner's, or with a
-# mode that lets them read the product state the staged daemons write into it.
+# What that requirement does *not* imply is a world-writable one — see
+# `STAGING_PARENT` for why the roots live where they do.
 #
 # Predictable still means the path may already exist, from a previous run or from
 # a hand that is not ours. So the roots are validated before use and the script
@@ -1360,7 +1357,11 @@ def main(argv: list[str] | None = None) -> int:
             "be long."
         )
     work_dir = reset_private_dir(staging_root)
-    reset_private_dir(SOCKET_ROOT)
+    # Through the same guard as the operator's argument, even though it is derived
+    # from `STAGING_PARENT` and so cannot fail it today. The point is that if
+    # someone moves it, the move is refused here rather than silently widening
+    # what this script is willing to delete.
+    reset_private_dir(confine_to_staging_parent(SOCKET_ROOT, what="SOCKET_ROOT"))
 
     captures: list[Capture] = []
     for product in products:
