@@ -42,6 +42,23 @@ writing the host settings file, editing the reader's own statusline script or
 restarting a daemon; and an unrelated operation -- adopting a product, or
 dropping one -- resetting the stored preference. Each of those renders something
 a reader would accept, which is why they need a test that does not.
+
+Then the sixteen the product-authority gate is required to demonstrate
+(HORO-1635), which are narrower still: the three shipped products now declare
+which reading plays which part in Clear, and these are the ways a host could take
+that decision back without appearing to. The host infers over a declaration by
+promoting an action-required state, inventing a posture, or defaulting the parts
+the product assigned; one of the four rules that make a declaration trustworthy is
+deleted, so a half-declared payload is accepted and the rest inferred; a freshness
+window stops closing; an unreachable product is read by severity; an exception
+loses the reading the product nominated beside it, or gains one the product did
+not; a percentage loses the word that says what it measures; Clear re-ranks its
+readings by severity and stops leading with Detail's lead; the width ladder sheds
+a declared primary; and -- the two that are not host defects at all -- a product
+stops declaring, or starts reporting a schedule for work it is not doing. These
+are proven against the real payload fixtures rather than hand-written stand-ins,
+because a mutation that only breaks an approximation of a product has only proven
+something about the approximation.
 """
 
 from __future__ import annotations
@@ -59,6 +76,7 @@ import statusline_compositor as compositor
 import statusline_contract as contract
 import statusline_lifecycle as lifecycle
 import statusline_render as render
+import test_statusline_authority_gate as authority_gate
 import test_statusline_compositor as compositor_tests
 import test_statusline_contract as contract_tests
 import test_statusline_depth_gate as depth_gate
@@ -745,6 +763,384 @@ def normalising_the_presentation_block_when_a_product_leaves() -> object:
 # --------------------------------------------------------------------------
 
 
+# --------------------------------------------------------------------------
+# The product-authority mutations (HORO-1635). Every one of these had to be
+# chosen against the real payloads, because the obvious shape of the mutation
+# does not work here: under `ClearAuthority.PROVIDER` every segment already
+# carries a role, and every rung of `render.clear_roles` fires only on a role
+# that is still `None`, so "ignore the declaration and use the ladder" is a
+# no-op. What the host can still do is *infer on top of* a declaration, so each
+# mutation below promotes, invents or defaults a part the product already
+# assigned -- or deletes one of the four rules that make the declaration
+# trustworthy, at which point the host accepts a half-declared projection and
+# fills the rest in by inference, which is the merge the mode exists to prevent.
+#
+# Rejected as vacuous, recorded so the next person does not spend the afternoon
+# rediscovering it: keying the exception's companion on `_has_quantified_reading`
+# (no shipped payload carries both an exception and a quantified segment --
+# Libra's budget percentage lives in its label, not in `count`); returning Clear's
+# readings in role order instead of contract order (`order_segments` re-sorts them
+# downstream); and any change confined to rungs 2 and 3 of the role ladder (no
+# segment of any shipped payload reaches them).
+# --------------------------------------------------------------------------
+
+
+def _indices_of(segments: tuple, chosen: tuple) -> set:
+    """Which positions in `segments` the objects in `chosen` occupy.
+
+    By identity rather than equality: two readings of a provider can be equal
+    without being the same reading, and a position set built on equality would
+    silently merge them.
+    """
+    return {
+        index
+        for index, segment in enumerate(segments)
+        if any(segment is one for one in chosen)
+    }
+
+
+def promoting_an_action_required_state_over_the_declared_part() -> object:
+    """The top rung of the role ladder run unconditionally.
+
+    The plausible reasoning, and it is a good one: a state that stops work must
+    never be demoted, so make the rule absolute rather than a fallback. It reads
+    as defence in depth. What it actually does is overrule the product on the one
+    reading the product is best placed to rank -- Circinus declares its mode the
+    posture and its decision a vital, and this makes the decision an exception, at
+    which point `clear_readings` shows the exception alone and the mode is gone.
+    The line then says a block happened without saying whether enforcement is on.
+    """
+    real = render.clear_roles
+
+    def mutated(status):
+        roles = list(real(status))
+        for index, segment in enumerate(contract.order_segments(status)):
+            if render._enum_value(segment.state) in render.ACTION_REQUIRED_STATES:
+                roles[index] = contract.ClearRole.EXCEPTION
+        return tuple(roles)
+
+    return unittest.mock.patch.object(render, "clear_roles", mutated)
+
+
+def inventing_a_posture_beside_the_declared_one() -> object:
+    """The posture rung run unconditionally, so a measurement claims the part.
+
+    `_has_quantified_reading` exists because a measurement is usually the more
+    useful reading, and running it always looks like applying that insight
+    consistently. Circinus's block counter is the measurement in its snapshot, so
+    the counter becomes a second posture -- and a raw tally reaches Clear, which
+    is the one thing the product's Detail surface is for.
+    """
+    real = render.clear_roles
+
+    def mutated(status):
+        roles = list(real(status))
+        for index, segment in enumerate(contract.order_segments(status)):
+            if render._has_quantified_reading(segment):
+                roles[index] = contract.ClearRole.POSTURE
+                break
+        return tuple(roles)
+
+    return unittest.mock.patch.object(render, "clear_roles", mutated)
+
+
+def defaulting_the_roles_the_product_already_assigned() -> object:
+    """The whole ladder run over a declared projection, as if nothing were declared.
+
+    The form this takes in practice is not a decision to ignore the declaration
+    but a refactor that forgets to read it -- a helper that rebuilds the role list
+    from the segments it can see. Libra is where it shows: the host infers the
+    estimate as the posture and then has no vital left to put beside it, because
+    the budget posture it would have shown is a percentage inside a label rather
+    than a counted quantity. The reading the founder asked for by name goes.
+    """
+    real = render.clear_roles
+
+    def mutated(status):
+        undeclared = dataclasses.replace(
+            status,
+            clear_authority=contract.ClearAuthority.HOST,
+            segments=tuple(
+                dataclasses.replace(segment, clear_role=None)
+                for segment in status.segments
+            ),
+        )
+        return real(undeclared)
+
+    return unittest.mock.patch.object(render, "clear_roles", mutated)
+
+
+def a_declaration_check_with_one_rule_deleted(rule: str) -> object:
+    """One of the four provider-authority rules removed, the others kept.
+
+    Deliberately a reimplementation rather than a swallowed exception, because
+    that is the shape the defect takes: a rule gets deleted by someone who has met
+    a payload it refused and reads it as too strict. Deleting rule `every-role` is
+    the one the ticket names -- a payload that declares some of its segments is
+    accepted, and the host infers the rest, which is the silent merge of product
+    semantics and host guesswork that `ClearAuthority.PROVIDER` exists to stop.
+
+    The messages here are abbreviated copies of the real ones. They are only
+    reached by the rules this mutation keeps, and the tests that assert on message
+    text assert against the real implementation.
+    """
+
+    def mutated(self) -> None:
+        if not isinstance(self.clear_authority, contract.ClearAuthority):
+            raise contract.ContractViolation("clear_authority must be a ClearAuthority")
+        if self.clear_authority is not contract.ClearAuthority.PROVIDER:
+            return
+        if rule != "at-least-one-segment" and not self.segments:
+            raise contract.ContractViolation(
+                "clear_authority 'provider' requires at least one segment"
+            )
+        if rule != "every-role":
+            undeclared = [s.key for s in self.segments if s.clear_role is None]
+            if undeclared:
+                raise contract.ContractViolation(
+                    "clear_authority 'provider' requires a clear_role on every segment"
+                )
+        postures = [s.key for s in self.segments if s.clear_role is contract.ClearRole.POSTURE]
+        if rule != "one-posture" and len(postures) > 1:
+            raise contract.ContractViolation(
+                "clear_authority 'provider' allows at most one 'posture' segment"
+            )
+        if (
+            rule != "a-primary"
+            and not postures
+            and not any(s.clear_role is contract.ClearRole.EXCEPTION for s in self.segments)
+        ):
+            raise contract.ContractViolation(
+                "clear_authority 'provider' requires a 'posture' or 'exception' segment"
+            )
+
+    return unittest.mock.patch.object(
+        contract.ProviderStatus, "_validate_clear_authority", mutated
+    )
+
+
+def a_freshness_window_that_never_closes() -> object:
+    """Clear's freshness test always true, so an old reading reads as current.
+
+    Not written as "show stale things" -- written as a freshness computation that
+    has lost its comparison, which is how it would arrive. Circinus's own
+    `fresh_within_seconds` is then decoration: an hour-old block decision sits
+    beside the mode in Clear, and the reader is told about an evaluation that
+    happened sometime, in the one place that has no room to say when.
+
+    Patches the host's reading of staleness (`render._is_current`) rather than
+    `Segment.is_stale` itself, which was the first attempt and was wrong: falsifying
+    the property also falsifies the gate's own precondition that the fixture is
+    stale, so the gate failed at `the fixture is only a proof while it is stale`
+    instead of at the Clear semantics. That is a guard tripping on its own setup,
+    not on the defect -- the payload must stay honestly stale and the host must be
+    the thing that stops noticing.
+    """
+    return unittest.mock.patch.object(render, "_is_current", lambda segment: True)
+
+
+def reading_an_unreachable_product_by_severity() -> object:
+    """The unavailability rule's first form, restored: the worst reading wins.
+
+    Documented in `_unavailability_index` as the version that was wrong, which
+    makes it the version worth keeping a mutation for -- a rule that was once
+    written this way can be written this way again, and the comment explaining why
+    not is not a test. A wedged Circinus then leads with the cached decision it
+    cannot currently make.
+    """
+
+    def mutated(segments):
+        return render._worst_index(segments, list(range(len(segments))))
+
+    return unittest.mock.patch.object(render, "_unavailability_index", mutated)
+
+
+def showing_an_exception_with_nothing_beside_it() -> object:
+    """An exception takes the whole line, as the simpler reading of the rule.
+
+    The rule it simplifies is subtle enough to invite this: nothing may be shown
+    beside an exception *except* a vital the product itself nominated. Dropping the
+    exception turns `Approval · 12% budget left` into `Approval`, which is the
+    reading the founder rejected by name -- an approval whose cost is invisible.
+    """
+    real = render.clear_readings
+
+    def mutated(status):
+        chosen = real(status)
+        if not render._has_live_readings(status):
+            return chosen
+        segments = contract.order_segments(status)
+        roles = render.clear_roles(status)
+        exceptions = [
+            segment
+            for index, segment in enumerate(segments)
+            if roles[index] is contract.ClearRole.EXCEPTION
+        ]
+        return (exceptions[0],) if exceptions else chosen
+
+    return unittest.mock.patch.object(render, "clear_readings", mutated)
+
+
+def accompanying_an_exception_with_any_fresh_reading() -> object:
+    """The exception's companion chosen by the host rather than by the product.
+
+    The mirror of the mutation above and the likelier of the two, because it is
+    generous rather than austere: if a product may nominate a reading to sit beside
+    its exception, surely a fresh reading is better than an empty space. It is not.
+    Libra's exhausted budget gains a task identifier, and the line spends half its
+    width on an id while saying work has stopped.
+    """
+    real = render.clear_readings
+
+    def mutated(status):
+        chosen = real(status)
+        if len(chosen) != 1 or not render._has_live_readings(status):
+            return chosen
+        segments = contract.order_segments(status)
+        roles = render.clear_roles(status)
+        kept = _indices_of(segments, chosen)
+        if not all(roles[index] is contract.ClearRole.EXCEPTION for index in kept):
+            return chosen
+        for index, segment in enumerate(segments):
+            if index not in kept and not segment.is_stale:
+                kept.add(index)
+                break
+        return tuple(segment for index, segment in enumerate(segments) if index in kept)
+
+    return unittest.mock.patch.object(render, "clear_readings", mutated)
+
+
+def accepting_a_percentage_with_no_axis() -> object:
+    """The axis check reduced to a length check, as one validation too many.
+
+    It looks redundant next to the label validation it sits beside, and a provider
+    that reports percentages presumably knows what they measure. Libra's budget
+    posture is where it bites, and it bites in the direction that cannot be
+    recovered: the host has no way to restore the missing word, so `53%` beside a
+    budget reads as spent to one reader and as left to the next.
+    """
+    return unittest.mock.patch.object(
+        contract, "require_percentage_axis", lambda value, field: value
+    )
+
+
+def ranking_clears_readings_by_severity() -> object:
+    """Clear's chosen readings re-ordered worst-first, as the summary's own order.
+
+    The most sympathetic mutation in the file: a one-line summary surely leads with
+    the most severe thing in it. What it breaks is the property that makes the two
+    depths one product -- Clear and Detail lead with the same reading -- so a
+    reader switching depth sees the subject of the line change, and cannot tell
+    whether the product's state changed with it.
+    """
+    real = render.clear_readings
+
+    def mutated(status):
+        return tuple(
+            sorted(
+                real(status),
+                key=lambda segment: -render.STATE_SEVERITY.get(
+                    render._enum_value(segment.state), 0
+                ),
+            )
+        )
+
+    return unittest.mock.patch.object(render, "clear_readings", mutated)
+
+
+def shedding_a_declared_primary_by_severity_alone() -> object:
+    """The width ladder's shed order before this ticket fixed it.
+
+    The regression this gate found, kept as a mutation because the fix is an
+    exception to a rule the rest of the file states plainly -- lowest severity
+    first -- and an exception is exactly what a later simplification removes.
+    Restoring it does not produce a worse line; it produces no line at all, because
+    the remainder is a declared projection with no primary and the contract refuses
+    to build one.
+    """
+
+    def mutated(statuses, order, dropped):
+        for p_index, s_index, _ in order:
+            if (p_index, s_index) not in dropped:
+                return (p_index, s_index)
+        return None
+
+    return unittest.mock.patch.object(render, "_next_droppable", mutated)
+
+
+def _replacing_the_payload_set(rebuilt: tuple) -> object:
+    """Swap the gate's loaded fixtures for edited copies, consistently.
+
+    `PAYLOADS`, `BY_NAME` and `LINES` are three views of one set, and patching one
+    of them would leave the gate proving things about two different fixture sets at
+    once -- which would make a passing mutation case meaningless rather than wrong.
+    """
+    by_name = {item.name: item for item in rebuilt}
+    lines = tuple(
+        tuple(by_name[item.name] for item in group) for group in authority_gate.LINES
+    )
+    return unittest.mock.patch.multiple(
+        authority_gate, PAYLOADS=rebuilt, BY_NAME=by_name, LINES=lines
+    )
+
+
+def _edited_payloads(name: str, edit) -> tuple:
+    return tuple(
+        dataclasses.replace(item, status=edit(item.status)) if item.name == name else item
+        for item in authority_gate.PAYLOADS
+    )
+
+
+def a_product_that_stopped_declaring_its_own_projection() -> object:
+    """Fornax ships a build that no longer declares, and the host infers again.
+
+    The regression this whole ticket is insurance against, and the only one that is
+    not a host defect: nothing in the host changes, a product simply stops saying
+    which reading is which, and the inference ladder resumes without a word. The
+    rendered line stays plausible, which is why the gate has to assert the
+    declaration itself rather than only its consequences.
+    """
+
+    def undeclare(status):
+        return dataclasses.replace(
+            status,
+            clear_authority=contract.ClearAuthority.HOST,
+            segments=tuple(
+                dataclasses.replace(segment, clear_role=None)
+                for segment in status.segments
+            ),
+        )
+
+    rebuilt = tuple(
+        dataclasses.replace(item, status=undeclare(item.status))
+        if item.product == "fornax"
+        else item
+        for item in authority_gate.PAYLOADS
+    )
+    return _replacing_the_payload_set(rebuilt)
+
+
+def a_product_that_reports_a_schedule_while_idle() -> object:
+    """Libra ships an estimate for work it is not doing.
+
+    A plausible product regression rather than a malicious one: the estimator keeps
+    answering after the task ends and the last span is still in the snapshot. The
+    founder's rule is about the reading, not about the mechanism -- a P90 beside an
+    idle governor is a delivery promise for nothing.
+    """
+
+    def with_an_estimate(status):
+        return dataclasses.replace(
+            status,
+            segments=tuple(
+                dataclasses.replace(segment, duration_seconds=450000, duration_label="P90")
+                for segment in status.segments
+            ),
+        )
+
+    return _replacing_the_payload_set(_edited_payloads("libra/idle", with_an_estimate))
+
+
 class HarnessTest(MutationCase):
     """The harness is the thing everything below trusts, so it is checked too.
 
@@ -1171,6 +1567,219 @@ class PreferenceMigrationTest(MutationCase):
             "test_disabling_a_product_at_detail_takes_nothing_else_with_it",
             normalising_the_presentation_block_when_a_product_leaves(),
             expect="is not <InformationDepth.DETAIL",
+        )
+
+
+class HostInferringOverADeclarationTest(MutationCase):
+    """Three ways to overrule a product that already decided (HORO-1635).
+
+    All three leave a line a reader would accept, and none of them is reachable by
+    turning the declaration off -- the host has no authority branch to disable.
+    They are reached by inferring *in addition*, which is the only move left.
+    """
+
+    def test_promoting_an_action_required_state_over_the_declaration_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.CircinusClearTest,
+            "test_clear_is_the_mode_and_the_fresh_enforcement_outcome",
+            promoting_an_action_required_state_over_the_declared_part(),
+            expect="['latest_decision'] != ['mode', 'latest_decision']",
+        )
+
+    def test_inventing_a_posture_beside_the_declared_one_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.CircinusClearTest,
+            "test_a_raw_decision_tally_never_reaches_clear",
+            inventing_a_posture_beside_the_declared_one(),
+            expect="block_window",
+        )
+
+    def test_defaulting_the_parts_the_product_assigned_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.LibraClearTest,
+            "test_a_normal_active_task_is_schedule_plus_budget_posture",
+            defaulting_the_roles_the_product_already_assigned(),
+            expect="['estimate'] != ['estimate', 'budget']",
+        )
+
+    def test_the_role_the_host_computes_is_watched_for_every_payload(self) -> None:
+        # The same defect seen from the other side: whichever of the three shapes
+        # it takes, it shows up as the computed role list diverging from the
+        # declared one. Asserted separately because this is the guard that covers
+        # the payloads whose rendered Clear line happens not to change.
+        self.assert_guard_catches(
+            authority_gate.DeclaredAuthorityTest,
+            "test_the_role_the_host_computes_is_the_role_the_product_declared",
+            promoting_an_action_required_state_over_the_declared_part(),
+            expect="ClearRole.EXCEPTION",
+        )
+
+
+class DeclarationRuleTest(MutationCase):
+    """Each of the four rules that make a declaration worth trusting (HORO-1635).
+
+    The rules only ever fire on a payload the host should refuse, so none of them
+    is exercised by the shipped fixtures passing. Deleting one has to be shown to
+    turn a refusal into an acceptance, which is what these four do.
+    """
+
+    def test_accepting_a_payload_that_declared_only_some_of_its_parts_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.RefusalTest,
+            "test_a_declaring_payload_that_omits_one_role_is_refused",
+            a_declaration_check_with_one_rule_deleted("every-role"),
+            expect="ContractViolation not raised",
+        )
+
+    def test_accepting_a_payload_that_names_no_primary_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.RefusalTest,
+            "test_a_declaring_payload_that_names_no_primary_is_refused",
+            a_declaration_check_with_one_rule_deleted("a-primary"),
+            expect="ContractViolation not raised",
+        )
+
+    def test_accepting_two_declared_postures_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.RefusalTest,
+            "test_a_declaring_payload_with_two_postures_is_refused",
+            a_declaration_check_with_one_rule_deleted("one-posture"),
+            expect="ContractViolation not raised",
+        )
+
+    def test_accepting_authority_over_no_segments_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.RefusalTest,
+            "test_a_declaring_payload_with_no_segments_is_refused",
+            a_declaration_check_with_one_rule_deleted("at-least-one-segment"),
+            # Not "not raised": rule 4 subsumes rule 1 for refusal purposes, since a
+            # payload with no segments has no posture either. So deleting rule 1 keeps
+            # the refusal and changes only its reason -- which the gate asserts on,
+            # because a reader handed "requires a posture or exception" for an empty
+            # payload is told to add a role to a segment that does not exist. Recorded
+            # rather than smoothed over: rule 1 earns its place as the diagnosis, not
+            # as the gate.
+            expect="at least one segment",
+        )
+
+    def test_accepting_a_percentage_with_no_axis_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.RefusalTest,
+            "test_a_percentage_that_loses_its_axis_is_refused",
+            accepting_a_percentage_with_no_axis(),
+            expect="ContractViolation not raised",
+        )
+
+
+class ClearPrecedenceTest(MutationCase):
+    """The three-rule precedence, mutated one rule at a time (HORO-1635)."""
+
+    def test_a_stale_outcome_surviving_into_clear_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.CircinusClearTest,
+            "test_a_stale_outcome_leaves_clear_and_the_mode_remains",
+            a_freshness_window_that_never_closes(),
+            expect="['mode', 'latest_decision'] != ['mode']",
+        )
+
+    def test_a_cached_posture_surviving_an_unreachable_runtime_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.CircinusClearTest,
+            "test_an_unreachable_runtime_overrides_a_cached_mode_if_one_ever_arrives",
+            reading_an_unreachable_product_by_severity(),
+            expect="latest_decision",
+        )
+
+    def test_a_shadow_would_block_losing_its_marking_in_clear_is_caught(self) -> None:
+        # The one mutation this set shares with HORO-1627's. Pointed at the real
+        # Circinus payload as well as at the depth gate's matrix, because the
+        # product's own wording is what a reader sees and the two differ.
+        self.assert_guard_catches(
+            authority_gate.CircinusClearTest,
+            "test_a_would_block_in_shadow_keeps_its_hypothetical_marking_in_clear",
+            dropping_the_hypothetical_marker_from_the_summary(),
+            expect="NOT ENFORCED",
+        )
+
+    def test_an_exception_shown_without_its_declared_companion_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.LibraClearTest,
+            "test_waiting_on_a_human_leads_and_keeps_the_budget_beside_it",
+            showing_an_exception_with_nothing_beside_it(),
+            expect="['task'] != ['task', 'budget']",
+        )
+
+    def test_an_exception_given_a_companion_the_product_did_not_name_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.LibraClearTest,
+            "test_an_exhausted_budget_takes_the_line_from_every_routine_metric",
+            accompanying_an_exception_with_any_fresh_reading(),
+            expect="['task', 'budget'] != ['budget']",
+        )
+
+    def test_clear_re_ranking_its_readings_by_severity_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.CrossDepthTest,
+            "test_clear_leads_with_the_same_reading_detail_leads_with",
+            ranking_clears_readings_by_severity(),
+            expect="Segment(",
+        )
+
+
+class WidthLadderTest(MutationCase):
+    """The regression this gate found, and the shape of its fix (HORO-1635)."""
+
+    def test_shedding_a_declared_primary_under_width_pressure_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.WidthPressureTest,
+            "test_every_budget_renders_a_declared_projection_instead_of_refusing_it",
+            shedding_a_declared_primary_by_severity_alone(),
+            expect="requires a 'posture' or 'exception' segment",
+        )
+
+    def test_the_invariant_is_watched_where_the_remainder_is_built(self) -> None:
+        # The crash is the loud symptom; the invariant is the actual claim. Pointed
+        # at the test that inspects every remainder the ladder builds, so a future
+        # fix that stopped the crash without keeping the primary -- by relaxing the
+        # contract for host-built snapshots, say -- would still be caught here.
+        self.assert_guard_catches(
+            authority_gate.WidthPressureTest,
+            "test_the_ladder_never_hands_the_contract_a_projection_with_no_primary",
+            shedding_a_declared_primary_by_severity_alone(),
+            expect="requires a 'posture' or 'exception' segment",
+        )
+
+
+class ProductRegressionTest(MutationCase):
+    """The two defects no host change can cause, and no host rule can fix (HORO-1635).
+
+    Both are edits to the loaded payloads rather than to the host, which is the
+    point: this gate's subject is the products as much as the renderer, and a
+    product that stops holding up its end has to fail something.
+    """
+
+    def test_a_product_that_stops_declaring_authority_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.DeclaredAuthorityTest,
+            "test_every_product_declares_authority_over_its_own_projection",
+            a_product_that_stopped_declaring_its_own_projection(),
+            expect="ClearAuthority.HOST",
+        )
+
+    def test_a_product_that_stops_declaring_its_parts_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.DeclaredAuthorityTest,
+            "test_every_segment_of_every_payload_declares_its_part",
+            a_product_that_stopped_declaring_its_own_projection(),
+            expect="unexpectedly None",
+        )
+
+    def test_a_product_reporting_a_schedule_while_idle_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.LibraClearTest,
+            "test_an_idle_libra_shows_no_schedule_expectation",
+            a_product_that_reports_a_schedule_while_idle(),
+            expect="P90",
         )
 
 
