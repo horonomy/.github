@@ -926,6 +926,23 @@ def clear_roles(status: object) -> tuple:
     return tuple(roles)
 
 
+def _is_current(segment: object) -> bool:
+    """Whether a reading is recent enough for Clear to present it as the state now.
+
+    Named rather than inlined because both of Clear's vital rungs have to answer it
+    the same way, and they reach their candidates by different routes — rule 2 keys
+    on what the product *declared* vital, rule 3 on what the role ladder *inferred*.
+    Those predicates must stay separate, but the freshness question in front of them
+    is one question: a reading past its `cache_ttl_seconds` is not news about now, so
+    Clear drops it and Detail keeps it with its age.
+
+    `getattr` rather than attribute access so a provider-shaped stand-in without the
+    property is treated as current rather than crashing the render; the contract's
+    own `Segment` always has it.
+    """
+    return not getattr(segment, "is_stale", False)
+
+
 def _declared_fresh_vitals(segments: tuple, indices: list) -> list:
     """The still-fresh vital signals the *product itself* nominated, in contract order.
 
@@ -946,7 +963,7 @@ def _declared_fresh_vitals(segments: tuple, indices: list) -> list:
         for index in indices
         if getattr(segments[index], "clear_role", None)
         is statusline_contract.ClearRole.VITAL
-        and not getattr(segments[index], "is_stale", False)
+        and _is_current(segments[index])
     ]
 
 
@@ -1008,7 +1025,7 @@ def clear_readings(status: object) -> tuple:
                 index
                 for index in everything
                 if roles[index] is statusline_contract.ClearRole.VITAL
-                and not getattr(segments[index], "is_stale", False)
+                and _is_current(segments[index])
             ]
             if fresh_vitals:
                 kept.add(_worst_index(segments, fresh_vitals))
