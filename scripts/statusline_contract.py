@@ -219,6 +219,35 @@ class ClearRole(enum.Enum):
     SUPPORTING = "supporting"
 
 
+class ClearAuthority(enum.Enum):
+    """Who decides which of a provider's facts earns the Clear line.
+
+    `ClearRole` made the judgement *expressible*; this makes it *binding*. The
+    two are not the same thing, and the gap between them was a live defect: a
+    provider could declare a posture and still have the host promote a different
+    segment over it, because the host's fallback ladder ran regardless and had no
+    way to tell a deliberate, complete declaration from a payload written before
+    the field existed. Clear then summarised the wrong fact while every test
+    passed — Circinus led its line with a hypothetical would-block instead of
+    mode plus outcome.
+
+    `HOST` is the default and keeps the documented fallback for every provider
+    that has not spoken. `PROVIDER` means "this payload declares its own Clear
+    projection in full", and the host answers by switching the ladder off rather
+    than merging with it: a declaration that can be overridden on the host's
+    severity arithmetic is not a declaration.
+
+    Because it is a claim the host relies on, it is validated rather than
+    trusted (`ProviderStatus._validate_clear_authority`), and a declaring payload
+    that does not hold up is refused instead of quietly re-inferred. Falling back
+    there would restore the exact failure this enum exists to close, and do it
+    invisibly.
+    """
+
+    HOST = "host"
+    PROVIDER = "provider"
+
+
 class HostCapability(enum.Enum):
     """Whether a given agent host tool can support a composed statusline.
 
