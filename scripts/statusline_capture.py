@@ -107,6 +107,12 @@ PROVIDER_TIMEOUT = 20
 #: depends on the length of the operator's home directory.
 SOCKET_ROOT = pathlib.Path.home() / ".cache" / "hsc"
 
+#: The only directory either staging root may live in. ``~/.cache`` is where
+#: throwaway state belongs by convention, which is the property that matters
+#: here: ``reset_private_dir`` *deletes* the root it is handed, so the root has
+#: to be somewhere whose contents are disposable by definition.
+STAGING_PARENT = pathlib.Path.home() / ".cache"
+
 #: macOS' ``sun_path`` is 104 bytes including the terminator; Linux allows 108.
 #: The smaller is used everywhere so a capture that works on one machine is not
 #: a capture that fails on another.
@@ -131,6 +137,11 @@ AF_UNIX_MAX = 104
 # refuses to run rather than clearing a path it does not recognise. Fail closed
 # with zero mutation, which is the same rule the product side of this repo is
 # held to.
+#
+# Two separate questions, answered by two guards, because one does not imply the
+# other: `reset_private_dir` asks whether the root is safe to *write* to, and
+# `confine_to_staging_parent` asks whether it is somewhere we may *delete*.
+# `--work-dir ~/.ssh` passes the first and is refused by the second.
 # ---------------------------------------------------------------------------
 
 
@@ -185,6 +196,29 @@ def socket_budget(root: pathlib.Path) -> int:
     inside a daemon start.
     """
     return AF_UNIX_MAX - len(str(root).encode()) - 1
+
+
+def confine_to_staging_parent(path: pathlib.Path, *, what: str) -> pathlib.Path:
+    """Resolve `path` and require it to be a directory of its own under `STAGING_PARENT`.
+
+    `reset_private_dir`'s own checks — absolute, not a symlink, a directory, ours,
+    mode 0700 — say the path is *safe to write to*. They do not say it is safe to
+    **delete**, and deleting is what happens next. `~/.ssh` satisfies every one of
+    them. So the location is checked too, and the rule is the narrowest one that
+    still admits the default: inside `~/.cache`, and not `~/.cache` itself, which
+    would take every other tool's cache down with the staging root.
+
+    Checked on the *resolved* path, both sides, so neither a `..` segment nor a
+    symlinked `~/.cache` gets past it.
+    """
+    resolved = path.expanduser().resolve()
+    parent = STAGING_PARENT.expanduser().resolve()
+    if resolved == parent or parent not in resolved.parents:
+        raise SystemExit(
+            f"{what} must be a directory of its own inside {parent}, because it is "
+            f"deleted and recreated on every run; got {resolved}"
+        )
+    return resolved
 
 
 def confine_to_repo(path: pathlib.Path, *, what: str) -> pathlib.Path:
@@ -1311,13 +1345,16 @@ def main(argv: list[str] | None = None) -> int:
     # nothing: the fixtures stay where they belong and neither staging root is
     # touched unless both are recognisably ours.
     out_dir = confine_to_repo(args.out, what="--out")
+    staging_root = confine_to_staging_parent(args.work_dir, what="--work-dir")
     if socket_budget(SOCKET_ROOT) < 45:
         raise SystemExit(
             f"socket root {SOCKET_ROOT} leaves only {socket_budget(SOCKET_ROOT)} bytes "
             f"under the {AF_UNIX_MAX}-byte AF_UNIX cap; the staged daemons need ~45. "
-            "Pass a shorter --work-dir and move the socket root with it."
+            f"Shorten the home directory in it or give {SOCKET_ROOT.name} a shorter "
+            "name — it is deliberately not derived from --work-dir, which is free to "
+            "be long."
         )
-    work_dir = reset_private_dir(args.work_dir)
+    work_dir = reset_private_dir(staging_root)
     reset_private_dir(SOCKET_ROOT)
 
     captures: list[Capture] = []
