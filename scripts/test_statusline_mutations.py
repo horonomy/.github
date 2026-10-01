@@ -932,6 +932,11 @@ def an_unreadable_role_diagnosed_as_a_missing_one() -> object:
 
     A no-op rather than a reimplementation: there is no partial version of naming
     a value, so the only way to get this wrong is to stop doing it.
+
+    A lambda rather than `return_value=None` for the reason given on
+    `a_self_reference_check_that_never_matches`: it still takes exactly the one
+    argument the real function takes, where a mock would absorb any call at all
+    and let a changed call site pass as a working mutation.
     """
     return unittest.mock.patch.object(
         contract, "_reject_unreadable_roles", lambda raw_segments: None
@@ -954,6 +959,11 @@ def a_freshness_window_that_never_closes() -> object:
     instead of at the Clear semantics. That is a guard tripping on its own setup,
     not on the defect -- the payload must stay honestly stale and the host must be
     the thing that stops noticing.
+
+    A lambda rather than `return_value=True` for the reason given on
+    `a_self_reference_check_that_never_matches`: it still takes exactly the one
+    segment the real predicate takes, so a defect that changed how freshness is
+    asked about would surface here rather than being absorbed by a mock.
     """
     return unittest.mock.patch.object(render, "_is_current", lambda segment: True)
 
