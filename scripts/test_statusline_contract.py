@@ -1059,6 +1059,25 @@ class ClearRoleTest(unittest.TestCase):
         status = sc.provider_status_from_wire(payload)
         self.assertIsNone(status.segments[0].clear_role)
 
+    def test_an_unrecognised_role_is_named_when_authority_was_claimed(self) -> None:
+        # The other half of the policy above, and the reason degrading is safe:
+        # it only applies where the host's own ladder is the documented answer.
+        # A provider that claimed authority over the projection and then named a
+        # role this host cannot read has made a claim it did not keep, so it is
+        # refused -- and told which value was unreadable, rather than the rule-2
+        # message it would otherwise collect, which says the role is *missing*
+        # from a segment that visibly carries one.
+        payload = _payload()
+        payload["clear_authority"] = "provider"
+        for part in payload["segments"]:
+            part["clear_role"] = "posture" if part is payload["segments"][0] else "supporting"
+        payload["segments"][0]["clear_role"] = "headline"
+        with self.assertRaises(sc.ContractViolation) as caught:
+            sc.provider_status_from_wire(payload)
+        self.assertIn("headline", str(caught.exception))
+        self.assertIn("this host can read", str(caught.exception))
+        self.assertNotIn("missing on", str(caught.exception))
+
     def test_a_role_is_independent_of_state_severity(self) -> None:
         # The contract must not couple the two, because the whole reason this
         # field exists is that severity cannot express the judgement: a

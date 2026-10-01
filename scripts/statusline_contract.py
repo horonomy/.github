@@ -1350,6 +1350,9 @@ def provider_status_from_wire(payload: object) -> ProviderStatus:
     raw_segments = payload.get("segments", [])
     if not isinstance(raw_segments, list):
         raise ContractViolation("segments must be a list")
+    authority = _parse_clear_authority(payload.get("clear_authority"))
+    if authority is ClearAuthority.PROVIDER:
+        _reject_unreadable_roles(raw_segments)
     return ProviderStatus(
         provider=payload.get("provider"),
         provider_version=payload.get("provider_version"),
@@ -1367,6 +1370,40 @@ def provider_status_from_wire(payload: object) -> ProviderStatus:
         cache_ttl_seconds=payload.get("cache_ttl_seconds", 0),
         order_hint=payload.get("order_hint", 500),
         fallback_text=payload.get("fallback_text"),
-        clear_authority=_parse_clear_authority(payload.get("clear_authority")),
+        clear_authority=authority,
         contract_version=version,
     )
+
+
+def _reject_unreadable_roles(raw_segments: list) -> None:
+    """Refuse a declared projection whose roles this host cannot read, by name.
+
+    `_parse_clear_role` degrades an unrecognised value to undeclared, which is
+    right for a host-authority payload: the host's own ladder is a complete,
+    documented answer, and losing a provider's health claim over a presentation
+    hint would be the worse trade. Under *provider* authority the same degrading
+    is still refused — rule 2 requires a role on every segment — so the outcome
+    was already correct. Only the diagnosis was wrong, and misleadingly so: the
+    reader was told the role was `missing on ['install']` while their payload
+    plainly carried one, which points at the wrong fix and invites the worst one
+    ("just give it a default").
+
+    So the value is named here instead, before anything is constructed. It is
+    checked on the wire rather than in `_validate_clear_authority` because by then
+    the unreadable value is gone — and that validator also runs on every
+    `dataclasses.replace`, which has no wire to consult.
+    """
+    unreadable = [
+        (s.get("key"), s.get("clear_role"))
+        for s in raw_segments
+        if isinstance(s, dict)
+        and s.get("clear_role") is not None
+        and _parse_clear_role(s.get("clear_role")) is None
+    ]
+    if unreadable:
+        named = ", ".join(f"{key!r}={value!r}" for key, value in unreadable)
+        raise ContractViolation(
+            f"clear_authority 'provider' requires a clear_role this host can read; "
+            f"{named} is not one of "
+            f"{sorted(member.value for member in ClearRole)}"
+        )
