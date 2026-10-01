@@ -206,10 +206,9 @@ class StagingParentConfinementTest(unittest.TestCase):
     def test_a_private_directory_of_ours_elsewhere_in_home_is_refused(self) -> None:
         # The case the write-side guard cannot catch. `~/.ssh` is absolute, ours,
         # 0700 and a real directory, so `reset_private_dir` would clear it.
+        elsewhere = pathlib.Path.home() / ".ssh"
         with self.assertRaises(SystemExit) as caught:
-            capture.confine_to_staging_parent(
-                pathlib.Path.home() / ".ssh", what="--work-dir"
-            )
+            capture.confine_to_staging_parent(elsewhere, what="--work-dir")
         self.assertIn("directory of its own", str(caught.exception))
         self.assertIn("--work-dir", str(caught.exception))
 
@@ -219,10 +218,9 @@ class StagingParentConfinementTest(unittest.TestCase):
             capture.confine_to_staging_parent(capture.STAGING_PARENT, what="--work-dir")
 
     def test_a_dot_dot_escape_out_of_the_staging_parent_is_refused(self) -> None:
+        escape = capture.STAGING_PARENT / ".." / "Documents"
         with self.assertRaises(SystemExit):
-            capture.confine_to_staging_parent(
-                capture.STAGING_PARENT / ".." / "Documents", what="--work-dir"
-            )
+            capture.confine_to_staging_parent(escape, what="--work-dir")
 
     def test_a_deeper_directory_inside_the_staging_parent_is_accepted(self) -> None:
         # Nesting is not the thing being prevented; leaving is.

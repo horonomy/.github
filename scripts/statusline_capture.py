@@ -90,6 +90,18 @@ HOST_STDIN = json.dumps(
 
 PROVIDER_TIMEOUT = 20
 
+#: The only directory either staging root may live in, and the single place the
+#: location is decided — both roots below are derived from it, and
+#: ``confine_to_staging_parent`` enforces it.
+#:
+#: ``~/.cache`` for two reasons. It is private by default, unlike ``/tmp``, which
+#: is where these roots used to be: short, but also pre-creatable by any account
+#: on the machine and readable by them once the staged daemons write product
+#: state into it. And its contents are disposable by convention, which is the
+#: property that matters to ``reset_private_dir`` — that function *deletes* the
+#: root it is handed, so "somewhere we may write" is not a strong enough rule.
+STAGING_PARENT = pathlib.Path.home() / ".cache"
+
 #: Circinus and Libra both bind a unix socket inside their state tree, and
 #: ``AF_UNIX`` paths are capped at 104 bytes on macOS. A staging root nested
 #: under the fixture work directory blows that cap, and the daemon fails with a
@@ -97,21 +109,10 @@ PROVIDER_TIMEOUT = 20
 #: lives under this deliberately short root, which is exactly the
 #: state/runtime split ``circinus.daemon.paths.runtime_dir`` exists to allow.
 #:
-#: Under ``$HOME`` rather than ``/tmp``, which is the other half of the same
-#: constraint. A short path and a world-writable one are not the same
-#: requirement, and ``/tmp`` only looked like the answer because it is short:
-#: it also lets any account on the machine pre-create the root, or read the
-#: product state the staged daemons write into it. ``~/.cache`` is private by
-#: default and still leaves ~30 bytes of headroom against the cap --
-#: ``socket_budget`` checks rather than assumes that, because the headroom
-#: depends on the length of the operator's home directory.
-SOCKET_ROOT = pathlib.Path.home() / ".cache" / "hsc"
-
-#: The only directory either staging root may live in. ``~/.cache`` is where
-#: throwaway state belongs by convention, which is the property that matters
-#: here: ``reset_private_dir`` *deletes* the root it is handed, so the root has
-#: to be somewhere whose contents are disposable by definition.
-STAGING_PARENT = pathlib.Path.home() / ".cache"
+#: The name is three characters because the budget is tight: ``socket_budget``
+#: checks rather than assumes the headroom, because how much is left depends on
+#: the length of the operator's home directory.
+SOCKET_ROOT = STAGING_PARENT / "hsc"
 
 #: macOS' ``sun_path`` is 104 bytes including the terminator; Linux allows 108.
 #: The smaller is used everywhere so a capture that works on one machine is not
@@ -1323,10 +1324,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--work-dir",
         type=pathlib.Path,
-        default=pathlib.Path.home() / ".cache" / "horonom-statusline-capture",
-        # Under $HOME for the same reason as SOCKET_ROOT: this holds staged
-        # product state, including whatever the products write into their own
-        # stores, and /tmp would publish it to every account on the machine.
+        default=STAGING_PARENT / "horonom-statusline-capture",
+        # Under STAGING_PARENT for the same reasons SOCKET_ROOT is, and refused by
+        # `confine_to_staging_parent` if overridden to anywhere else: this holds
+        # staged product state, including whatever the products write into their
+        # own stores, and it is deleted and recreated on every run.
         help="throwaway staging root; wiped on each run",
     )
     parser.add_argument(
