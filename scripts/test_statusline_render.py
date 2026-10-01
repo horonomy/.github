@@ -1620,6 +1620,11 @@ class TestDeclaredClearAuthority(unittest.TestCase):
             ),
             segment(
                 key="second",
+                # Deliberately the *more severe* of the two, so contract order and
+                # host severity disagree: a tie would let a most-severe policy pass
+                # this test by accident, and rule 2 is specifically the claim that
+                # the host does not re-rank nominations it was handed.
+                state=contract.SegmentState.WARN,
                 label="Second vital",
                 clear_role=contract.ClearRole.VITAL,
                 order_hint=30,

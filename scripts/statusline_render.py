@@ -931,7 +931,11 @@ def clear_readings(status: object) -> tuple:
        waits on the operator is not improved by having a host-guessed estimate
        next to it, but a product may nominate the one reading that qualifies its
        own exception — `Approval · 12% budget left` says what the approval costs,
-       which a bare `Approval` cannot.
+       which a bare `Approval` cannot. Where a product declared more than one,
+       the earliest in contract order wins, unlike rule 3's most-severe choice:
+       ranking a product's own nominations by host severity is the editorial
+       judgement a declaration is supposed to settle, and `order_hint` is the
+       product already having stated its preference.
     3. Otherwise the posture, plus at most one still-fresh vital signal.
 
     Returned in contract order rather than in role order, so the rendered text is
