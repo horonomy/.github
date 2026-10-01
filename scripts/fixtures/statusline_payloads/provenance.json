@@ -1,0 +1,305 @@
+{
+  "captured_by": "scripts/statusline_capture.py",
+  "fixtures": {
+    "circinus/enforce_blocked": {
+      "product": "circinus",
+      "case": "enforce_blocked",
+      "route": "live-cli",
+      "how": "Manifest mode set to enforce before the daemon starts, then the same S04 scenario: a real, non-hypothetical block.",
+      "provider_command": "circinus statusline",
+      "provider_version": "0.0.0",
+      "product_repo": "circinus",
+      "product_repo_commit": "4206ca0b04932b007611766aebc357969743d03c",
+      "captured_at": "2026-10-01T05:43:22Z"
+    },
+    "circinus/hooks_disconnected": {
+      "product": "circinus",
+      "case": "hooks_disconnected",
+      "route": "live-cli",
+      "how": "Circinus's hook entries removed from the staged settings.json while the manifest still claims them.",
+      "provider_command": "circinus statusline",
+      "provider_version": "0.0.0",
+      "product_repo": "circinus",
+      "product_repo_commit": "4206ca0b04932b007611766aebc357969743d03c",
+      "captured_at": "2026-10-01T05:43:22Z"
+    },
+    "circinus/installed_shadow_no_decisions": {
+      "product": "circinus",
+      "case": "installed_shadow_no_decisions",
+      "route": "live-cli",
+      "how": "Real `circinus install claude-code` plus `circinus start` in a staged HOME; no decisions yet.",
+      "provider_command": "circinus statusline",
+      "provider_version": "0.0.0",
+      "product_repo": "circinus",
+      "product_repo_commit": "4206ca0b04932b007611766aebc357969743d03c",
+      "captured_at": "2026-10-01T05:43:22Z"
+    },
+    "circinus/mode_restart_required": {
+      "product": "circinus",
+      "case": "mode_restart_required",
+      "route": "live-cli",
+      "how": "Manifest mode edited to enforce while the daemon keeps running shadow \u2014 the real config/runtime divergence.",
+      "provider_command": "circinus statusline",
+      "provider_version": "0.0.0",
+      "product_repo": "circinus",
+      "product_repo_commit": "4206ca0b04932b007611766aebc357969743d03c",
+      "captured_at": "2026-10-01T05:43:22Z"
+    },
+    "circinus/not_running": {
+      "product": "circinus",
+      "case": "not_running",
+      "route": "live-cli",
+      "how": "A real install that was never started: no socket at all.",
+      "provider_command": "circinus statusline",
+      "provider_version": "0.0.0",
+      "product_repo": "circinus",
+      "product_repo_commit": "4206ca0b04932b007611766aebc357969743d03c",
+      "captured_at": "2026-10-01T05:43:22Z"
+    },
+    "circinus/shadow_would_allow_fresh": {
+      "product": "circinus",
+      "case": "shadow_would_allow_fresh",
+      "route": "live-cli",
+      "how": "Shadow mode with a real benign PreToolUse: a fresh hypothetical allow.",
+      "provider_command": "circinus statusline",
+      "provider_version": "0.0.0",
+      "product_repo": "circinus",
+      "product_repo_commit": "4206ca0b04932b007611766aebc357969743d03c",
+      "captured_at": "2026-10-01T05:43:22Z"
+    },
+    "circinus/shadow_would_block_fresh": {
+      "product": "circinus",
+      "case": "shadow_would_block_fresh",
+      "route": "live-cli",
+      "how": "Shadow mode replaying the repo's S04 authority-laundering scenario: a fresh hypothetical would-block.",
+      "provider_command": "circinus statusline",
+      "provider_version": "0.0.0",
+      "product_repo": "circinus",
+      "product_repo_commit": "4206ca0b04932b007611766aebc357969743d03c",
+      "captured_at": "2026-10-01T05:43:22Z"
+    },
+    "circinus/stale_decision": {
+      "product": "circinus",
+      "case": "stale_decision",
+      "route": "staged-store",
+      "how": "A real would-block decision aged past the 300 s freshness window.",
+      "provider_command": "circinus statusline",
+      "provider_version": "0.0.0",
+      "product_repo": "circinus",
+      "product_repo_commit": "4206ca0b04932b007611766aebc357969743d03c",
+      "captured_at": "2026-10-01T05:43:22Z"
+    },
+    "circinus/unreachable": {
+      "product": "circinus",
+      "case": "unreachable",
+      "route": "live-cli",
+      "how": "A started daemon SIGKILLed so its socket file outlives it: present but unanswering.",
+      "provider_command": "circinus statusline",
+      "provider_version": "0.0.0",
+      "product_repo": "circinus",
+      "product_repo_commit": "4206ca0b04932b007611766aebc357969743d03c",
+      "captured_at": "2026-10-01T05:43:23Z"
+    },
+    "fornax/empty_store": {
+      "product": "fornax",
+      "case": "empty_store",
+      "route": "live-cli",
+      "how": "A real fornax-daemon on a fresh $FORNAX_HOME with no findings yet.",
+      "provider_command": "fornax statusline provider",
+      "provider_version": "0.0.8",
+      "product_repo": "fornax-core",
+      "product_repo_commit": "996e14ec755a4e02732f6863b29421ea4cb5de77",
+      "captured_at": "2026-10-01T05:37:09Z"
+    },
+    "fornax/no_reading_daemon_identity_mismatch": {
+      "product": "fornax",
+      "case": "no_reading_daemon_identity_mismatch",
+      "route": "live-cli",
+      "how": "A second real fornax-daemon serving a different $FORNAX_HOME: its real x-fornax-home-id header does not match the one the client expects.",
+      "provider_command": "fornax statusline provider",
+      "provider_version": "0.0.8",
+      "product_repo": "fornax-core",
+      "product_repo_commit": "996e14ec755a4e02732f6863b29421ea4cb5de77",
+      "captured_at": "2026-10-01T05:37:10Z"
+    },
+    "fornax/no_reading_daemon_identity_not_reported": {
+      "product": "fornax",
+      "case": "no_reading_daemon_identity_not_reported",
+      "route": "stub-peer",
+      "how": "A peer that answers 200 with valid JSON but no x-fornax-home-id header.",
+      "provider_command": "fornax statusline provider",
+      "provider_version": "0.0.8",
+      "product_repo": "fornax-core",
+      "product_repo_commit": "996e14ec755a4e02732f6863b29421ea4cb5de77",
+      "captured_at": "2026-10-01T05:37:10Z"
+    },
+    "fornax/no_reading_daemon_too_slow": {
+      "product": "fornax",
+      "case": "no_reading_daemon_too_slow",
+      "route": "stub-peer",
+      "how": "A peer that answers after 1.5 s, past the provider's 200 ms hot-path budget.",
+      "provider_command": "fornax statusline provider",
+      "provider_version": "0.0.8",
+      "product_repo": "fornax-core",
+      "product_repo_commit": "996e14ec755a4e02732f6863b29421ea4cb5de77",
+      "captured_at": "2026-10-01T05:37:10Z"
+    },
+    "fornax/no_reading_daemon_unreachable": {
+      "product": "fornax",
+      "case": "no_reading_daemon_unreachable",
+      "route": "live-cli",
+      "how": "The real provider pointed at 127.0.0.1:18799, where nothing listens.",
+      "provider_command": "fornax statusline provider",
+      "provider_version": "0.0.8",
+      "product_repo": "fornax-core",
+      "product_repo_commit": "996e14ec755a4e02732f6863b29421ea4cb5de77",
+      "captured_at": "2026-10-01T05:37:10Z"
+    },
+    "fornax/no_reading_response_not_understood": {
+      "product": "fornax",
+      "case": "no_reading_response_not_understood",
+      "route": "stub-peer",
+      "how": "A peer that answers 200 with a body that is not JSON.",
+      "provider_command": "fornax statusline provider",
+      "provider_version": "0.0.8",
+      "product_repo": "fornax-core",
+      "product_repo_commit": "996e14ec755a4e02732f6863b29421ea4cb5de77",
+      "captured_at": "2026-10-01T05:37:10Z"
+    },
+    "fornax/no_reading_store_read_failed": {
+      "product": "fornax",
+      "case": "no_reading_store_read_failed",
+      "route": "staged-store",
+      "how": "The findings table dropped from a throwaway store while its real daemon is live, so /api/status returns a real store error.",
+      "provider_command": "fornax statusline provider",
+      "provider_version": "0.0.8",
+      "product_repo": "fornax-core",
+      "product_repo_commit": "996e14ec755a4e02732f6863b29421ea4cb5de77",
+      "captured_at": "2026-10-01T05:37:11Z"
+    },
+    "fornax/verdict_contradicted": {
+      "product": "fornax",
+      "case": "verdict_contradicted",
+      "route": "live-cli",
+      "how": "Same, with interrupted=true: a non-heuristic exit code of 130 contradicts the claim.",
+      "provider_command": "fornax statusline provider",
+      "provider_version": "0.0.8",
+      "product_repo": "fornax-core",
+      "product_repo_commit": "996e14ec755a4e02732f6863b29421ea4cb5de77",
+      "captured_at": "2026-10-01T05:37:09Z"
+    },
+    "fornax/verdict_review": {
+      "product": "fornax",
+      "case": "verdict_review",
+      "route": "live-cli",
+      "how": "Same, with non-empty stderr: the adapter's stderr_nonempty heuristic cannot be trusted as a failure, so the verifier asks for review.",
+      "provider_command": "fornax statusline provider",
+      "provider_version": "0.0.8",
+      "product_repo": "fornax-core",
+      "product_repo_commit": "996e14ec755a4e02732f6863b29421ea4cb5de77",
+      "captured_at": "2026-10-01T05:37:09Z"
+    },
+    "fornax/verdict_unverified": {
+      "product": "fornax",
+      "case": "verdict_unverified",
+      "route": "live-cli",
+      "how": "The real Stop hook alone, with no test-runner evidence in the session: missing evidence is never promoted to contradiction.",
+      "provider_command": "fornax statusline provider",
+      "provider_version": "0.0.8",
+      "product_repo": "fornax-core",
+      "product_repo_commit": "996e14ec755a4e02732f6863b29421ea4cb5de77",
+      "captured_at": "2026-10-01T05:37:10Z"
+    },
+    "fornax/verdict_verified": {
+      "product": "fornax",
+      "case": "verdict_verified",
+      "route": "live-cli",
+      "how": "Real Bash PostToolUse for `cargo test` with empty stderr, then the real Stop hook with a transcript claiming the tests passed.",
+      "provider_command": "fornax statusline provider",
+      "provider_version": "0.0.8",
+      "product_repo": "fornax-core",
+      "product_repo_commit": "996e14ec755a4e02732f6863b29421ea4cb5de77",
+      "captured_at": "2026-10-01T05:37:09Z"
+    },
+    "libra/active_long_estimate": {
+      "product": "libra",
+      "case": "active_long_estimate",
+      "route": "staged-store",
+      "how": "The same, with the real receipt's measured duration rewritten to a multi-day span \u2014 the Founder-scale shape no bounded live run reaches.",
+      "provider_command": "libra-governor statusline provider",
+      "provider_version": "0.0.2",
+      "product_repo": "libra-governor",
+      "product_repo_commit": "428857eb89a91cfa241dc7e5fbed5c3c379204cc",
+      "captured_at": "2026-10-01T05:50:36Z"
+    },
+    "libra/active_no_estimate": {
+      "product": "libra",
+      "case": "active_no_estimate",
+      "route": "live-cli",
+      "how": "A real UserPromptSubmit preflight admitting the very first task: no local history, so no duration bound.",
+      "provider_command": "libra-governor statusline provider",
+      "provider_version": "0.0.2",
+      "product_repo": "libra-governor",
+      "product_repo_commit": "428857eb89a91cfa241dc7e5fbed5c3c379204cc",
+      "captured_at": "2026-10-01T05:50:36Z"
+    },
+    "libra/active_with_estimate": {
+      "product": "libra",
+      "case": "active_with_estimate",
+      "route": "live-cli",
+      "how": "One real task governed to completion, then a second admitted: the estimate is a real quantile over a real receipt.",
+      "provider_command": "libra-governor statusline provider",
+      "provider_version": "0.0.2",
+      "product_repo": "libra-governor",
+      "product_repo_commit": "428857eb89a91cfa241dc7e5fbed5c3c379204cc",
+      "captured_at": "2026-10-01T05:50:36Z"
+    },
+    "libra/budget_exhausted": {
+      "product": "libra",
+      "case": "budget_exhausted",
+      "route": "staged-store",
+      "how": "A settled required-work reservation consuming the whole envelope, read back by the daemon's own headroom arithmetic.",
+      "provider_command": "libra-governor statusline provider",
+      "provider_version": "0.0.2",
+      "product_repo": "libra-governor",
+      "product_repo_commit": "428857eb89a91cfa241dc7e5fbed5c3c379204cc",
+      "captured_at": "2026-10-01T05:50:36Z"
+    },
+    "libra/escalated_awaiting_approval": {
+      "product": "libra",
+      "case": "escalated_awaiting_approval",
+      "route": "staged-store",
+      "how": "Three recorded auto-replans, so the daemon's hysteresis requires human approval before the next one.",
+      "provider_command": "libra-governor statusline provider",
+      "provider_version": "0.0.2",
+      "product_repo": "libra-governor",
+      "product_repo_commit": "428857eb89a91cfa241dc7e5fbed5c3c379204cc",
+      "captured_at": "2026-10-01T05:50:37Z"
+    },
+    "libra/idle": {
+      "product": "libra",
+      "case": "idle",
+      "route": "live-cli",
+      "how": "A real daemon that governed a task to completion, so nothing is under governance now.",
+      "provider_command": "libra-governor statusline provider",
+      "provider_version": "0.0.2",
+      "product_repo": "libra-governor",
+      "product_repo_commit": "428857eb89a91cfa241dc7e5fbed5c3c379204cc",
+      "captured_at": "2026-10-01T05:51:50Z"
+    },
+    "libra/no_reading_daemon_unreachable": {
+      "product": "libra",
+      "case": "no_reading_daemon_unreachable",
+      "route": "live-cli",
+      "how": "A fresh state directory with no daemon running.",
+      "provider_command": "libra-governor statusline provider",
+      "provider_version": "0.0.2",
+      "product_repo": "libra-governor",
+      "product_repo_commit": "428857eb89a91cfa241dc7e5fbed5c3c379204cc",
+      "captured_at": "2026-10-01T05:50:36Z"
+    }
+  },
+  "unreachable_states": {
+    "fornax/verdict_unavailable": "Fornax's five-state vocabulary includes `unavailable` (\"Evidence unavailable\"), but no shipped adapter can produce it. `TestResultVerifier::verify` only returns `Unavailable` when neither `SignalClass::ToolTrace` nor `FinalResponse` is observable, and both the claude and codex adapters declare both Available; opencode declares only `FinalResponse` unavailable, which the gate's `||` does not satisfy. The other route \u2014 exit-code evidence present with no code \u2014 is closed by `ClaudeBashExitCodeSensor`, which refuses to emit `ExitCode` evidence at all when it cannot determine a code."
+  }
+}

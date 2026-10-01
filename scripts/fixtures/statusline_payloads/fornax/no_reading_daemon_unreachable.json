@@ -1,0 +1,1 @@
+{"availability":"unavailable","clear_authority":"provider","contract_version":1,"order_hint":300,"provider":"fornax","provider_version":"0.0.8","scope":"host","segments":[{"clear_role":"exception","explain_key":"fornax.availability","key":"availability","label":"Not running","reason_code":"daemon_unreachable","state":"neutral"}]}
