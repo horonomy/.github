@@ -72,9 +72,9 @@ HOST_STDIN = json.dumps(
         "hook_event_name": "Status",
         "session_id": "statusline-capture",
         "transcript_path": "",
-        "cwd": "/tmp/statusline-capture",
+        "cwd": str(REPO_ROOT),
         "model": {"id": "claude-opus-5", "display_name": "Opus 5"},
-        "workspace": {"current_dir": "/tmp/statusline-capture"},
+        "workspace": {"current_dir": str(REPO_ROOT)},
         "version": "2.1.238",
     }
 ).encode()
@@ -88,6 +88,80 @@ PROVIDER_TIMEOUT = 20
 #: lives under this deliberately short root, which is exactly the
 #: state/runtime split ``circinus.daemon.paths.runtime_dir`` exists to allow.
 SOCKET_ROOT = pathlib.Path("/tmp/hsc")
+
+# ---------------------------------------------------------------------------
+# Path safety.
+#
+# Both staging roots are *predictable* paths under a world-writable directory,
+# and that is not an accident that can be removed: `AF_UNIX` is capped at 104
+# bytes on macOS, and `$TMPDIR` there is long enough on its own to blow the cap,
+# so `tempfile.mkdtemp()` is not available to us for the socket root. A short
+# predictable path is therefore a requirement, which makes the pre-created
+# hostile directory the thing to defend against rather than the thing to avoid:
+# anyone on the machine can create `/tmp/hsc` first, as a symlink or with a mode
+# that lets them read what the staged daemons write into it.
+#
+# So the roots are validated before use and the script refuses to run rather
+# than clearing a path it does not recognise as its own. Fail closed with zero
+# mutation, which is the same rule the product side of this repo is held to.
+# ---------------------------------------------------------------------------
+
+
+def reset_private_dir(root: pathlib.Path) -> pathlib.Path:
+    """Replace `root` with an empty directory only this user can enter.
+
+    Refuses rather than repairs. A symlink, a non-directory, or a directory that
+    someone else owns or that is group/world-accessible means the path is not
+    ours, and the next step would either clear something that is not ours or
+    stage a daemon's state somewhere another account can read it.
+
+    `shutil.rmtree` is given a path already confirmed to be a real directory
+    we own, so the symlink-swap it would otherwise follow on the way in is
+    checked rather than assumed.
+    """
+    root = root.expanduser()
+    if not root.is_absolute():
+        raise SystemExit(f"staging root must be an absolute path: {root}")
+    if root.is_symlink():
+        raise SystemExit(
+            f"staging root {root} is a symlink; refusing to clear it. Remove it by hand "
+            "once you have checked where it points."
+        )
+    if root.exists():
+        if not root.is_dir():
+            raise SystemExit(f"staging root {root} exists and is not a directory; refusing")
+        info = root.stat()
+        if info.st_uid != os.getuid():
+            raise SystemExit(
+                f"staging root {root} is owned by uid {info.st_uid}, not {os.getuid()}; refusing"
+            )
+        if info.st_mode & 0o077:
+            raise SystemExit(
+                f"staging root {root} is accessible to other accounts (mode "
+                f"{info.st_mode & 0o777:04o}); refusing to stage product state in it"
+            )
+        shutil.rmtree(root)
+    root.mkdir(parents=True, mode=0o700)
+    # `mkdir`'s mode is masked by the umask, so it is asserted rather than hoped
+    # for: a 0o022 umask would leave this group- and world-readable.
+    root.chmod(0o700)
+    return root
+
+
+def confine_to_repo(path: pathlib.Path, *, what: str) -> pathlib.Path:
+    """Resolve `path` and require it to sit inside this repository.
+
+    The fixtures are repository content, so an `--out` that lands anywhere else
+    is a mistake at best. Checked with `relative_to` on the *resolved* path, so
+    neither `..` nor a symlinked parent gets past it.
+    """
+    resolved = path.expanduser().resolve()
+    try:
+        resolved.relative_to(REPO_ROOT)
+    except ValueError:
+        raise SystemExit(f"{what} must be inside {REPO_ROOT}; got {resolved}") from None
+    return resolved
+
 
 # ---------------------------------------------------------------------------
 # Small process helpers.
@@ -1180,15 +1254,17 @@ def main(argv: list[str] | None = None) -> int:
     products = list(CAPTURERS) if args.product == "all" else [args.product]
     only = set(args.only) if args.only else None
 
-    for root in (args.work_dir, SOCKET_ROOT):
-        if root.exists():
-            shutil.rmtree(root)
-        root.mkdir(parents=True)
+    # Validated before anything is created or cleared, so a bad argument costs
+    # nothing: the fixtures stay where they belong and neither staging root is
+    # touched unless both are recognisably ours.
+    out_dir = confine_to_repo(args.out, what="--out")
+    work_dir = reset_private_dir(args.work_dir)
+    reset_private_dir(SOCKET_ROOT)
 
     captures: list[Capture] = []
     for product in products:
         print(f"== {product} ==", flush=True)
-        got = CAPTURERS[product](args.work_dir / product, only)
+        got = CAPTURERS[product](work_dir / product, only)
         for cap in got:
             print(f"   {cap.product}/{cap.case} [{cap.route}]", flush=True)
         captures.extend(got)
@@ -1196,8 +1272,8 @@ def main(argv: list[str] | None = None) -> int:
     if not captures:
         print("no cases captured", file=sys.stderr)
         return 1
-    write_fixtures(captures, args.out, args.sibling_root)
-    print(f"\nwrote {len(captures)} fixture(s) under {args.out}")
+    write_fixtures(captures, out_dir, args.sibling_root)
+    print(f"\nwrote {len(captures)} fixture(s) under {out_dir}")
     return 0
 
 
