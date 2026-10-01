@@ -32,6 +32,19 @@ import unittest
 import statusline_capture as capture
 
 
+def parser_default(flag: str) -> pathlib.Path:
+    """The parser's own default for `flag`, rather than a copy of it here.
+
+    `--work-dir`'s default is a security-relevant choice, so more than one test
+    asserts on it. Reading it off the parser means none of them can drift away
+    from the value the script uses, which restating the path would allow.
+    """
+    for action in capture.build_parser()._actions:
+        if flag in action.option_strings:
+            return action.default
+    raise AssertionError(f"{flag} is no longer a command-line option")
+
+
 class PrivateStagingRootTest(unittest.TestCase):
     """`reset_private_dir` — the guard in front of both staging roots."""
 
@@ -134,7 +147,7 @@ class StagingRootLocationTest(unittest.TestCase):
 
     def test_neither_staging_root_sits_in_a_world_writable_directory(self) -> None:
         home = pathlib.Path.home()
-        default_work_dir = self._default_of("--work-dir")
+        default_work_dir = parser_default("--work-dir")
         for name, root in (("SOCKET_ROOT", capture.SOCKET_ROOT), ("--work-dir", default_work_dir)):
             with self.subTest(root=name):
                 self.assertTrue(
@@ -165,13 +178,59 @@ class StagingRootLocationTest(unittest.TestCase):
         )
         self.assertLess(capture.socket_budget(wide), capture.AF_UNIX_MAX - len(str(wide)) - 1)
 
-    @staticmethod
-    def _default_of(flag: str) -> pathlib.Path:
-        """The parser's own default for `flag`, rather than a copy of it here."""
-        for action in capture.build_parser()._actions:
-            if flag in action.option_strings:
-                return action.default
-        raise AssertionError(f"{flag} is no longer a command-line option")
+
+class StagingParentConfinementTest(unittest.TestCase):
+    """`confine_to_staging_parent` — the guard that asks whether we may *delete* here.
+
+    `reset_private_dir`'s checks are about writing: absolute, ours, private, not a
+    symlink. Every one of them passes on `~/.ssh`, and the step after them is
+    `rmtree`. So the location is a separate question with a separate guard, and
+    these are the cases that distinguish the two.
+    """
+
+    def test_the_default_work_dir_is_accepted(self) -> None:
+        # The rule has to admit the value the script actually ships with, or it
+        # is a rule that only fires on the operator.
+        default = parser_default("--work-dir")
+        self.assertEqual(
+            capture.confine_to_staging_parent(default, what="--work-dir"),
+            default.resolve(),
+        )
+
+    def test_the_socket_root_is_accepted(self) -> None:
+        self.assertEqual(
+            capture.confine_to_staging_parent(capture.SOCKET_ROOT, what="SOCKET_ROOT"),
+            capture.SOCKET_ROOT.resolve(),
+        )
+
+    def test_a_private_directory_of_ours_elsewhere_in_home_is_refused(self) -> None:
+        # The case the write-side guard cannot catch. `~/.ssh` is absolute, ours,
+        # 0700 and a real directory, so `reset_private_dir` would clear it.
+        with self.assertRaises(SystemExit) as caught:
+            capture.confine_to_staging_parent(
+                pathlib.Path.home() / ".ssh", what="--work-dir"
+            )
+        self.assertIn("directory of its own", str(caught.exception))
+        self.assertIn("--work-dir", str(caught.exception))
+
+    def test_the_staging_parent_itself_is_refused(self) -> None:
+        # `--work-dir ~/.cache` would delete every other tool's cache.
+        with self.assertRaises(SystemExit):
+            capture.confine_to_staging_parent(capture.STAGING_PARENT, what="--work-dir")
+
+    def test_a_dot_dot_escape_out_of_the_staging_parent_is_refused(self) -> None:
+        with self.assertRaises(SystemExit):
+            capture.confine_to_staging_parent(
+                capture.STAGING_PARENT / ".." / "Documents", what="--work-dir"
+            )
+
+    def test_a_deeper_directory_inside_the_staging_parent_is_accepted(self) -> None:
+        # Nesting is not the thing being prevented; leaving is.
+        nested = capture.STAGING_PARENT / "horonom" / "capture"
+        self.assertEqual(
+            capture.confine_to_staging_parent(nested, what="--work-dir"),
+            nested.resolve(),
+        )
 
 
 class RepoConfinementTest(unittest.TestCase):
