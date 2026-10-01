@@ -1155,6 +1155,11 @@ class RefusalTest(unittest.TestCase):
     raises instead of falling back, so the symptom is *this provider* reading as
     unreadable, which is visible and fixable. A silent re-inference looks exactly
     like success.
+
+    Each probe builds its regressed payload *before* entering `assertRaises`, so
+    the refusal provably comes from parsing it rather than from an accident in the
+    edit that produced it. Inside the block, a `rewire` that raised would read as
+    the proof.
     """
 
     SUBJECT = "circinus/shadow_would_block_fresh"
@@ -1167,8 +1172,9 @@ class RefusalTest(unittest.TestCase):
                 if part["key"] == "latest_decision":
                     del part["clear_role"]
 
+        regressed = rewire(item, drop_one)
         with self.assertRaises(contract.ContractViolation) as caught:
-            contract.provider_status_from_wire(rewire(item, drop_one))
+            contract.provider_status_from_wire(regressed)
         self.assertIn("clear_role on every segment", str(caught.exception))
         self.assertIn("latest_decision", str(caught.exception))
 
@@ -1180,8 +1186,9 @@ class RefusalTest(unittest.TestCase):
                 if part["key"] in ("mode", "latest_decision"):
                     part["clear_role"] = "posture"
 
+        regressed = rewire(item, two_postures)
         with self.assertRaises(contract.ContractViolation) as caught:
-            contract.provider_status_from_wire(rewire(item, two_postures))
+            contract.provider_status_from_wire(regressed)
         self.assertIn("at most one 'posture'", str(caught.exception))
 
     def test_a_declaring_payload_that_names_no_primary_is_refused(self) -> None:
@@ -1191,8 +1198,9 @@ class RefusalTest(unittest.TestCase):
             for part in wire["segments"]:
                 part["clear_role"] = "supporting"
 
+        regressed = rewire(item, all_supporting)
         with self.assertRaises(contract.ContractViolation) as caught:
-            contract.provider_status_from_wire(rewire(item, all_supporting))
+            contract.provider_status_from_wire(regressed)
         self.assertIn("requires a 'posture' or 'exception'", str(caught.exception))
 
     def test_a_declaring_payload_with_no_segments_is_refused(self) -> None:
@@ -1201,8 +1209,9 @@ class RefusalTest(unittest.TestCase):
         def empty(wire: dict) -> None:
             wire["segments"] = []
 
+        regressed = rewire(item, empty)
         with self.assertRaises(contract.ContractViolation) as caught:
-            contract.provider_status_from_wire(rewire(item, empty))
+            contract.provider_status_from_wire(regressed)
         self.assertIn("at least one segment", str(caught.exception))
 
     def test_a_percentage_that_loses_its_axis_is_refused(self) -> None:
@@ -1216,8 +1225,9 @@ class RefusalTest(unittest.TestCase):
                 if part["key"] == "budget":
                     part["label"] = "53%"
 
+        regressed = rewire(item, bare_percentage)
         with self.assertRaises(contract.ContractViolation) as caught:
-            contract.provider_status_from_wire(rewire(item, bare_percentage))
+            contract.provider_status_from_wire(regressed)
         self.assertIn("percentage with no word", str(caught.exception))
 
     def test_an_unknown_role_is_refused_rather_than_degraded(self) -> None:
@@ -1228,8 +1238,14 @@ class RefusalTest(unittest.TestCase):
         def invented(wire: dict) -> None:
             wire["segments"][0]["clear_role"] = "headline"
 
-        with self.assertRaises(contract.ContractViolation):
-            contract.provider_status_from_wire(rewire(item, invented))
+        regressed = rewire(item, invented)
+        with self.assertRaises(contract.ContractViolation) as caught:
+            contract.provider_status_from_wire(regressed)
+        # The value is named, not just refused. Before this was asserted the
+        # refusal came from rule 2 and read "missing on ['install']", which tells
+        # a product author their payload omitted a field it plainly carries.
+        self.assertIn("headline", str(caught.exception))
+        self.assertIn("this host can read", str(caught.exception))
 
     def test_an_unchanged_payload_still_parses(self) -> None:
         # The control. Every probe above is one edit away from this, so if this

@@ -919,6 +919,25 @@ def a_declaration_check_with_one_rule_deleted(rule: str) -> object:
     )
 
 
+def an_unreadable_role_diagnosed_as_a_missing_one() -> object:
+    """The wire-level naming check removed, leaving rule 2 to explain it.
+
+    The one mutation here whose target is a *message*, because that is where this
+    defect lives: without the check the payload is still refused, so a guard that
+    only asserted "refused" would call the regression clean. What comes back
+    instead is `requires a clear_role on every segment; missing on ['install']`
+    for a segment that sent `clear_role: "headline"` -- a diagnosis that sends a
+    product author looking for an omission they did not make, and whose obvious
+    reading is "the host wants a default here".
+
+    A no-op rather than a reimplementation: there is no partial version of naming
+    a value, so the only way to get this wrong is to stop doing it.
+    """
+    return unittest.mock.patch.object(
+        contract, "_reject_unreadable_roles", lambda raw_segments: None
+    )
+
+
 def a_freshness_window_that_never_closes() -> object:
     """Clear's freshness test always true, so an old reading reads as current.
 
@@ -1660,6 +1679,17 @@ class DeclarationRuleTest(MutationCase):
             # rather than smoothed over: rule 1 earns its place as the diagnosis, not
             # as the gate.
             expect="at least one segment",
+        )
+
+    def test_blaming_an_unreadable_role_on_an_omission_is_caught(self) -> None:
+        self.assert_guard_catches(
+            authority_gate.RefusalTest,
+            "test_an_unknown_role_is_refused_rather_than_degraded",
+            an_unreadable_role_diagnosed_as_a_missing_one(),
+            # Not "not raised": the payload is still refused either way. What the
+            # mutation takes away is the host saying which value it could not read,
+            # so the guard trips on the value's absence from the message.
+            expect="headline",
         )
 
     def test_accepting_a_percentage_with_no_axis_is_caught(self) -> None:
