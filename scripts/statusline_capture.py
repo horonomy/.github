@@ -33,9 +33,18 @@ Two capture routes are used, and every fixture records which one produced it:
     The payload is still emitted by the real provider reading its real store.
 
 Nothing here runs in CI. This script needs all three products installed and
-mutates only throwaway directories it creates under ``--work-dir``; it never
-touches the real ``$HOME``, the real ``$FORNAX_HOME``, the real Circinus state
-directory, or the user's ``settings.json``.
+mutates only the throwaway roots it creates for itself: ``--work-dir`` and the
+short socket root (see ``SOCKET_ROOT``). Both now live under ``~/.cache`` rather
+than ``/tmp``, so the script does create two directories inside the real
+``$HOME`` — it does not read or write anything else there, and in particular it
+never touches the real ``$FORNAX_HOME``, the real Circinus or Libra state
+directories, the real statusline registry, or the user's ``settings.json``. Each
+staged product is pointed at its own tree inside ``--work-dir`` instead.
+
+Both roots are validated before they are created or cleared and the script
+refuses rather than repairing anything it does not recognise as its own; see the
+"Path safety" section below for what that means and why the paths have to stay
+predictable.
 
 Usage::
 
@@ -87,23 +96,41 @@ PROVIDER_TIMEOUT = 20
 #: bare ``OSError: AF_UNIX path too long``. So the socket (and only the socket)
 #: lives under this deliberately short root, which is exactly the
 #: state/runtime split ``circinus.daemon.paths.runtime_dir`` exists to allow.
-SOCKET_ROOT = pathlib.Path("/tmp/hsc")
+#:
+#: Under ``$HOME`` rather than ``/tmp``, which is the other half of the same
+#: constraint. A short path and a world-writable one are not the same
+#: requirement, and ``/tmp`` only looked like the answer because it is short:
+#: it also lets any account on the machine pre-create the root, or read the
+#: product state the staged daemons write into it. ``~/.cache`` is private by
+#: default and still leaves ~30 bytes of headroom against the cap --
+#: ``socket_budget`` checks rather than assumes that, because the headroom
+#: depends on the length of the operator's home directory.
+SOCKET_ROOT = pathlib.Path.home() / ".cache" / "hsc"
+
+#: macOS' ``sun_path`` is 104 bytes including the terminator; Linux allows 108.
+#: The smaller is used everywhere so a capture that works on one machine is not
+#: a capture that fails on another.
+AF_UNIX_MAX = 104
 
 # ---------------------------------------------------------------------------
 # Path safety.
 #
-# Both staging roots are *predictable* paths under a world-writable directory,
-# and that is not an accident that can be removed: `AF_UNIX` is capped at 104
-# bytes on macOS, and `$TMPDIR` there is long enough on its own to blow the cap,
-# so `tempfile.mkdtemp()` is not available to us for the socket root. A short
-# predictable path is therefore a requirement, which makes the pre-created
-# hostile directory the thing to defend against rather than the thing to avoid:
-# anyone on the machine can create `/tmp/hsc` first, as a symlink or with a mode
-# that lets them read what the staged daemons write into it.
+# Both staging roots are *predictable* paths, and that cannot be removed:
+# `AF_UNIX` is capped at 104 bytes on macOS and `$TMPDIR` there is long enough on
+# its own to blow the cap, so `tempfile.mkdtemp()` is not available for the socket
+# root. A short, named path is therefore a requirement.
 #
-# So the roots are validated before use and the script refuses to run rather
-# than clearing a path it does not recognise as its own. Fail closed with zero
-# mutation, which is the same rule the product side of this repo is held to.
+# What that requirement does *not* imply is a world-writable one, which is the
+# mistake these guards exist to close: a predictable name under `$HOME` can only
+# be pre-created by its owner, while the same name under `/tmp` can be
+# pre-created by anybody — as a symlink to something of the owner's, or with a
+# mode that lets them read the product state the staged daemons write into it.
+#
+# Predictable still means the path may already exist, from a previous run or from
+# a hand that is not ours. So the roots are validated before use and the script
+# refuses to run rather than clearing a path it does not recognise. Fail closed
+# with zero mutation, which is the same rule the product side of this repo is
+# held to.
 # ---------------------------------------------------------------------------
 
 
@@ -146,6 +173,18 @@ def reset_private_dir(root: pathlib.Path) -> pathlib.Path:
     # for: a 0o022 umask would leave this group- and world-readable.
     root.chmod(0o700)
     return root
+
+
+def socket_budget(root: pathlib.Path) -> int:
+    """Bytes left for a socket path under `root`, against the `AF_UNIX` cap.
+
+    Returned rather than asserted so the caller can say which product blew it.
+    The deepest socket this script causes to be bound is a per-case directory
+    plus one filename — roughly 45 bytes — so a budget below that is a refusal
+    worth making up front instead of an `OSError: AF_UNIX path too long` from
+    inside a daemon start.
+    """
+    return AF_UNIX_MAX - len(str(root).encode()) - 1
 
 
 def confine_to_repo(path: pathlib.Path, *, what: str) -> pathlib.Path:
@@ -1232,7 +1271,14 @@ def write_fixtures(captures: list[Capture], out_dir: pathlib.Path, sibling_root:
     index_path.write_text(json.dumps(index, indent=2) + "\n")
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The command line, built separately so its defaults can be inspected.
+
+    `--work-dir`'s default is a security-relevant choice, not a convenience, so a
+    test asserts on it. Reading it from the parser means that assertion cannot
+    drift away from the value the script actually uses, which restating the path
+    in the test would allow.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--product", choices=[*CAPTURERS, "all"], default="all")
     parser.add_argument("--only", action="append", default=None, help="capture only these case names")
@@ -1240,7 +1286,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--work-dir",
         type=pathlib.Path,
-        default=pathlib.Path("/tmp/horonom-statusline-capture"),
+        default=pathlib.Path.home() / ".cache" / "horonom-statusline-capture",
+        # Under $HOME for the same reason as SOCKET_ROOT: this holds staged
+        # product state, including whatever the products write into their own
+        # stores, and /tmp would publish it to every account on the machine.
         help="throwaway staging root; wiped on each run",
     )
     parser.add_argument(
@@ -1249,7 +1298,11 @@ def main(argv: list[str] | None = None) -> int:
         default=REPO_ROOT.parent,
         help="directory holding the product clones, for recording their commits",
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
 
     products = list(CAPTURERS) if args.product == "all" else [args.product]
     only = set(args.only) if args.only else None
@@ -1258,6 +1311,12 @@ def main(argv: list[str] | None = None) -> int:
     # nothing: the fixtures stay where they belong and neither staging root is
     # touched unless both are recognisably ours.
     out_dir = confine_to_repo(args.out, what="--out")
+    if socket_budget(SOCKET_ROOT) < 45:
+        raise SystemExit(
+            f"socket root {SOCKET_ROOT} leaves only {socket_budget(SOCKET_ROOT)} bytes "
+            f"under the {AF_UNIX_MAX}-byte AF_UNIX cap; the staged daemons need ~45. "
+            "Pass a shorter --work-dir and move the socket root with it."
+        )
     work_dir = reset_private_dir(args.work_dir)
     reset_private_dir(SOCKET_ROOT)
 
