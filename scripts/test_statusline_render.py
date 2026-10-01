@@ -17,6 +17,7 @@ should not be relaxed without reading why they exist:
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import re
 import unicodedata
 import unittest
@@ -1351,6 +1352,393 @@ class TestClearReadings(unittest.TestCase):
             )
         )
         self.assertEqual(self.keys(all_supporting), ["a"])
+
+
+def declared(*segments, **overrides) -> contract.ProviderStatus:
+    """A provider that declares its own Clear projection authoritative."""
+    fields = {
+        "clear_authority": contract.ClearAuthority.PROVIDER,
+        "segments": tuple(segments),
+    }
+    fields.update(overrides)
+    return status(**fields)
+
+
+class TestDeclaredClearAuthority(unittest.TestCase):
+    """A declared projection the host may not infer over.
+
+    The ladder in `clear_roles` is a good default and a bad override. These
+    assertions are about the override: each one pairs a declaration with the
+    inference the host would otherwise have made, so a case that reads the same
+    either way is not one of them.
+
+    `test_the_ladder_cannot_touch_any_projection_the_contract_accepts` is the load-
+    bearing one. The protection is arithmetical rather than conditional — every
+    rung only fires on an undeclared segment, and an authoritative payload has
+    none — so it is proven by enumerating the projections instead of by asserting
+    that a flag was read.
+    """
+
+    def roles(self, status_) -> dict:
+        return {
+            seg.key: role
+            for seg, role in zip(contract.order_segments(status_), render.clear_roles(status_))
+        }
+
+    def keys(self, status_) -> list:
+        return [seg.key for seg in render.clear_readings(status_)]
+
+    def test_the_ladder_cannot_touch_any_projection_the_contract_accepts(self):
+        # Exhaustive over every role assignment `clear_authority='provider'`
+        # admits, for one to three segments, with a state mix chosen to arm all
+        # three rungs of the ladder: a `critical` that rule 1 would promote, a
+        # measured `neutral` that rule 2 would hand the posture to, and a bare
+        # `neutral` that rule 3 would call supporting.
+        armed = (
+            {"state": contract.SegmentState.CRITICAL, "label": "Stopped"},
+            {
+                "state": contract.SegmentState.NEUTRAL,
+                "label": "Decisions",
+                "count": 4,
+                "count_label": "today",
+            },
+            {"state": contract.SegmentState.NEUTRAL, "label": "Task 0dd57ff3"},
+        )
+        checked = 0
+        for size in (1, 2, 3):
+            for assignment in itertools.product(ROLES, repeat=size):
+                try:
+                    projection = declared(
+                        *(
+                            segment(
+                                key=f"s{index}",
+                                clear_role=role,
+                                order_hint=index,
+                                **armed[index],
+                            )
+                            for index, role in enumerate(assignment)
+                        )
+                    )
+                except contract.ContractViolation:
+                    continue  # Not a projection the contract accepts at all.
+                checked += 1
+                with self.subTest(assignment=[r.value for r in assignment]):
+                    self.assertEqual(render.clear_roles(projection), assignment)
+        # Guards the guard: an enumeration the contract rejected wholesale would
+        # pass vacuously. 2 + 11 + 46 is the number of assignments that satisfy
+        # at-most-one-posture and at-least-one-primary over one to three segments.
+        self.assertEqual(checked, 59)
+
+    def test_a_declared_projection_comes_back_verbatim(self):
+        roles = self.roles(
+            declared(
+                segment(key="mode", label="Shadow", clear_role=contract.ClearRole.POSTURE),
+                segment(
+                    key="decision",
+                    label="Would block",
+                    clear_role=contract.ClearRole.VITAL,
+                ),
+                segment(
+                    key="counters",
+                    label="Decisions",
+                    count=4,
+                    count_label="today",
+                    clear_role=contract.ClearRole.SUPPORTING,
+                ),
+            )
+        )
+        self.assertEqual(
+            roles,
+            {
+                "mode": contract.ClearRole.POSTURE,
+                "decision": contract.ClearRole.VITAL,
+                "counters": contract.ClearRole.SUPPORTING,
+            },
+        )
+
+    def test_an_action_required_state_is_not_promoted_over_a_declaration(self):
+        # Under host authority this is an exception by rule 1, and an exception is
+        # shown alone. The product called it supporting, which means its own
+        # posture is what the line should lead with.
+        projection = declared(
+            segment(key="mode", label="Enforcing", clear_role=contract.ClearRole.POSTURE),
+            segment(
+                key="noisy",
+                state=contract.SegmentState.CRITICAL,
+                label="Stopped",
+                clear_role=contract.ClearRole.SUPPORTING,
+            ),
+        )
+        self.assertIs(self.roles(projection)["noisy"], contract.ClearRole.SUPPORTING)
+        self.assertEqual(self.keys(projection), ["mode"])
+        # The same two segments with nothing declared: the ladder promotes the
+        # critical state and shows it alone, so the suppression is what differs.
+        inferred = status(
+            segments=tuple(
+                dataclasses.replace(seg, clear_role=None) for seg in projection.segments
+            )
+        )
+        self.assertEqual(self.keys(inferred), ["noisy"])
+
+    def test_no_posture_is_invented_beside_a_declared_exception(self):
+        # Rule 2 of the ladder would hand the measured segment the posture part,
+        # giving the provider a primary it did not nominate.
+        projection = declared(
+            segment(
+                key="unreachable",
+                state=contract.SegmentState.UNKNOWN,
+                label="Not responding",
+                clear_role=contract.ClearRole.EXCEPTION,
+            ),
+            segment(
+                key="counters",
+                label="Decisions",
+                count=4,
+                count_label="today",
+                clear_role=contract.ClearRole.SUPPORTING,
+            ),
+        )
+        self.assertNotIn(contract.ClearRole.POSTURE, self.roles(projection).values())
+        self.assertEqual(self.keys(projection), ["unreachable"])
+
+    def test_a_declared_supporting_measurement_is_not_defaulted_to_vital(self):
+        # Rule 3 reads a measurement as a vital signal. A product that calls its
+        # counters supporting has said the opposite, and the difference is whether
+        # a raw counter reaches Clear at all.
+        projection = declared(
+            segment(key="mode", label="Shadow", clear_role=contract.ClearRole.POSTURE),
+            segment(
+                key="counters",
+                label="Decisions",
+                count=4,
+                total=14,
+                count_label="today",
+                clear_role=contract.ClearRole.SUPPORTING,
+            ),
+        )
+        self.assertIs(self.roles(projection)["counters"], contract.ClearRole.SUPPORTING)
+        self.assertEqual(self.keys(projection), ["mode"])
+        inferred = dataclasses.replace(
+            projection,
+            clear_authority=contract.ClearAuthority.HOST,
+            segments=tuple(
+                dataclasses.replace(seg, clear_role=None) for seg in projection.segments
+            ),
+        )
+        self.assertIn("counters", self.keys(inferred))
+
+    def test_a_declared_exception_may_carry_the_vital_the_product_nominated(self):
+        # The founder's `Approval · 12% budget left`: a bare `Approval` does not
+        # say what the approval costs, and only Libra knows which reading does.
+        projection = declared(
+            segment(
+                key="approval",
+                state=contract.SegmentState.ATTENTION,
+                label="Approval",
+                clear_role=contract.ClearRole.EXCEPTION,
+                order_hint=10,
+            ),
+            segment(
+                key="budget",
+                label="12% budget left",
+                clear_role=contract.ClearRole.VITAL,
+                order_hint=20,
+            ),
+            segment(
+                key="task",
+                label="Task 0dd57ff3",
+                clear_role=contract.ClearRole.SUPPORTING,
+                order_hint=30,
+            ),
+        )
+        self.assertEqual(self.keys(projection), ["approval", "budget"])
+
+    def test_an_inferred_vital_may_not_ride_along_with_an_exception(self):
+        # The same two segments with nothing declared. The host guessed the second
+        # was a vital, and a guessed reading beside a stop-work state reads as a
+        # diagnosis of the stoppage.
+        inferred = status(
+            segments=(
+                segment(
+                    key="approval",
+                    state=contract.SegmentState.ATTENTION,
+                    label="Approval",
+                    order_hint=10,
+                ),
+                segment(
+                    key="budget",
+                    label="Budget",
+                    count=12,
+                    count_label="percent left",
+                    order_hint=20,
+                ),
+            )
+        )
+        self.assertIs(
+            render.clear_roles(inferred)[1], contract.ClearRole.POSTURE
+        )
+        self.assertEqual(self.keys(inferred), ["approval"])
+
+    def test_a_declared_vital_that_went_stale_leaves_the_exception_alone(self):
+        def with_age(age: int) -> contract.ProviderStatus:
+            return declared(
+                segment(
+                    key="approval",
+                    state=contract.SegmentState.ATTENTION,
+                    label="Approval",
+                    clear_role=contract.ClearRole.EXCEPTION,
+                    order_hint=10,
+                ),
+                segment(
+                    key="budget",
+                    label="12% budget left",
+                    clear_role=contract.ClearRole.VITAL,
+                    age_seconds=age,
+                    fresh_for_seconds=60,
+                    order_hint=20,
+                ),
+            )
+
+        # The only difference between the two snapshots is the age.
+        self.assertEqual(self.keys(with_age(30)), ["approval", "budget"])
+        self.assertEqual(self.keys(with_age(3600)), ["approval"])
+
+    def test_at_most_one_declared_vital_joins_an_exception(self):
+        projection = declared(
+            segment(
+                key="exhausted",
+                state=contract.SegmentState.CRITICAL,
+                label="Budget exhausted",
+                clear_role=contract.ClearRole.EXCEPTION,
+                order_hint=10,
+            ),
+            segment(
+                key="first",
+                label="First vital",
+                clear_role=contract.ClearRole.VITAL,
+                order_hint=20,
+            ),
+            segment(
+                key="second",
+                label="Second vital",
+                clear_role=contract.ClearRole.VITAL,
+                order_hint=30,
+            ),
+        )
+        self.assertEqual(self.keys(projection), ["exhausted", "first"])
+        self.assertLessEqual(
+            len(render.clear_readings(projection)), render.MAX_CLEAR_READINGS
+        )
+
+    def test_an_unavailable_declaring_provider_still_shows_one_reading(self):
+        # Declaring authority buys a product its choice of primary, not an
+        # exemption from the rule that a product which could not read its state
+        # shows nothing that could be read as current.
+        wedged = declared(
+            segment(
+                key="availability",
+                state=contract.SegmentState.UNKNOWN,
+                label="Not responding",
+                clear_role=contract.ClearRole.EXCEPTION,
+                order_hint=10,
+            ),
+            segment(
+                key="mode",
+                state=contract.SegmentState.NEUTRAL,
+                label="Shadow",
+                clear_role=contract.ClearRole.POSTURE,
+                order_hint=20,
+            ),
+            availability=contract.Availability.UNKNOWN,
+        )
+        self.assertEqual(self.keys(wedged), ["availability"])
+
+    def test_host_authority_keeps_the_documented_fallback(self):
+        # The regression guard for every provider already in the field: the three
+        # live snapshots must select exactly as they did before this field existed.
+        self.assertEqual(self.keys(live_fornax()), ["latest_finding"])
+        self.assertEqual(self.keys(live_circinus()), ["availability"])
+        self.assertEqual(self.keys(live_libra()), ["estimate", "escalation"])
+
+    def test_a_per_segment_declaration_alone_does_not_suppress_inference(self):
+        # The two mechanisms stay distinct. A provider may adopt `clear_role`
+        # incrementally and keep the fallback for the segments it has not judged;
+        # only the envelope declaration turns the ladder off.
+        partial = status(
+            segments=(
+                segment(key="mode", label="Shadow", clear_role=contract.ClearRole.POSTURE),
+                segment(
+                    key="noisy",
+                    state=contract.SegmentState.CRITICAL,
+                    label="Stopped",
+                ),
+            )
+        )
+        self.assertIs(self.roles(partial)["noisy"], contract.ClearRole.EXCEPTION)
+
+    def test_detail_shows_every_segment_whatever_the_authority(self):
+        # Clear's selection is Clear's business. Detail is the identity at both
+        # authorities, or the two depths would stop being one snapshot.
+        for authority in contract.ClearAuthority:
+            with self.subTest(authority=authority):
+                projection = declared(
+                    segment(
+                        key="mode", label="Shadow", clear_role=contract.ClearRole.POSTURE
+                    ),
+                    segment(
+                        key="counters",
+                        label="Decisions",
+                        count=4,
+                        count_label="today",
+                        clear_role=contract.ClearRole.SUPPORTING,
+                    ),
+                    clear_authority=authority,
+                )
+                text = render.render_provider(
+                    projection, render.PresentationMode.PLAIN, DETAIL
+                )
+                self.assertIn("Shadow", text)
+                self.assertIn("Decisions", text)
+
+    def test_a_declared_primary_is_the_state_detail_leads_with(self):
+        # The cross-depth invariant, under authority: Clear may say less, never
+        # something else.
+        projection = declared(
+            segment(key="mode", label="Enforcing", clear_role=contract.ClearRole.POSTURE),
+            segment(
+                key="noisy",
+                state=contract.SegmentState.CRITICAL,
+                label="Stopped",
+                clear_role=contract.ClearRole.SUPPORTING,
+            ),
+        )
+        reading = render.clear_readings(projection)[0]
+        self.assertTrue(any(reading is seg for seg in projection.segments))
+        self.assertIn(
+            reading.label,
+            render.render_provider(projection, render.PresentationMode.PLAIN, DETAIL),
+        )
+
+    def test_a_declared_projection_is_idempotent_and_in_contract_order(self):
+        projection = declared(
+            segment(
+                key="approval",
+                state=contract.SegmentState.ATTENTION,
+                label="Approval",
+                clear_role=contract.ClearRole.EXCEPTION,
+                order_hint=30,
+            ),
+            segment(
+                key="budget",
+                label="12% budget left",
+                clear_role=contract.ClearRole.VITAL,
+                order_hint=10,
+            ),
+        )
+        once = render.clear_readings(projection)
+        self.assertEqual([seg.key for seg in once], ["budget", "approval"])
+        twice = render.clear_readings(dataclasses.replace(projection, segments=once))
+        self.assertEqual(once, twice)
 
 
 def detail_atoms(text: str) -> set:

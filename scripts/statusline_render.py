@@ -831,33 +831,12 @@ def _unavailability_index(segments: tuple) -> int:
     return 0
 
 
-def _declares_clear_authority(status: object) -> bool:
-    """Whether this provider declared its Clear projection authoritative.
-
-    Resolved by value rather than by identity so a hand-built stub or a payload
-    parsed by a differently-loaded copy of the contract module still answers, the
-    same way every other state reader here works. An absent or unrecognised
-    declaration means "no", which is the host's documented default.
-    """
-    return (
-        _enum_value(getattr(status, "clear_authority", None))
-        == statusline_contract.ClearAuthority.PROVIDER.value
-    )
-
-
 def clear_roles(status: object) -> tuple:
     """The Clear-mode part each of this provider's segments plays, in contract order.
 
-    A provider that declared `ClearAuthority.PROVIDER` gets its declarations back
-    verbatim and none of the ladder below runs: no action-required promotion, no
-    inferred posture, no vital/supporting defaults. The contract has already
-    checked that such a payload declares every segment and names exactly one
-    primary, so there is nothing left to fill in — and filling anything in anyway
-    is how a product's declared semantics got silently replaced before.
-
-    Otherwise a provider's own `clear_role` declaration still wins per segment and
-    this fills in the rest. The fallback is deliberately documented behaviour
-    rather than a guess, in this order:
+    A provider's own `clear_role` declaration wins per segment; this fills in the
+    rest. The fallback is deliberately documented behaviour rather than a guess,
+    in this order:
 
     1. A state that stops work or waits on the operator is an exception wherever
        it sits. Position cannot demote it, because the whole point of the top rung
@@ -872,12 +851,20 @@ def clear_roles(status: object) -> tuple:
     Rule 2's "if no segment claimed the part" matters for stability: a declared
     posture suppresses inference entirely, so a provider that adopts the field
     gets exactly what it asked for and nothing extra.
+
+    There is deliberately no `ClearAuthority` branch here, and that is the whole
+    design rather than an omission. Every rung above only fires on a segment whose
+    role is still `None`, and `ClearAuthority.PROVIDER` is validated to mean every
+    segment carries one — so a declared projection passes through this function
+    unchanged for arithmetical reasons, not because a flag was checked. A
+    render-time guard would be unreachable code that no mutation could prove was
+    doing anything, which is exactly the kind of guard that looks like protection
+    and is not. `TestDeclaredClearAuthority` pins the property over every role
+    assignment the contract accepts, so an edit that broke it would fail loudly
+    here instead of quietly re-ranking a product's own semantics.
     """
     segments = statusline_contract.order_segments(status)
     roles: list = [getattr(segment, "clear_role", None) for segment in segments]
-
-    if _declares_clear_authority(status):
-        return tuple(roles)
 
     for index, segment in enumerate(segments):
         if roles[index] is None and _enum_value(segment.state) in ACTION_REQUIRED_STATES:
