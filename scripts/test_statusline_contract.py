@@ -1073,6 +1073,177 @@ class ClearRoleTest(unittest.TestCase):
                     self.assertIs(built.clear_role, role)
 
 
+class ClearAuthorityTest(unittest.TestCase):
+    """`clear_authority`: the declaration the host is not allowed to infer over.
+
+    The defect being closed here is specific and was live: a provider could
+    declare roles and the host's fallback ladder still ran, so there was no way
+    to express "this projection is complete, leave it alone" and no way to tell a
+    deliberate declaration from a payload written before the field existed.
+    """
+
+    POSTURE = {"clear_role": sc.ClearRole.POSTURE}
+
+    def _declared(self, *segments: sc.Segment) -> sc.ProviderStatus:
+        return _status(
+            clear_authority=sc.ClearAuthority.PROVIDER, segments=tuple(segments)
+        )
+
+    def test_host_authority_is_the_default(self) -> None:
+        # Every provider in the field predates the field, so the default has to be
+        # the behaviour they already get.
+        self.assertIs(_status().clear_authority, sc.ClearAuthority.HOST)
+
+    def test_a_fully_declared_projection_is_accepted(self) -> None:
+        status = self._declared(
+            _segment(key="mode", label="Shadow", **self.POSTURE),
+            _segment(
+                key="decision", label="Would block", clear_role=sc.ClearRole.VITAL
+            ),
+        )
+        self.assertIs(status.clear_authority, sc.ClearAuthority.PROVIDER)
+
+    def test_an_exception_alone_is_a_primary(self) -> None:
+        # An unreachable product declares one exception and nothing else; requiring
+        # a posture too would make the honest payload unrepresentable.
+        status = _status(
+            availability=sc.Availability.UNKNOWN,
+            clear_authority=sc.ClearAuthority.PROVIDER,
+            segments=(
+                _segment(
+                    key="availability",
+                    state=sc.SegmentState.UNKNOWN,
+                    label="Not responding",
+                    clear_role=sc.ClearRole.EXCEPTION,
+                ),
+            ),
+        )
+        self.assertIs(status.clear_authority, sc.ClearAuthority.PROVIDER)
+
+    def test_an_authority_that_is_not_a_clear_authority_is_refused(self) -> None:
+        for value in ("provider", 1, True, sc.ClearRole.POSTURE, None):
+            with self.subTest(value=repr(value)):
+                with self.assertRaises(sc.ContractViolation):
+                    _status(clear_authority=value)
+
+    def test_declaring_authority_over_no_segments_is_refused(self) -> None:
+        with self.assertRaisesRegex(sc.ContractViolation, "at least one segment"):
+            _status(clear_authority=sc.ClearAuthority.PROVIDER)
+
+    def test_an_undeclared_segment_is_refused_not_inferred(self) -> None:
+        # The half-declared payload is the dangerous one: the two skipped segments
+        # would need inferring, which is the merge this mode exists to prevent.
+        with self.assertRaisesRegex(sc.ContractViolation, r"clear_role on every"):
+            self._declared(
+                _segment(key="mode", label="Shadow", **self.POSTURE),
+                _segment(key="counters", label="Decisions"),
+            )
+
+    def test_the_refusal_names_the_segments_it_could_not_resolve(self) -> None:
+        with self.assertRaises(sc.ContractViolation) as caught:
+            self._declared(
+                _segment(key="mode", label="Shadow", **self.POSTURE),
+                _segment(key="counters", label="Decisions"),
+                _segment(key="window", label="Block window"),
+            )
+        self.assertIn("'counters'", str(caught.exception))
+        self.assertIn("'window'", str(caught.exception))
+        self.assertNotIn("'mode'", str(caught.exception))
+
+    def test_two_postures_are_refused(self) -> None:
+        # Two primaries is no primary: choosing between them would be the host's
+        # editorial judgement again, which is what the declaration removed.
+        with self.assertRaisesRegex(sc.ContractViolation, "at most one 'posture'"):
+            self._declared(
+                _segment(key="mode", label="Shadow", **self.POSTURE),
+                _segment(key="estimate", label="Remaining work", **self.POSTURE),
+            )
+
+    def test_a_projection_with_no_primary_is_refused(self) -> None:
+        with self.assertRaisesRegex(sc.ContractViolation, "'posture' or 'exception'"):
+            self._declared(
+                _segment(key="task", label="Task", clear_role=sc.ClearRole.SUPPORTING),
+                _segment(
+                    key="estimate", label="Remaining work", clear_role=sc.ClearRole.VITAL
+                ),
+            )
+
+    def test_the_same_shapes_stay_valid_under_host_authority(self) -> None:
+        # Proves every refusal above is about the declaration and not about the
+        # segments: an undeclared provider may legitimately ship all of these.
+        _status(segments=(_segment(key="counters", label="Decisions"),))
+        _status(
+            segments=(
+                _segment(key="a", label="Shadow", **self.POSTURE),
+                _segment(key="b", label="Remaining work", **self.POSTURE),
+            )
+        )
+        _status(
+            segments=(
+                _segment(key="c", label="Task", clear_role=sc.ClearRole.SUPPORTING),
+            )
+        )
+
+    def test_the_authority_survives_the_wire_in_both_directions(self) -> None:
+        status = self._declared(_segment(key="mode", label="Shadow", **self.POSTURE))
+        payload = status.to_wire()
+        self.assertEqual(payload["clear_authority"], "provider")
+        self.assertIs(
+            sc.provider_status_from_wire(payload).clear_authority,
+            sc.ClearAuthority.PROVIDER,
+        )
+
+    def test_host_authority_is_omitted_from_the_wire(self) -> None:
+        # An older host that has never heard of the field must see an unchanged
+        # payload from a provider that did not opt in.
+        self.assertNotIn("clear_authority", _status().to_wire())
+
+    def test_an_absent_authority_parses_as_host(self) -> None:
+        self.assertIs(
+            sc.provider_status_from_wire(_payload()).clear_authority,
+            sc.ClearAuthority.HOST,
+        )
+
+    def test_an_unrecognised_authority_degrades_to_host(self) -> None:
+        # A future selection policy this host cannot carry out leaves it with the
+        # one it does have, which is complete and documented. That is different
+        # from a payload claiming *this* policy and failing it, which is refused.
+        payload = _payload()
+        payload["clear_authority"] = "provider_strict"
+        self.assertIs(
+            sc.provider_status_from_wire(payload).clear_authority,
+            sc.ClearAuthority.HOST,
+        )
+
+    def test_a_malformed_declared_payload_is_refused_over_the_wire_too(self) -> None:
+        # The fail-closed path has to hold at the parse boundary, because that is
+        # where real provider output arrives. Degrading here would restore the
+        # original defect invisibly.
+        payload = _payload()
+        payload["clear_authority"] = "provider"
+        with self.assertRaises(sc.ContractViolation):
+            sc.provider_status_from_wire(payload)
+
+    def test_declaring_authority_does_not_relax_any_other_rule(self) -> None:
+        # Authority is about selection only. A declared role cannot buy a count on
+        # an unavailable provider, which would be the false all-clear.
+        with self.assertRaises(sc.ContractViolation):
+            _status(
+                availability=sc.Availability.UNKNOWN,
+                clear_authority=sc.ClearAuthority.PROVIDER,
+                segments=(
+                    _segment(
+                        key="availability",
+                        state=sc.SegmentState.UNKNOWN,
+                        label="Not responding",
+                        count=0,
+                        count_label="blocked",
+                        clear_role=sc.ClearRole.EXCEPTION,
+                    ),
+                ),
+            )
+
+
 class FreshnessHorizonTest(unittest.TestCase):
     """`fresh_for_seconds`: the provider says when its own reading expires."""
 

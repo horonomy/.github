@@ -203,8 +203,10 @@ class ClearRole(enum.Enum):
 
     Declaring it on the *segment* rather than shipping a per-product table in the
     host is what makes that true for a product the host has never heard of. The
-    host's fallback for an undeclared segment (`statusline_render.clear_role`)
-    exists for providers written before this field, not as the intended path.
+    host's fallback for an undeclared segment (`statusline_render.clear_roles`)
+    exists for providers written before this field, not as the intended path — and
+    a product that wants the fallback off its projection entirely declares
+    `ClearAuthority.PROVIDER` on the envelope.
 
     `EXCEPTION` is the top rung and deliberately narrow: the product is broken,
     unavailable, or genuinely waiting on the operator. It is not "the worst thing
@@ -217,6 +219,35 @@ class ClearRole(enum.Enum):
     POSTURE = "posture"
     VITAL = "vital"
     SUPPORTING = "supporting"
+
+
+class ClearAuthority(enum.Enum):
+    """Who decides which of a provider's facts earns the Clear line.
+
+    `ClearRole` made the judgement *expressible*; this makes it *binding*. The
+    two are not the same thing, and the gap between them was a live defect: a
+    provider could declare a posture and still have the host promote a different
+    segment over it, because the host's fallback ladder ran regardless and had no
+    way to tell a deliberate, complete declaration from a payload written before
+    the field existed. Clear then summarised the wrong fact while every test
+    passed — Circinus led its line with a hypothetical would-block instead of
+    mode plus outcome.
+
+    `HOST` is the default and keeps the documented fallback for every provider
+    that has not spoken. `PROVIDER` means "this payload declares its own Clear
+    projection in full", and the host answers by switching the ladder off rather
+    than merging with it: a declaration that can be overridden on the host's
+    severity arithmetic is not a declaration.
+
+    Because it is a claim the host relies on, it is validated rather than
+    trusted (`ProviderStatus._validate_clear_authority`), and a declaring payload
+    that does not hold up is refused instead of quietly re-inferred. Falling back
+    there would restore the exact failure this enum exists to close, and do it
+    invisibly.
+    """
+
+    HOST = "host"
+    PROVIDER = "provider"
 
 
 class HostCapability(enum.Enum):
@@ -869,6 +900,13 @@ class ProviderStatus:
     cache_ttl_seconds: int = 0
     order_hint: int = 500
     fallback_text: str | None = None
+
+    # Envelope-level rather than per-segment because it is a claim about the
+    # projection as a whole: "every segment here has been assigned its part".
+    # A per-segment flag could not express that, and so could not tell a
+    # deliberately supporting segment from one nobody had got around to.
+    clear_authority: ClearAuthority = ClearAuthority.HOST
+
     contract_version: int = CONTRACT_VERSION
 
     def __post_init__(self) -> None:
@@ -884,6 +922,7 @@ class ProviderStatus:
         if not isinstance(self.availability, Availability):
             raise ContractViolation("availability must be an Availability")
         self._validate_segments()
+        self._validate_clear_authority()
         if self.observed_at is not None:
             require_observed_at(self.observed_at)
         require_bounded_int(
@@ -956,6 +995,59 @@ class ProviderStatus:
                     "current when the state behind it could not be read"
                 )
 
+    def _validate_clear_authority(self) -> None:
+        """Check a provider-declared Clear projection instead of trusting it.
+
+        Under `ClearAuthority.PROVIDER` the host switches its fallback ladder
+        off, so these four rules are the whole guarantee that something still
+        comes out — and a declaration the host cannot rely on is worse than no
+        declaration, because the ladder it replaced did always produce a primary.
+
+        1. At least one segment. Authority over an empty projection is a claim
+           about nothing; the ladder it disables had nothing to run on either.
+        2. Every segment declares a role. A payload that declared two of its four
+           segments has not decided the projection, and the two it skipped would
+           need inferring — which is precisely the merge this mode exists to
+           prevent, and the state that cannot be told from "written before the
+           field existed".
+        3. At most one posture. Two postures is two primaries, and picking
+           between them would be the host's editorial judgement again.
+        4. A posture or an exception. Without one there is no primary at all, and
+           the host would be reduced to showing the first reading and hoping.
+
+        Refusing, rather than falling back, is the point: a `ContractViolation`
+        surfaces as *this provider* being unreadable, which is visible and
+        fixable. A silent re-inference looks exactly like success.
+        """
+        if not isinstance(self.clear_authority, ClearAuthority):
+            raise ContractViolation("clear_authority must be a ClearAuthority")
+        if self.clear_authority is not ClearAuthority.PROVIDER:
+            return
+        if not self.segments:
+            raise ContractViolation(
+                "clear_authority 'provider' requires at least one segment; there "
+                "is no projection to declare authority over"
+            )
+        undeclared = [s.key for s in self.segments if s.clear_role is None]
+        if undeclared:
+            raise ContractViolation(
+                "clear_authority 'provider' requires a clear_role on every "
+                f"segment; missing on {sorted(undeclared)}"
+            )
+        postures = [s.key for s in self.segments if s.clear_role is ClearRole.POSTURE]
+        if len(postures) > 1:
+            raise ContractViolation(
+                "clear_authority 'provider' allows at most one 'posture' segment; "
+                f"declared on {sorted(postures)}"
+            )
+        if not postures and not any(
+            s.clear_role is ClearRole.EXCEPTION for s in self.segments
+        ):
+            raise ContractViolation(
+                "clear_authority 'provider' requires a 'posture' or 'exception' "
+                "segment; without one the projection names no primary reading"
+            )
+
     def to_wire(self) -> dict:
         """Serialise to the JSON-compatible form a provider prints on stdout.
 
@@ -976,6 +1068,8 @@ class ProviderStatus:
         payload["order_hint"] = self.order_hint
         if self.fallback_text is not None:
             payload["fallback_text"] = self.fallback_text
+        if self.clear_authority is not ClearAuthority.HOST:
+            payload["clear_authority"] = self.clear_authority.value
         if self.segments:
             payload["segments"] = [_segment_to_wire(s) for s in self.segments]
         return payload
@@ -1165,6 +1259,24 @@ def _parse_clear_role(value: object) -> ClearRole | None:
     return None
 
 
+def _parse_clear_authority(value: object) -> ClearAuthority:
+    """Parse `clear_authority`, degrading anything unrecognised to `HOST`.
+
+    A fourth value this host has never heard of describes a selection policy it
+    cannot carry out, so the one honest answer is to use the policy it does have.
+    `HOST` is a documented, complete fallback rather than a shrug, which is why
+    degrading here is safe in a way degrading a *malformed* `PROVIDER` payload
+    would not be: that one is a provider claiming this exact contract and failing
+    it, so it is refused.
+    """
+    if value is None:
+        return ClearAuthority.HOST
+    for member in ClearAuthority:
+        if member.value == value:
+            return member
+    return ClearAuthority.HOST
+
+
 def _segment_from_wire(payload: object, index: int) -> Segment:
     """Parse one segment, ignoring fields this contract version does not know."""
     if not isinstance(payload, dict):
@@ -1255,5 +1367,6 @@ def provider_status_from_wire(payload: object) -> ProviderStatus:
         cache_ttl_seconds=payload.get("cache_ttl_seconds", 0),
         order_hint=payload.get("order_hint", 500),
         fallback_text=payload.get("fallback_text"),
+        clear_authority=_parse_clear_authority(payload.get("clear_authority")),
         contract_version=version,
     )
