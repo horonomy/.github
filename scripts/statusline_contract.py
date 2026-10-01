@@ -203,8 +203,10 @@ class ClearRole(enum.Enum):
 
     Declaring it on the *segment* rather than shipping a per-product table in the
     host is what makes that true for a product the host has never heard of. The
-    host's fallback for an undeclared segment (`statusline_render.clear_role`)
-    exists for providers written before this field, not as the intended path.
+    host's fallback for an undeclared segment (`statusline_render.clear_roles`)
+    exists for providers written before this field, not as the intended path — and
+    a product that wants the fallback off its projection entirely declares
+    `ClearAuthority.PROVIDER` on the envelope.
 
     `EXCEPTION` is the top rung and deliberately narrow: the product is broken,
     unavailable, or genuinely waiting on the operator. It is not "the worst thing

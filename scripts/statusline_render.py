@@ -831,12 +831,33 @@ def _unavailability_index(segments: tuple) -> int:
     return 0
 
 
+def _declares_clear_authority(status: object) -> bool:
+    """Whether this provider declared its Clear projection authoritative.
+
+    Resolved by value rather than by identity so a hand-built stub or a payload
+    parsed by a differently-loaded copy of the contract module still answers, the
+    same way every other state reader here works. An absent or unrecognised
+    declaration means "no", which is the host's documented default.
+    """
+    return (
+        _enum_value(getattr(status, "clear_authority", None))
+        == statusline_contract.ClearAuthority.PROVIDER.value
+    )
+
+
 def clear_roles(status: object) -> tuple:
     """The Clear-mode part each of this provider's segments plays, in contract order.
 
-    A provider's own `clear_role` declaration always wins; this fills in the rest.
-    The fallback is deliberately documented behaviour rather than a guess, in this
-    order:
+    A provider that declared `ClearAuthority.PROVIDER` gets its declarations back
+    verbatim and none of the ladder below runs: no action-required promotion, no
+    inferred posture, no vital/supporting defaults. The contract has already
+    checked that such a payload declares every segment and names exactly one
+    primary, so there is nothing left to fill in — and filling anything in anyway
+    is how a product's declared semantics got silently replaced before.
+
+    Otherwise a provider's own `clear_role` declaration still wins per segment and
+    this fills in the rest. The fallback is deliberately documented behaviour
+    rather than a guess, in this order:
 
     1. A state that stops work or waits on the operator is an exception wherever
        it sits. Position cannot demote it, because the whole point of the top rung
@@ -854,6 +875,9 @@ def clear_roles(status: object) -> tuple:
     """
     segments = statusline_contract.order_segments(status)
     roles: list = [getattr(segment, "clear_role", None) for segment in segments]
+
+    if _declares_clear_authority(status):
+        return tuple(roles)
 
     for index, segment in enumerate(segments):
         if roles[index] is None and _enum_value(segment.state) in ACTION_REQUIRED_STATES:
@@ -876,6 +900,30 @@ def clear_roles(status: object) -> tuple:
     return tuple(roles)
 
 
+def _declared_fresh_vitals(segments: tuple, indices: list) -> list:
+    """The still-fresh vital signals the *product itself* nominated, in contract order.
+
+    Deliberately keyed on `segment.clear_role`, not on the role ladder's output
+    and not on `clear_authority`. An inferred vital beside an exception is exactly
+    the pairing rule 2 of `clear_readings` exists to forbid — the host guessed
+    that a routine reading was a vital, and putting it next to a stop-work state
+    makes the line read as a diagnosis of the stoppage. A *declared* vital is the
+    product saying the two belong together, which is how `Approval · 12% budget
+    left` gets to say what the approval will cost.
+
+    Keying on the declaration rather than on the authority mode also means a
+    provider that adopts `clear_role` without claiming authority gets this, and
+    nothing already in the field changes behaviour.
+    """
+    return [
+        index
+        for index in indices
+        if getattr(segments[index], "clear_role", None)
+        is statusline_contract.ClearRole.VITAL
+        and not getattr(segments[index], "is_stale", False)
+    ]
+
+
 def clear_readings(status: object) -> tuple:
     """The segments Clear mode shows for one provider, in contract order.
 
@@ -891,9 +939,12 @@ def clear_readings(status: object) -> tuple:
        Not "the unavailability plus what we last knew" — a cached mode or outcome
        beside an unreachable daemon is read as current, which is how a line ends
        up implying enforcement that is not running.
-    2. Otherwise, one exception if there is one, and nothing else. Something that
-       stops work or waits on the operator is not improved by having a routine
-       estimate next to it.
+    2. Otherwise, one exception if there is one, plus at most one still-fresh
+       vital signal *the product itself declared*. Something that stops work or
+       waits on the operator is not improved by having a host-guessed estimate
+       next to it, but a product may nominate the one reading that qualifies its
+       own exception — `Approval · 12% budget left` says what the approval costs,
+       which a bare `Approval` cannot.
     3. Otherwise the posture, plus at most one still-fresh vital signal.
 
     Returned in contract order rather than in role order, so the rendered text is
@@ -916,6 +967,7 @@ def clear_readings(status: object) -> tuple:
         ]
         if exceptions:
             kept = {_worst_index(segments, exceptions)}
+            kept.update(_declared_fresh_vitals(segments, everything)[:1])
         else:
             kept = {
                 index
