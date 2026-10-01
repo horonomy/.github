@@ -68,6 +68,7 @@ allowlist. There is deliberately **no free-text field**: see
 | `cache_ttl_seconds` | no | int | How long the host may reuse this answer. 0–60. |
 | `order_hint` | no | int | 0–1000, lower renders first. Default 500. |
 | `fallback_text` | no | string | Optional convenience rendering, same privacy rules, ≤120 chars. Never the only representation. |
+| `clear_authority` | no | enum | `host` (default) / `provider`. See [Clear-mode selection](#clear-mode-selection). |
 
 ### Segment
 
@@ -88,12 +89,19 @@ allowlist. There is deliberately **no free-text field**: see
 | `hypothetical` | no | bool | This segment describes what *would* have happened, not what did. |
 | `explain_key` | no | string | Dotted key the shared explain surface resolves. |
 | `order_hint` | no | int | 0–1000 within the provider. |
+| `clear_role` | no | enum | `exception` / `posture` / `vital` / `supporting`. See [Clear-mode selection](#clear-mode-selection). |
+| `fresh_for_seconds` | no | int | How long this reading stays current. Requires `age_seconds`. |
 
 `duration_seconds` / `duration_label` were added for HORO-1569 under
 `contract_version` 1: both are optional and host-side, which the [version
 evolution](#version-evolution) rules already permit without a bump. They exist
 so a product never formats a span itself — see the last row of the ownership
 table above.
+
+`clear_role` and `fresh_for_seconds` (HORO-1626) and `clear_authority`
+(HORO-1631) arrived the same way, for the same reason one level up: a product
+declares which of its facts earns the one-line summary and when that fact goes
+stale, and the host still owns every character of the rendering.
 
 ### Truthfulness rules the host enforces
 
@@ -125,6 +133,66 @@ cannot reach the renderer:
 - Not-available states are never silent. An empty `segments` array renders as
   nothing, and nothing reads as all-clear, so a provider that cannot answer
   still emits one segment saying so with a bounded reason.
+
+### Clear-mode selection
+
+The host renders at two information depths (HORO-1626). Detail shows a
+provider's snapshot as the provider ordered it. Clear shows one short executive
+phrase per product, and the question Clear asks is *"if this product gets one
+phrase, which of its facts earns it"* — which is a product judgement, not a
+severity calculation. A task id and a delivery estimate are both `neutral` facts
+of equal severity; one is an operator's whole reason to look at the line.
+
+Three optional fields carry that judgement, and the host still owns all
+formatting at both depths:
+
+- **`clear_role`** — the part one segment plays. `posture` is the primary
+  reading. `vital` is a signal that changes how the primary reads. `supporting`
+  is context Clear omits. `exception` is deliberately narrow: the product is
+  broken, unavailable, or genuinely waiting on the operator. It is *not* "the
+  worst thing currently true" — a `warn`-state budget posture is still a
+  posture, and promoting it is how a line starts claiming work is blocked when
+  nothing is.
+- **`fresh_for_seconds`** — when the product's own reading expires. Only the
+  product knows whether five minutes is current for it. A stale `vital` is
+  dropped from Clear; a stale `exception` is not, because an old unanswered
+  approval request is still an unanswered approval request.
+- **`clear_authority`** — `provider` means "this payload declares its whole
+  Clear projection; do not infer over it".
+
+A payload at `clear_authority: provider` is validated rather than trusted, and a
+declaring payload that fails any of these is **refused**, not quietly
+re-inferred:
+
+- at least one segment — authority over an empty projection is a claim about
+  nothing;
+- a `clear_role` on **every** segment — a half-declared projection would need
+  the rest inferred, which is the merge this mode exists to prevent, and is
+  indistinguishable from a provider written before the field existed;
+- at most one `posture` — two primaries is no primary;
+- at least one `posture` or `exception` — otherwise the projection names no
+  primary at all.
+
+Those four rules are what make a declaration binding: the host's fallback ladder
+only ever fills in a segment whose role is still unset, so a complete declaration
+passes through it unchanged. The ladder itself stays the documented default for
+every provider that has not declared, in this order — an action-required state is
+an exception wherever it sits; then exactly one `posture`, preferring a segment
+that carries a measurement over one that merely names something; then everything
+remaining is `vital` if measured or emphatic and `supporting` otherwise.
+
+One pairing rule is keyed on the declaration rather than on the authority mode:
+an `exception` may be shown beside at most one still-fresh **declared** `vital`,
+never an inferred one. `Approval · 12% budget left` says what the approval costs,
+and only the product knows which reading qualifies its own exception; a
+host-guessed reading next to a stop-work state reads as a diagnosis of the
+stoppage.
+
+An unrecognised `clear_authority` value degrades to `host`, and an unrecognised
+`clear_role` degrades to undeclared — both are complete documented behaviours,
+so a future provider loses a presentation hint rather than its whole health
+claim. Declaring authority relaxes no other rule: a declared `exception` on an
+unavailable provider still cannot carry a `count`.
 
 ### Scope is explicit
 
@@ -226,8 +294,8 @@ change a `label`, or change its own `provider_version`.
 **Requires a version bump:** removing or renaming a required field, changing a
 field's type, changing the meaning of an existing enum member, or tightening a
 bound in a way that invalidates previously valid documents. Adding a *new*
-enum member to `availability`, `state` or `confidence_of` does not require a
-bump, because those degrade (below).
+enum member to `availability`, `state`, `confidence_of`, `clear_role` or
+`clear_authority` does not require a bump, because those degrade (below).
 
 **How a host reads a document it does not fully understand:**
 
@@ -235,6 +303,8 @@ bump, because those degrade (below).
 |---|---|---|
 | An unknown field, top level or in a segment | Ignored, and not carried into the parsed value | A host that cannot interpret a field cannot render it, and re-emitting it invents a guarantee |
 | An unrecognised `availability`, `state`, or `confidence_of` | Degrades to `unknown` / `unspecified` | These have an honest unknown member; a future minor version should not fail the render |
+| An unrecognised `clear_role` or `clear_authority` | Degrades to undeclared / `host` | Both have a complete documented default, so a future provider loses a presentation hint rather than its health claim |
+| A `clear_authority: provider` payload that breaks a [Clear-mode selection](#clear-mode-selection) rule | **Refused** | The provider claimed *this* contract and failed it; degrading would restore the defect the field exists to close, invisibly |
 | An unrecognised `scope` | **Refused** | There is no unknown scope, and every fallback would be a specific wrong answer |
 | An unrecognised `confidence` | **Refused** | Guessing between `low` and `high` is not degradation, it is fabrication |
 | An unknown `contract_version` | **Refused** | The host cannot know which of the above rules still hold |
