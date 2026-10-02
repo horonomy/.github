@@ -18,7 +18,7 @@ your own language/framework — this contract does not ship executable code,
 it ships the property names, the fixture shape they need, and the negative
 control that proves each property is actually being checked.
 
-## The 14 required contract properties
+## The 14 required single-writer properties
 
 Each property below is named so a product's test suite and a certification
 matrix (HORO-999/HORO-1003) can refer to it by one consistent ID.
@@ -44,6 +44,69 @@ A product doesn't need all 14 to exist as separate test functions — several
 naturally collapse into one parameterized test — but each ID must be
 traceable to a specific assertion your team can point to, not asserted by
 name only in documentation.
+
+## The 5 external-manager properties (HORO-1660)
+
+The 14 above all describe one writer — this product — being careful with
+everything it does not own. They say nothing about the case where a
+**second tool also writes the same file on its own schedule**: a config
+profile manager, a provider switcher, a dotfile sync, an MDM agent, a
+team-standard bootstrap script. On a real workstation that is the common
+case, not the exotic one, and it breaks an assumption the 14 share: that
+the file this product wrote is the file the host tool will read.
+
+A product whose host surface can plausibly have another manager owes these
+five in addition to the 14. They are listed separately rather than folded
+in because they are only testable once the suite can *drive the other
+tool's writes*, which is a different fixture capability.
+
+| ID | What it proves |
+|---|---|
+| `EXTERNAL_MANAGER_REAPPLY_PRESERVES_PRODUCT_INTEGRATION` | After the external manager performs each of its own writes to the shared file, this product's integration is still present and still functional — driven for real, not reasoned about. |
+| `EXTERNAL_MANAGER_IS_DETECTED_NOT_FOUGHT` | Discovering another manager leads to reconciliation, never to a refusal, a silent self-disable, or a watcher/poll loop that rewrites the file whenever the other tool does. One write per operation. |
+| `EXTERNAL_MANAGER_CANONICAL_SEED_IS_SINGLE_SOURCED` | Where the fix is to seed the product's entry into the manager's own stored representation, *every* representation it writes from is covered, and all of them carry byte-identical content to what went live — no second source of truth and no divergence between copies. |
+| `PRODUCT_RESTORE_PRESERVES_EXTERNAL_MANAGER_STATE` | Install, repair and uninstall change only this product's entry inside the manager's store — its provider, model, endpoint, credential and unknown fields are left exactly as found, and rows belonging to a different host tool are untouched. |
+| `STALE_EXTERNAL_SNAPSHOT_CANNOT_RESURRECT_OLD_CONFIG` | Uninstall hands back what is *live* at that moment, never a value remembered from the manager's store, this product's own receipt, or a rebuilt approximation — so the external manager's next write cannot resurrect a configuration the user has since changed. |
+
+### What makes these testable rather than asserted
+
+The external manager's write paths are usually **not uniform**, and that
+asymmetry is where the defect lives. A port of it into the fixture must
+keep the asymmetry: in the HORO-1660 case one path reads the live file and
+patches only its own fields (and therefore preserves unknown keys by
+construction), while two others write a stored document over the live file
+without reading it at all. A fixture that modelled all three as "it writes
+the file" would have nothing left to distinguish, and — worse — a fix that
+covered only the visible path would pass it. The one that actually fired
+was the invisible path: a crash-recovery replay at login.
+
+So the fixture must be able to perform, at minimum:
+
+- each distinct write path the manager really has, including the ones its
+  own interface never shows the user
+- the manager editing its own configuration without being asked to touch
+  anything of this product's
+- the manager holding more than one stored representation, captured at
+  different times, so that at least one predates this product's install
+  and at least one has no entry of this product's at all
+- a stored representation belonging to a *different* host tool, which must
+  never be written
+
+`EXTERNAL_MANAGER_IS_DETECTED_NOT_FOUGHT` additionally needs the suite to
+be able to count writes to the shared file, because the failure it forbids
+— two tools each restoring what the other just wrote — is invisible in any
+single end-state snapshot.
+
+### Upstream defects are recorded, not absorbed
+
+If the external manager *should* preserve unknown configuration and does
+not, that is a defect in that tool. Record it as one, and keep the local
+coexistence fix separate and narrow. In particular, do not let a seed for
+your own key be read as a claim that the manager now preserves everything:
+the same unread write that drops your entry generally drops other
+products' entries too, and each of those is theirs to seed. State that
+limit as a test, not as a sentence in a ticket — see the HORO-1660 suite,
+where it is one.
 
 ## Rich fixture requirements
 
@@ -148,6 +211,14 @@ and confirm the corresponding test **fails**:
 | No fingerprint/hash check before write | `CONCURRENT_CHANGE_DOES_NOT_CLOBBER` |
 | Direct write with no temp-file/rename | `FAILED_MUTATION_IS_ATOMIC` |
 | Treating a legacy receipt with no ownership metadata as fully trusted | `LEGACY_OWNERSHIP_UNKNOWN_FAILS_SAFE` |
+| Writing the live file correctly and never seeding the external manager's store | `EXTERNAL_MANAGER_REAPPLY_PRESERVES_PRODUCT_INTEGRATION` |
+| Seeding only the manager representations its own UI exposes, not every one it writes from | `EXTERNAL_MANAGER_CANONICAL_SEED_IS_SINGLE_SOURCED` |
+| Computing a second copy of the product's entry for the manager's store instead of seeding the one that went live | `EXTERNAL_MANAGER_CANONICAL_SEED_IS_SINGLE_SOURCED` |
+| Rebuilding the manager's stored document from the keys this version knows | `PRODUCT_RESTORE_PRESERVES_EXTERNAL_MANAGER_STATE`, `UNKNOWN_FUTURE_FIELDS_ARE_PRESERVED` |
+| Treating the manager's store as this product's own — editing rows keyed to a different host tool | `PRODUCT_RESTORE_PRESERVES_EXTERNAL_MANAGER_STATE` |
+| Re-writing the shared file after seeding, "in case the other tool moved it" | `EXTERNAL_MANAGER_IS_DETECTED_NOT_FOUGHT` |
+| Detecting another manager and installing nothing, or disabling the integration | `EXTERNAL_MANAGER_IS_DETECTED_NOT_FOUGHT` |
+| Uninstall handing back a value read from the manager's store, or rebuilt from a receipt | `STALE_EXTERNAL_SNAPSHOT_CANNOT_RESURRECT_OLD_CONFIG` |
 
 If you can't point to a place your suite would actually fail when one of
 these is deliberately reintroduced, the corresponding property isn't
@@ -202,7 +273,7 @@ defeating the point, or (b) impose a common intermediate representation
 that risks exactly the lossy-AST failure mode this document just warned
 against. The actual value this contract provides — and the actual value
 two more product audits would add before revisiting this decision — is
-the shared vocabulary (the 14 property IDs) and the shared reasoning
+the shared vocabulary (the 19 property IDs) and the shared reasoning
 pattern (which mutation-preference tier applies, whether whole-file
 ownership is provably exclusive), not shared code. Revisit this decision
 if a third real audit finds two products in the **same language** solving
@@ -213,7 +284,7 @@ constraint), not before.
 
 ## Consuming this contract without forking it
 
-Reference these 14 property IDs and this document by URL from your
+Reference these 19 property IDs and this document by URL from your
 product's own test files/docs (a comment naming the ID next to the
 assertion that proves it is enough) — do not copy this document's prose
 into your repo. If your product's audit finds a real gap, file it as your

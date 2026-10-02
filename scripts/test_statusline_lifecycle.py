@@ -3340,7 +3340,7 @@ class ExternalOwnerRemovalTest(ExternalOwnerCase):
         self.assertEqual(len(result.external_written), 3)
 
     def test_what_is_handed_back_is_the_live_value_and_never_a_stored_one(self) -> None:
-        """STALE_EXTERNAL_SNAPSHOT_CANNOT_RESURRECT_OLD_STATUSLINE."""
+        """STALE_EXTERNAL_SNAPSHOT_CANNOT_RESURRECT_OLD_CONFIG."""
         self.enable("fornax", owner=self.owner())
         # The user edits the live statusline after installing. Every stored copy in
         # the manager still holds the value from before that edit, so a removal that
