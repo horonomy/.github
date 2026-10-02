@@ -209,17 +209,57 @@ def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
 
 
+def _unreadable(connection: sqlite3.Connection, table: str, required: set[str]) -> str | None:
+    """Why this table cannot be read, or `None` if it can.
+
+    A missing table and a missing column are reported differently because they
+    mean different things: the first is "this is not that tool's store", the
+    second is "it is, but a version this adapter has not seen".
+    """
+    columns = _columns(connection, table)
+    if not columns:
+        return f"table {table} is missing"
+    if not required.issubset(columns):
+        return f"table {table} is missing column(s): {', '.join(sorted(required - columns))}"
+    return None
+
+
+def _representation(
+    kind: str, table: str, column: str, key_column: str, key: object, stored: object, ordinal: int
+) -> Representation | None:
+    """One stored row, or `None` if it holds nothing we could carry a statusline in.
+
+    An unusable row is skipped rather than refused: a document the manager itself
+    would fail to parse cannot reach the live file, so it is not a row whose state
+    we can improve.
+    """
+    if not isinstance(stored, str) or not stored.strip():
+        return None
+    try:
+        data = json.loads(stored)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return Representation(
+        kind=kind,
+        locator=f"{table}.{column}[{kind} {ordinal}]",
+        table=table,
+        column=column,
+        key_column=key_column,
+        key=str(key),
+        fingerprint=_fingerprint(stored),
+        data=data,
+    )
+
+
 def _read_representations(connection: sqlite3.Connection) -> tuple[list[Representation], str | None]:
     """Every stored document for this host tool, or why they could not be read."""
     found: list[Representation] = []
     for kind, table, column, key_column in _CC_SWITCH_REPRESENTATIONS:
-        columns = _columns(connection, table)
-        if not columns:
-            return [], f"table {table} is missing"
-        required = {column, key_column, "app_type"}
-        if not required.issubset(columns):
-            missing = ", ".join(sorted(required - columns))
-            return [], f"table {table} is missing column(s): {missing}"
+        problem = _unreadable(connection, table, {column, key_column, "app_type"})
+        if problem is not None:
+            return [], problem
         # Ordered so that the ordinal in a locator means the same row across two
         # runs. The row key itself is not used in the locator: these are provider
         # identifiers a user chose, and a locator ends up in bug reports.
@@ -229,29 +269,9 @@ def _read_representations(connection: sqlite3.Connection) -> tuple[list[Represen
             (_CLAUDE_APP_TYPE,),
         ).fetchall()
         for ordinal, (key, stored) in enumerate(rows, start=1):
-            if not isinstance(stored, str) or not stored.strip():
-                continue
-            try:
-                data = json.loads(stored)
-            except json.JSONDecodeError:
-                # A document the manager itself would fail to use. Skipped rather
-                # than refused: it cannot carry our statusline to the live file,
-                # so it is not a row whose state we can improve.
-                continue
-            if not isinstance(data, dict):
-                continue
-            found.append(
-                Representation(
-                    kind=kind,
-                    locator=f"{table}.{column}[{kind} {ordinal}]",
-                    table=table,
-                    column=column,
-                    key_column=key_column,
-                    key=str(key),
-                    fingerprint=_fingerprint(stored),
-                    data=data,
-                )
-            )
+            row = _representation(kind, table, column, key_column, key, stored, ordinal)
+            if row is not None:
+                found.append(row)
     return found, None
 
 
