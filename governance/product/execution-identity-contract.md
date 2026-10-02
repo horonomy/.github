@@ -329,6 +329,83 @@ later, never by backfilling a guess now. This is the same principle as
 [Backward compatibility](#backward-compatibility) applied to a product's
 *current* records rather than its historical ones.
 
+## Concrete examples
+
+### Claude Code, a subagent with proven lineage
+
+Claude Code exposes a stable provider session id to hooks, and a Task-tool
+subagent invocation is attributable to a parent. This is the `lineage_status:
+child` case:
+
+```json
+{
+  "envelope_version": 1,
+  "observed_at": "2026-10-02T12:00:00.000Z",
+  "host_id": "host-9f2a1b",
+  "tool_provider": "claude_code",
+  "provider_session_id": "claude-sess-7e21",
+  "agent_id": "claude-agent-task-3",
+  "lineage_status": "child",
+  "parent_agent_id": "claude-agent-root",
+  "turn_id": "turn-14",
+  "repo_id": "repo-libra-governor",
+  "worktree_id": "wt-horo-1598"
+}
+```
+
+### Codex, session identity only (no lineage support yet)
+
+A provider may expose a stable session identifier without exposing any
+agent/subagent distinction at all. This is **not** an error or a
+degradation — it is `lineage_status: unknown` with `agent_id` absent,
+exactly the state [Partial adoption](#partial-adoption-is-expected-not-a-defect)
+describes for a capturer that has not yet built lineage support, and it is
+also the correct value when the *provider itself* has no subagent concept to
+expose:
+
+```json
+{
+  "envelope_version": 1,
+  "observed_at": "2026-10-02T12:05:00.000Z",
+  "host_id": "host-9f2a1b",
+  "tool_provider": "codex",
+  "provider_session_id": "codex-sess-ab19",
+  "lineage_status": "unknown"
+}
+```
+
+Note what is absent: `agent_id`, `turn_id`, `parent_agent_id`,
+`tool_instance_id`. None of these are synthesized to "fill in the shape" —
+see [Implementing a capturer](#implementing-a-capturer), rule 2.
+
+### An unsupported field on read: forward compatibility in practice
+
+A future envelope version might add a field this version's reader has never
+heard of — for example a hypothetical `cost_center_id`. Per
+[Version evolution](#version-evolution), the reader ignores it rather than
+failing the whole envelope:
+
+```json
+{
+  "envelope_version": 1,
+  "observed_at": "2026-10-02T12:10:00.000Z",
+  "host_id": "host-9f2a1b",
+  "tool_provider": "claude_code",
+  "provider_session_id": "claude-sess-99aa",
+  "lineage_status": "root",
+  "cost_center_id": "eng-platform"
+}
+```
+
+`ExecutionIdentity.from_wire()` on this document returns a value with no
+`cost_center_id` attribute at all — the field is read by nothing in
+`known_fields` and is therefore never retained, not even opaquely. A future
+reader that does understand `cost_center_id` can be upgraded independently
+of every capturer already emitting it, which is the entire purpose of
+"ignored" rather than "refused" for an unrecognised *field* (as opposed to
+an unrecognised *enum value*, which is refused — see the version-evolution
+table above for why the two cases are handled differently).
+
 ## Implementing a capturer
 
 1. Read the provider's own documented session/agent/turn exposure surface
