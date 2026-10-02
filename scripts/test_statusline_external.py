@@ -260,8 +260,15 @@ class SeedTest(ExternalCase):
     def test_an_unsupported_store_refuses_rather_than_guessing(self) -> None:
         self.store.unlink()
         self.build_store(profile_columns="id TEXT, app_type TEXT")
+        # Detected, and planned, and only then refused. Resolving each step
+        # separately so the refusal cannot be coming from detection instead: a
+        # store this adapter has never seen is still that tool's store, and
+        # reporting it as absent would lose the one thing worth telling the user.
+        owner = self.owner()
+        self.assertFalse(owner.supported)
+        plan = external.plan_seed(owner, HORONOM_STATUS_LINE)
         with self.assertRaises(external.ExternalOwnerError):
-            external.apply_seed(external.plan_seed(self.owner(), HORONOM_STATUS_LINE))
+            external.apply_seed(plan)
 
 
 class UnseedTest(ExternalCase):
