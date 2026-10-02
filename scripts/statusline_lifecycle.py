@@ -2488,10 +2488,12 @@ def _external_lines(section: dict) -> list[str]:
         lines.append(f"  UNUSABLE: {section['problem']}")
     elif section["diverged"]:
         lines.append(f"  out of step: {', '.join(section['diverged'])}")
-    survives = section.get("survives_reapply")
+    # Three outcomes, not two: unknown is its own answer here, and reading it as
+    # "no" would tell a user their statusline is doomed when nobody has checked.
+    verdicts = {True: "yes", False: "NO", None: "not applicable"}
     lines.append(
         "  statusline survives its next write: "
-        + ("yes" if survives else "NO" if survives is False else "not applicable")
+        + verdicts[section.get("survives_reapply")]
     )
     return lines
 
