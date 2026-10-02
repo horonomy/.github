@@ -382,6 +382,18 @@ def plan_unseed(owner: ExternalOwner, upstream: dict | None) -> SeedPlan:
     or `None` if there was none and the key should go away entirely. This is the
     `A+B+C -> A+C` invariant applied to the external store: removal puts back what
     was recorded, and never a document remembered from elsewhere.
+
+    Every seeded row is handed the same value, including a row that had no
+    statusline at all before it was seeded. That is a deliberate, documented
+    inexactness, and the reasoning is worth stating because the alternatives are
+    both worse. Nothing in the store can distinguish "we replaced a value here"
+    from "we added the key here" after the fact, so exactness would need either a
+    per-row flag inside the marker -- which then rides into the live file on the
+    next profile switch and makes every comparison of ours special-case it -- or a
+    second receipt of our own with its own way to go stale. What this choice costs
+    is that a profile which showed no statusline before may show the user's own
+    statusline afterwards; what it never does is destroy or overwrite anything,
+    which is what the invariant is actually protecting.
     """
     targets = tuple(
         item
