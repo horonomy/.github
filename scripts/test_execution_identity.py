@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import datetime
+import json
 import unittest
 
 import execution_identity as ei
@@ -313,6 +314,71 @@ class ImmutabilityTest(unittest.TestCase):
     def test_deep_copy_remains_equal(self) -> None:
         identity = _make()
         self.assertEqual(identity, copy.deepcopy(identity))
+
+
+class ContractDocExamplesTest(unittest.TestCase):
+    """Parses the exact JSON literals published in
+    execution-identity-contract.md's "Concrete examples" section, so the
+    doc and the reference implementation cannot silently drift apart.
+    """
+
+    def test_claude_code_subagent_with_proven_lineage(self) -> None:
+        document = json.loads(
+            """
+            {
+              "envelope_version": 1,
+              "observed_at": "2026-10-02T12:00:00.000Z",
+              "host_id": "host-9f2a1b",
+              "tool_provider": "claude_code",
+              "provider_session_id": "claude-sess-7e21",
+              "agent_id": "claude-agent-task-3",
+              "lineage_status": "child",
+              "parent_agent_id": "claude-agent-root",
+              "turn_id": "turn-14",
+              "repo_id": "repo-libra-governor",
+              "worktree_id": "wt-horo-1598"
+            }
+            """
+        )
+        identity = ei.ExecutionIdentity.from_wire(document)
+        self.assertEqual(identity.lineage_status, ei.LineageStatus.CHILD)
+        self.assertEqual(identity.parent_agent_id, "claude-agent-root")
+
+    def test_codex_session_identity_only(self) -> None:
+        document = json.loads(
+            """
+            {
+              "envelope_version": 1,
+              "observed_at": "2026-10-02T12:05:00.000Z",
+              "host_id": "host-9f2a1b",
+              "tool_provider": "codex",
+              "provider_session_id": "codex-sess-ab19",
+              "lineage_status": "unknown"
+            }
+            """
+        )
+        identity = ei.ExecutionIdentity.from_wire(document)
+        self.assertEqual(identity.lineage_status, ei.LineageStatus.UNKNOWN)
+        self.assertIsNone(identity.agent_id)
+        self.assertIsNone(identity.turn_id)
+
+    def test_unsupported_future_field_is_ignored_on_read(self) -> None:
+        document = json.loads(
+            """
+            {
+              "envelope_version": 1,
+              "observed_at": "2026-10-02T12:10:00.000Z",
+              "host_id": "host-9f2a1b",
+              "tool_provider": "claude_code",
+              "provider_session_id": "claude-sess-99aa",
+              "lineage_status": "root",
+              "cost_center_id": "eng-platform"
+            }
+            """
+        )
+        identity = ei.ExecutionIdentity.from_wire(document)
+        self.assertFalse(hasattr(identity, "cost_center_id"))
+        self.assertEqual(identity.lineage_status, ei.LineageStatus.ROOT)
 
 
 if __name__ == "__main__":
