@@ -355,6 +355,8 @@ class ExternalGateCase(RenderingCase):
     def assert_store_carries_the_live_statusline(self) -> None:
         """Every stored copy says exactly what the live file says.
 
+        EXTERNAL_MANAGER_CANONICAL_SEED_IS_SINGLE_SOURCED.
+
         One assertion rather than a count, because the failure this catches is
         divergence: copies that all carry *a* statusline but not the same one mean
         switching profile silently changes which version of the product is in the
@@ -685,6 +687,9 @@ class CaseJManagerApplyAfterUninstallTest(ExternalGateCase):
 class WriteDisciplineTest(ExternalGateCase):
     def test_an_operation_writes_the_host_file_at_most_once(self) -> None:
         """No polling, no watcher, no re-asserting: one write per operation.
+
+        EXTERNAL_MANAGER_IS_DETECTED_NOT_FOUGHT, in the form the contract says
+        cannot be proven from an end state -- only by counting writes.
 
         The failure mode this forbids is the one that looks like a fix and is not
         -- two tools each restoring what the other just wrote. A fix that needed to
