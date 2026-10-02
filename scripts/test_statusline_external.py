@@ -74,37 +74,62 @@ def replay_over_live(path: pathlib.Path, snapshot: dict) -> None:
 
 switch_over_live = replay_over_live  # The provider-switch path is the same write.
 
+PROFILE_COLUMNS = "id TEXT, app_type TEXT, settings_config TEXT"
+
+
+def build_store(
+    store: pathlib.Path, *, profile_columns: str = PROFILE_COLUMNS, user_status_line: dict | None = None
+) -> None:
+    """A store shaped like the real one, at `store`.
+
+    Module-level rather than a method so the lifecycle suite can build the same
+    fixture: two suites asserting against two differently-shaped stores would make
+    their results incomparable, which is the thing to avoid when one suite tests
+    the adapter and the other tests the caller that drives it.
+    """
+    user = USER_STATUS_LINE if user_status_line is None else user_status_line
+    store.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(store)
+    with connection:
+        connection.execute(f"CREATE TABLE providers ({profile_columns})")
+        connection.execute("CREATE TABLE proxy_live_backup (app_type TEXT, original_config TEXT)")
+        if "settings_config" in profile_columns:
+            connection.executemany(
+                "INSERT INTO providers VALUES (?, ?, ?)",
+                [
+                    ("p1", "claude", json.dumps(rich_document(user))),
+                    ("p2", "claude", json.dumps(rich_document(None))),
+                    # A row for a different host application: never ours.
+                    ("p3", "codex", json.dumps(rich_document(user))),
+                ],
+            )
+        connection.execute(
+            "INSERT INTO proxy_live_backup VALUES (?, ?)",
+            ("claude", json.dumps(rich_document(user))),
+        )
+    connection.close()
+
+
+def stored_document(store: pathlib.Path, table: str, column: str, key_column: str, key: str) -> dict:
+    connection = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+    try:
+        row = connection.execute(
+            f"SELECT {column} FROM {table} WHERE {key_column} = ?", (key,)
+        ).fetchone()
+    finally:
+        connection.close()
+    return json.loads(row[0])
+
 
 class ExternalCase(unittest.TestCase):
     def setUp(self) -> None:
         self.root = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         self.store = self.root / ".cc-switch" / "cc-switch.db"
-        self.store.parent.mkdir(parents=True)
         self.build_store()
 
-    def build_store(self, *, profile_columns: str = "id TEXT, app_type TEXT, settings_config TEXT") -> None:
-        connection = sqlite3.connect(self.store)
-        with connection:
-            connection.execute(f"CREATE TABLE providers ({profile_columns})")
-            connection.execute(
-                "CREATE TABLE proxy_live_backup (app_type TEXT, original_config TEXT)"
-            )
-            if "settings_config" in profile_columns:
-                connection.executemany(
-                    "INSERT INTO providers VALUES (?, ?, ?)",
-                    [
-                        ("p1", "claude", json.dumps(rich_document(USER_STATUS_LINE))),
-                        ("p2", "claude", json.dumps(rich_document(None))),
-                        # A row for a different host application: never ours.
-                        ("p3", "codex", json.dumps(rich_document(USER_STATUS_LINE))),
-                    ],
-                )
-            connection.execute(
-                "INSERT INTO proxy_live_backup VALUES (?, ?)",
-                ("claude", json.dumps(rich_document(USER_STATUS_LINE))),
-            )
-        connection.close()
+    def build_store(self, *, profile_columns: str = PROFILE_COLUMNS) -> None:
+        build_store(self.store, profile_columns=profile_columns)
 
     def owner(self, live: dict | None = None) -> external.ExternalOwner:
         found = external.detect(live, home=self.root)
@@ -112,14 +137,7 @@ class ExternalCase(unittest.TestCase):
         return found
 
     def stored(self, table: str, column: str, key_column: str, key: str) -> dict:
-        connection = sqlite3.connect(f"file:{self.store}?mode=ro", uri=True)
-        try:
-            row = connection.execute(
-                f"SELECT {column} FROM {table} WHERE {key_column} = ?", (key,)
-            ).fetchone()
-        finally:
-            connection.close()
-        return json.loads(row[0])
+        return stored_document(self.store, table, column, key_column, key)
 
     def profile(self, key: str) -> dict:
         return self.stored("providers", "settings_config", "id", key)
