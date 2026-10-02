@@ -45,6 +45,12 @@ import sqlite3
 
 STATUS_LINE_KEY = "statusLine"
 
+# Mirrors `statusline_lifecycle.MARKER_KEY`. Duplicated rather than imported
+# because the lifecycle imports this module, and the only thing needed here is the
+# ability to recognise a statusline as this product's before handing it back --
+# unseeding a statusline that is not ours is precisely the clobber to avoid.
+MARKER_KEY = "_horonom"
+
 # The app whose write semantics are modelled here. Named explicitly rather than
 # detected generically because "a tool that replaces the whole document" is not
 # something that can be inferred from a config file -- it takes reading the
@@ -381,7 +387,7 @@ def plan_unseed(owner: ExternalOwner, upstream: dict | None) -> SeedPlan:
         item
         for item in owner.representations
         if isinstance(item.status_line, dict)
-        and item.status_line.get("_horonom") is not None
+        and item.status_line.get(MARKER_KEY) is not None
         and not _seeded(item, upstream)
     )
     return SeedPlan(
