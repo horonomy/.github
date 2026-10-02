@@ -59,6 +59,20 @@ stops declaring, or starts reporting a schedule for work it is not doing. These
 are proven against the real payload fixtures rather than hand-written stand-ins,
 because a mutation that only breaks an approximation of a product has only proven
 something about the approximation.
+
+Then the eight the external-config-manager gate is required to demonstrate
+(HORO-1660), where the defining feature is that *this* product behaves perfectly
+and another tool writes the same file. The store the other tool writes from is not
+seeded at all, so its next write drops us; its credentials are lost because the
+stored document was rebuilt from keys this version knows; rows belonging to a
+different host application are edited as if they were ours; a second statusline is
+computed for the store so the two copies diverge; only the representation that
+looks like a profile is seeded, so the write that actually fired still wins;
+removal hands back a statusline rebuilt from a recorded command instead of what is
+live; the live file is re-asserted after seeding, which is where an overwrite loop
+starts; and detection is used as a reason to install nothing. All eight read back
+clean, which is why each is proven against a gate that drives the other tool's own
+writes rather than against one that inspects configuration.
 """
 
 from __future__ import annotations
@@ -74,12 +88,14 @@ import unittest.mock
 
 import statusline_compositor as compositor
 import statusline_contract as contract
+import statusline_external as external
 import statusline_lifecycle as lifecycle
 import statusline_render as render
 import test_statusline_authority_gate as authority_gate
 import test_statusline_compositor as compositor_tests
 import test_statusline_contract as contract_tests
 import test_statusline_depth_gate as depth_gate
+import test_statusline_external_gate as external_gate
 import test_statusline_lifecycle as lifecycle_tests
 import test_statusline_performance as performance_tests
 import test_statusline_release_gate as gate
@@ -1170,6 +1186,163 @@ def a_product_that_reports_a_schedule_while_idle() -> object:
     return _replacing_the_payload_set(_edited_payloads("libra/idle", with_an_estimate))
 
 
+# --------------------------------------------------------------------------
+# Coexistence with another manager of the host settings file (HORO-1660). Eight
+# ways a fix for that defect could look right and be wrong, each written as the
+# version of it somebody would actually have shipped.
+# --------------------------------------------------------------------------
+
+
+def a_seed_the_other_tools_write_does_not_carry() -> object:
+    """The live file is written and the other tool's store is left alone.
+
+    This is the state the defect was found in, reinstated: everything about the
+    install looks correct, reads back correct, and renders correctly -- right up
+    until the other tool writes the file from a copy that never heard of us.
+    """
+
+    def mutated(owner, status_line):
+        return external.SeedPlan(
+            owner=owner, operation="seed", status_line=dict(status_line), targets=()
+        )
+
+    return unittest.mock.patch.object(external, "plan_seed", mutated)
+
+
+def rebuilding_the_managers_document_from_the_keys_we_know() -> object:
+    """The stored document rewritten from this version's schema, not patched.
+
+    The same mistake as `rebuilding_the_status_line_object`, one level out: a
+    stored settings document is a settings document, so build one. Its provider
+    credentials and base URL are not keys this code knows about, so they go.
+    """
+    known = ("statusLine", "model", "theme", "permissions", "hooks")
+
+    def mutated(data, status_line):
+        patched = dict(data)
+        if status_line is None:
+            patched.pop("statusLine", None)
+        else:
+            patched["statusLine"] = status_line
+        return {key: value for key, value in patched.items() if key in known}
+
+    return unittest.mock.patch.object(external, "_patched", mutated)
+
+
+def reading_the_managers_store_by_the_wrong_host_tool() -> object:
+    """Rows keyed to a different host application treated as ours.
+
+    Plausible from one wrong constant, and the failure is two-sided: our own
+    statusline is seeded nowhere, and another tool's configuration is edited by a
+    product that has no business in it.
+    """
+    return unittest.mock.patch.object(external, "_CLAUDE_APP_TYPE", "codex")
+
+
+def computing_a_second_statusline_for_the_store() -> object:
+    """The store seeded with a statusline built here instead of the one going live.
+
+    Tempting because the store needs *a* statusline and this module can build one.
+    What it produces is two sources of truth that agree today: the stored copies
+    have no ownership marker and none of the user's own fields, so the line the
+    user sees changes the first time the other tool writes the file.
+    """
+    real = external.plan_seed
+
+    def mutated(owner, status_line):
+        return real(owner, {"type": "command", "command": lifecycle.compositor_command()})
+
+    return unittest.mock.patch.object(external, "plan_seed", mutated)
+
+
+def seeding_the_profiles_but_not_the_pre_takeover_copy() -> object:
+    """Only the representation that is obviously a profile is seeded.
+
+    The most plausible partial fix there is -- a profile is what the tool's own
+    interface shows you, and the backup it keeps while proxying is not. That
+    backup is the one that actually fired, so this fix survives every deliberate
+    profile switch and loses the statusline at the next login.
+    """
+    profiles_only = external._CC_SWITCH_REPRESENTATIONS[:1]
+    return unittest.mock.patch.object(
+        external, "_CC_SWITCH_REPRESENTATIONS", profiles_only
+    )
+
+
+def handing_back_a_statusline_rebuilt_from_the_recorded_command() -> object:
+    """Removal puts back `{type, command}` built from what the registry recorded.
+
+    Plausible because the registry does record the upstream command, so rebuilding
+    an object from it looks equivalent to handing back what is live. It is not:
+    the user's padding, any edit they made after installing, and any field a newer
+    Claude Code added are not in that record, so the other tool's store ends up
+    holding a stale approximation of their statusline.
+    """
+    real = lifecycle.plan_remove
+
+    def mutated(document, registry, **kwargs):
+        plan = real(document, registry, **kwargs)
+        if plan.external is None or not plan.external.mutates:
+            return plan
+        recorded = lifecycle._upstream_of(registry)
+        rebuilt = None if recorded is None else {"type": "command", "command": recorded}
+        return dataclasses.replace(
+            plan, external=external.plan_unseed(plan.external.owner, rebuilt)
+        )
+
+    return unittest.mock.patch.object(lifecycle, "plan_remove", mutated)
+
+
+def re_asserting_the_live_file_after_seeding() -> object:
+    """The first move of a fight: write the file again, in case the other tool moved it.
+
+    Where an overwrite loop begins. It is never written as a loop -- it is written
+    as one extra defensive write, and then the other tool does the same, and the
+    user's statusline flickers between two versions forever.
+    """
+    real = lifecycle.apply
+
+    def mutated(plan):
+        result = real(plan)
+        if plan.settings_after is not None and plan.settings_path is not None:
+            lifecycle.atomic_write(
+                plan.settings_path,
+                lifecycle.serialize(plan.settings_after, indent=2),
+                mode=0o600,
+            )
+        return result
+
+    return unittest.mock.patch.object(lifecycle, "apply", mutated)
+
+
+def declining_to_install_because_another_tool_manages_the_file() -> object:
+    """Detection used as a reason to install nothing at all.
+
+    The safest-looking reading of "another tool owns this file", and the one that
+    silently takes a working feature away from the user. Detecting another owner
+    is a reason to reconcile with it, never a reason to do nothing and say so in a
+    log line nobody reads.
+    """
+    real = lifecycle.plan_enable
+
+    def mutated(document, registry, registration, **kwargs):
+        plan = real(document, registry, registration, **kwargs)
+        if plan.external is None:
+            return plan
+        return dataclasses.replace(
+            plan,
+            refusal=(
+                f"{plan.external.owner.name} manages this settings file; enable the "
+                "statusline from that tool instead"
+            ),
+            settings_after=None,
+            registry_after=None,
+            external=None,
+        )
+
+    return unittest.mock.patch.object(lifecycle, "plan_enable", mutated)
+
+
 class HarnessTest(MutationCase):
     """The harness is the thing everything below trusts, so it is checked too.
 
@@ -1820,6 +1993,101 @@ class ProductRegressionTest(MutationCase):
             "test_an_idle_libra_shows_no_schedule_expectation",
             a_product_that_reports_a_schedule_while_idle(),
             expect="P90",
+        )
+
+
+class ExternalCoexistenceTest(MutationCase):
+    """The eight ways the coexistence fix could look right and be wrong.
+
+    Every one of them passes the test that mattered before HORO-1660 -- install,
+    read back, render -- because none of them touch the live file's correctness.
+    They differ only in what happens when the *other* tool writes, which is why
+    the gate they are checked against drives that write for real.
+    """
+
+    def test_not_seeding_the_other_tools_store_is_caught(self) -> None:
+        self.assert_guard_catches(
+            external_gate.CaseGEnableAfterAProfileExistsTest,
+            "test_installing_into_a_file_another_tool_already_manages",
+            a_seed_the_other_tools_write_does_not_carry(),
+            expect="0 != 3",
+        )
+
+    def test_the_statusline_vanishing_at_the_next_switch_is_caught(self) -> None:
+        self.assert_guard_catches(
+            external_gate.CaseBProfileSwitchTest,
+            "test_switching_between_profiles_never_changes_which_statusline_runs",
+            a_seed_the_other_tools_write_does_not_carry(),
+            expect="<Ownership.USER_OWNED: 'user_owned'> is not",
+        )
+
+    def test_losing_a_credential_field_out_of_the_store_is_caught(self) -> None:
+        self.assert_guard_catches(
+            external_gate.CaseAReapplyUnrelatedProviderConfigTest,
+            "test_the_manager_reapplying_its_own_configuration_keeps_the_statusline",
+            rebuilding_the_managers_document_from_the_keys_we_know(),
+            expect="ANTHROPIC_BASE_URL",
+        )
+
+    def test_editing_another_host_tools_rows_is_caught(self) -> None:
+        self.assert_guard_catches(
+            external_gate.CaseAReapplyUnrelatedProviderConfigTest,
+            "test_the_manager_reapplying_its_own_configuration_keeps_the_statusline",
+            reading_the_managers_store_by_the_wrong_host_tool(),
+            expect=lifecycle.MARKER_KEY,
+        )
+
+    def test_a_second_statusline_diverging_in_the_store_is_caught(self) -> None:
+        self.assert_guard_catches(
+            external_gate.CaseBProfileSwitchTest,
+            "test_switching_between_profiles_never_changes_which_statusline_runs",
+            computing_a_second_statusline_for_the_store(),
+            expect="<Ownership.ADOPTABLE: 'horonom_command_unmarked'> is not",
+        )
+
+    def test_a_partial_seed_that_loses_the_statusline_at_login_is_caught(self) -> None:
+        self.assert_guard_catches(
+            external_gate.CaseFReloadAfterRebootTest,
+            "test_the_restart_that_replayed_a_week_old_copy_now_replays_ours",
+            seeding_the_profiles_but_not_the_pre_takeover_copy(),
+            expect="<Ownership.USER_OWNED: 'user_owned'> is not",
+        )
+
+    def test_a_partial_seed_survives_every_switch_the_user_performs_on_purpose(self) -> None:
+        self.assert_guard_misses(
+            external_gate.CaseAReapplyUnrelatedProviderConfigTest,
+            "test_the_manager_reapplying_its_own_configuration_keeps_the_statusline",
+            seeding_the_profiles_but_not_the_pre_takeover_copy(),
+            because=(
+                "seeding the profiles is enough for every write the user asks the "
+                "other tool for, and the point of the reboot case is that the write "
+                "which actually fired is not one of those. A suite that only drove "
+                "visible operations would have shipped this fix believing it worked."
+            ),
+        )
+
+    def test_handing_back_a_rebuilt_statusline_is_caught(self) -> None:
+        self.assert_guard_catches(
+            lifecycle_tests.ExternalOwnerRemovalTest,
+            "test_what_is_handed_back_is_the_live_value_and_never_a_stored_one",
+            handing_back_a_statusline_rebuilt_from_the_recorded_command(),
+            expect="refreshInterval",
+        )
+
+    def test_the_first_move_of_an_overwrite_loop_is_caught(self) -> None:
+        self.assert_guard_catches(
+            external_gate.WriteDisciplineTest,
+            "test_an_operation_writes_the_host_file_at_most_once",
+            re_asserting_the_live_file_after_seeding(),
+            expect="2 != 1",
+        )
+
+    def test_silently_installing_nothing_instead_of_reconciling_is_caught(self) -> None:
+        self.assert_guard_catches(
+            external_gate.CaseGEnableAfterAProfileExistsTest,
+            "test_installing_into_a_file_another_tool_already_manages",
+            declining_to_install_because_another_tool_manages_the_file(),
+            expect="manages this settings file",
         )
 
 

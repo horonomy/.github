@@ -24,6 +24,7 @@ import os
 import pathlib
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -31,8 +32,10 @@ import unittest.mock
 
 import statusline_compositor as compositor
 import statusline_contract as contract
+import statusline_external as external
 import statusline_lifecycle as lifecycle
 import statusline_render as render
+import test_statusline_external as external_fixture
 
 
 def rich_settings() -> dict:
@@ -3093,6 +3096,404 @@ class CommandLineTest(LifecycleCase):
 
         self.assertEqual(code, lifecycle.EXIT_OK)
         self.assertIn(lifecycle.Ownership.UNSUPPORTED_SHAPE.value, output)
+
+
+class ExternalOwnerCase(LifecycleCase):
+    """A settings file that something other than this product also writes (HORO-1660).
+
+    The store is built with the *same* statusline the live file carries, because
+    that is how the real one came to be: the external manager captured the live
+    document, so its stored copy is the user's own script. A fixture whose stored
+    copy differed from live would let an assertion about handing the slot back pass
+    for the wrong reason.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.store = self.root / ".cc-switch" / "cc-switch.db"
+        external_fixture.build_store(
+            self.store, user_status_line=self.original[lifecycle.STATUS_LINE_KEY]
+        )
+
+    def owner(self) -> external.ExternalOwner:
+        found = external.detect(self._read(), home=self.root)
+        assert found is not None
+        return found
+
+    def unsupported_owner(self) -> external.ExternalOwner:
+        self.store.unlink()
+        external_fixture.build_store(self.store, profile_columns="id TEXT, app_type TEXT")
+        found = external.detect(self._read(), home=self.root)
+        assert found is not None
+        return found
+
+    def profile(self, key: str) -> dict:
+        return external_fixture.stored_document(
+            self.store, "providers", "settings_config", "id", key
+        )
+
+    def snapshot(self) -> dict:
+        return external_fixture.stored_document(
+            self.store, "proxy_live_backup", "original_config", "app_type", "claude"
+        )
+
+    def claude_rows(self) -> list[dict]:
+        return [self.profile("p1"), self.profile("p2"), self.snapshot()]
+
+    def uninstall(self, **kwargs) -> lifecycle.ApplyResult:
+        document, registry = self.documents()
+        return lifecycle.apply(
+            lifecycle.plan_remove(
+                document,
+                registry,
+                providers=lifecycle._provider_ids(registry),
+                operation="uninstall",
+                **kwargs,
+            )
+        )
+
+
+class ExternalOwnerEnableTest(ExternalOwnerCase):
+    def test_enabling_seeds_the_manager_with_exactly_what_went_live(self) -> None:
+        result = self.enable("fornax", owner=self.owner())
+
+        self.assertTrue(result.verified)
+        self.assertTrue(result.durable)
+        self.assertEqual(len(result.external_written), 3)
+        live = self._read()[lifecycle.STATUS_LINE_KEY]
+        for index, row in enumerate(self.claude_rows()):
+            with self.subTest(row=index):
+                # One source of truth: the stored copies are the live object, not a
+                # second one computed for the store.
+                self.assertEqual(row[lifecycle.STATUS_LINE_KEY], live)
+
+    def test_the_managers_own_replay_then_leaves_the_statusline_in_place(self) -> None:
+        """EXTERNAL_MANAGER_REAPPLY_PRESERVES_PRODUCT_INTEGRATION, end to end."""
+        self.enable("fornax", owner=self.owner())
+        installed = self._read()[lifecycle.STATUS_LINE_KEY]
+
+        external_fixture.replay_over_live(self.settings, self.snapshot())
+
+        self.assertEqual(self._read()[lifecycle.STATUS_LINE_KEY], installed)
+        self.assertIs(
+            lifecycle.classify(lifecycle.read_settings(self.settings)),
+            lifecycle.Ownership.HORONOM_OWNED,
+        )
+
+    def test_without_the_seed_the_same_replay_removes_it(self) -> None:
+        """The control. Without it the test above cannot distinguish a fix from a no-op."""
+        self.enable("fornax")
+
+        external_fixture.replay_over_live(self.settings, self.snapshot())
+
+        self.assertIs(
+            lifecycle.classify(lifecycle.read_settings(self.settings)),
+            lifecycle.Ownership.USER_OWNED,
+        )
+
+    def test_an_operation_handed_no_owner_never_reaches_the_store(self) -> None:
+        """EXTERNAL_MANAGER_IS_DETECTED_NOT_FOUGHT: the caller decides, not the planner."""
+        before = self.claude_rows()
+        result = self.enable("fornax")
+
+        self.assertIsNone(result.plan.external)
+        self.assertEqual(result.external_written, ())
+        self.assertEqual(self.claude_rows(), before)
+
+    def test_the_seed_changes_nothing_else_in_the_managers_store(self) -> None:
+        before = {"p1": self.profile("p1"), "p2": self.profile("p2"), "p3": self.profile("p3")}
+        before["snapshot"] = self.snapshot()
+
+        self.enable("fornax", owner=self.owner())
+
+        after = {"p1": self.profile("p1"), "p2": self.profile("p2"), "p3": self.profile("p3")}
+        after["snapshot"] = self.snapshot()
+        for key, document in after.items():
+            with self.subTest(row=key):
+                # Provider, model, credential-bearing env and a key this code has
+                # never heard of: all of it passes through untouched.
+                self.assertEqual(
+                    {k: v for k, v in document.items() if k != lifecycle.STATUS_LINE_KEY},
+                    {k: v for k, v in before[key].items() if k != lifecycle.STATUS_LINE_KEY},
+                )
+        # A row belonging to a different host application is not ours at all.
+        self.assertEqual(after["p3"], before["p3"])
+
+    def test_the_plan_discloses_the_second_blast_radius_before_anything_is_written(self) -> None:
+        plan = self.plan_enable("fornax", owner=self.owner())
+
+        self.assertIsNotNone(plan.to_json()["external_owner"])
+        locators = {item.locator for item in plan.external.targets}
+        self.assertEqual(len(locators), 3)
+        disclosed = {
+            change.target
+            for change in plan.changes
+            if change.kind is lifecycle.ChangeKind.UPDATE and change.target in locators
+        }
+        # Every row the plan would write is named in the plan, not just counted.
+        self.assertEqual(disclosed, locators)
+        self.assertTrue(
+            any(
+                change.kind is lifecycle.ChangeKind.PRESERVED_OTHER_PRODUCT
+                and "left as found" in change.detail
+                for change in plan.changes
+            )
+        )
+
+    def test_a_plan_still_names_no_value_from_the_managers_store(self) -> None:
+        rendered = json.dumps(self.plan_enable("fornax", owner=self.owner()).to_json())
+        for stored_value in ("gateway.example.invalid", "claude-opus-4", "600000"):
+            with self.subTest(value=stored_value):
+                self.assertNotIn(stored_value, rendered)
+
+    def test_seeding_again_writes_nothing_and_re_seeding_repairs_drift(self) -> None:
+        self.enable("fornax", owner=self.owner())
+        second = self.enable("fornax", owner=self.owner())
+        self.assertEqual(second.external_written, ())
+
+        # The manager adds a profile that never carried our key -- the state a user
+        # lands in after creating a provider post-install.
+        connection = sqlite3.connect(self.store)
+        with connection:
+            connection.execute(
+                "INSERT INTO providers VALUES (?, ?, ?)",
+                ("p4", "claude", json.dumps(external_fixture.rich_document(None))),
+            )
+        connection.close()
+
+        plan = self.plan_enable("fornax", owner=self.owner())
+        self.assertTrue(plan.mutates)
+        repair = lifecycle.apply(plan)
+        self.assertEqual(len(repair.external_written), 1)
+        self.assertEqual(
+            self.profile("p4")[lifecycle.STATUS_LINE_KEY],
+            self._read()[lifecycle.STATUS_LINE_KEY],
+        )
+
+
+class ExternalOwnerFailureTest(ExternalOwnerCase):
+    def test_a_store_this_version_does_not_understand_is_a_note_not_a_refusal(self) -> None:
+        plan = self.plan_enable("fornax", owner=self.unsupported_owner())
+
+        self.assertIsNone(plan.refusal)
+        self.assertIsNone(plan.external)
+        self.assertTrue(any("may not survive" in note for note in plan.notes))
+
+        result = lifecycle.apply(plan)
+        self.assertTrue(result.verified)
+        self.assertIs(
+            lifecycle.classify(lifecycle.read_settings(self.settings)),
+            lifecycle.Ownership.HORONOM_OWNED,
+        )
+
+    def test_a_failed_seed_is_reported_and_leaves_the_statusline_installed(self) -> None:
+        """The distinction the two flags exist for: installed, and not durable."""
+        plan = self.plan_enable("fornax", owner=self.owner())
+        # The manager writes one of its own rows between plan and apply.
+        connection = sqlite3.connect(self.store)
+        with connection:
+            connection.execute(
+                "UPDATE providers SET settings_config = ? WHERE id = ?",
+                (json.dumps(external_fixture.rich_document(None)), "p1"),
+            )
+        connection.close()
+
+        result = lifecycle.apply(plan)
+
+        self.assertTrue(result.verified)
+        self.assertFalse(result.durable)
+        self.assertIn("changed after this plan was formed", result.external_problem)
+        self.assertFalse(result.to_json()["survives_external_reapply"])
+        # The operation the user asked for happened; only its durability did not.
+        self.assertIs(
+            lifecycle.classify(lifecycle.read_settings(self.settings)),
+            lifecycle.Ownership.HORONOM_OWNED,
+        )
+
+    def test_the_warning_names_the_other_tool_and_says_the_statusline_works(self) -> None:
+        plan = self.plan_enable("fornax", owner=self.owner())
+        connection = sqlite3.connect(self.store)
+        with connection:
+            connection.execute("DELETE FROM providers WHERE id = ?", ("p1",))
+        connection.close()
+
+        described = lifecycle._describe(plan, lifecycle.apply(plan))
+
+        self.assertIn("survives external reapply: NO", described)
+        self.assertIn("cc-switch", described)
+        self.assertIn("installed and working", described)
+
+
+class ExternalOwnerRemovalTest(ExternalOwnerCase):
+    def test_uninstalling_hands_the_slot_back_in_the_managers_store_too(self) -> None:
+        """PRODUCT_RESTORE_PRESERVES_EXTERNAL_MANAGER_STATE."""
+        self.enable("fornax", owner=self.owner())
+        result = self.uninstall(owner=self.owner())
+
+        self.assertEqual(self._read(), self.original)
+        restored = self.original[lifecycle.STATUS_LINE_KEY]
+        for index, row in enumerate(self.claude_rows()):
+            with self.subTest(row=index):
+                # Not a per-row copy remembered from before the seed: the one
+                # statusline the live file is getting now. See `plan_unseed`.
+                self.assertEqual(row[lifecycle.STATUS_LINE_KEY], restored)
+        self.assertEqual(len(result.external_written), 3)
+
+    def test_what_is_handed_back_is_the_live_value_and_never_a_stored_one(self) -> None:
+        """STALE_EXTERNAL_SNAPSHOT_CANNOT_RESURRECT_OLD_CONFIG."""
+        self.enable("fornax", owner=self.owner())
+        # The user edits the live statusline after installing. Every stored copy in
+        # the manager still holds the value from before that edit, so a removal that
+        # put a stored copy back would be detectable here and nowhere else.
+        edited = self._read()
+        edited[lifecycle.STATUS_LINE_KEY]["refreshInterval"] = 11
+        self.write(edited)
+
+        self.uninstall(owner=self.owner())
+
+        restored = self._read()[lifecycle.STATUS_LINE_KEY]
+        self.assertEqual(restored["refreshInterval"], 11)
+        for index, row in enumerate(self.claude_rows()):
+            with self.subTest(row=index):
+                self.assertEqual(row[lifecycle.STATUS_LINE_KEY], restored)
+
+    def test_removal_leaves_everything_in_the_store_that_is_not_the_statusline(self) -> None:
+        self.enable("fornax", owner=self.owner())
+        before = {"p1": self.profile("p1"), "p3": self.profile("p3")}
+
+        self.uninstall(owner=self.owner())
+
+        self.assertEqual(self.profile("p3"), before["p3"])
+        self.assertEqual(
+            {k: v for k, v in self.profile("p1").items() if k != lifecycle.STATUS_LINE_KEY},
+            {k: v for k, v in before["p1"].items() if k != lifecycle.STATUS_LINE_KEY},
+        )
+
+    def test_a_second_release_has_nothing_left_to_hand_back(self) -> None:
+        """A+B+C -> A+C: once the slot is the user's again, no row is a target."""
+        self.enable("fornax", owner=self.owner())
+        self.uninstall(owner=self.owner())
+        before = self.claude_rows()
+
+        plan = external.plan_unseed(self.owner(), self.original[lifecycle.STATUS_LINE_KEY])
+
+        self.assertEqual(plan.targets, ())
+        self.assertEqual(self.claude_rows(), before)
+
+    def test_disabling_one_of_several_providers_does_not_unseed(self) -> None:
+        # The statusline stays on the line, so the store must keep carrying it.
+        self.enable("fornax", owner=self.owner())
+        self.enable("circinus", owner=self.owner())
+
+        document, registry = self.documents()
+        plan = lifecycle.plan_remove(
+            document, registry, providers=("circinus",), operation="disable", owner=self.owner()
+        )
+        result = lifecycle.apply(plan)
+
+        self.assertIsNone(plan.external)
+        self.assertEqual(result.external_written, ())
+        live = self._read()[lifecycle.STATUS_LINE_KEY]
+        self.assertEqual(self.snapshot()[lifecycle.STATUS_LINE_KEY], live)
+
+    def test_a_failed_unseed_still_uninstalls_and_is_reported(self) -> None:
+        self.enable("fornax", owner=self.owner())
+        document, registry = self.documents()
+        plan = lifecycle.plan_remove(
+            document,
+            registry,
+            providers=lifecycle._provider_ids(registry),
+            operation="uninstall",
+            owner=self.owner(),
+        )
+        # The manager removes one of its own rows between plan and apply.
+        connection = sqlite3.connect(self.store)
+        with connection:
+            connection.execute("DELETE FROM providers WHERE id = ?", ("p1",))
+        connection.close()
+
+        result = lifecycle.apply(plan)
+
+        # The removal the user asked for is complete; what failed is the hand-back
+        # in the other tool's store, which is reported rather than raised.
+        self.assertEqual(self._read(), self.original)
+        self.assertTrue(result.verified)
+        self.assertFalse(result.durable)
+        self.assertIn("no longer present", result.external_problem)
+
+
+class ExternalOwnerDoctorTest(ExternalOwnerCase):
+    def test_a_report_says_whether_the_statusline_survives_the_next_write(self) -> None:
+        self.enable("fornax", owner=self.owner())
+        section = lifecycle.doctor(self.settings, self.home, owner=self.owner())["external_owner"]
+
+        self.assertTrue(section["detected"])
+        self.assertEqual(section["name"], "cc-switch")
+        self.assertEqual((section["stored_documents"], section["seeded"]), (3, 3))
+        self.assertTrue(section["survives_reapply"])
+        self.assertEqual(section["diverged"], [])
+
+    def test_a_report_with_no_owner_says_so_rather_than_staying_silent(self) -> None:
+        report = lifecycle.doctor(self.settings, self.home)
+        self.assertEqual(report["external_owner"], {"detected": False})
+        self.assertIn(
+            "other managers of this settings file: none detected",
+            lifecycle._describe_doctor(report),
+        )
+
+    def test_a_copy_that_has_drifted_is_reported_with_what_to_do(self) -> None:
+        self.enable("fornax", owner=self.owner())
+        connection = sqlite3.connect(self.store)
+        with connection:
+            stale = dict(self._read()[lifecycle.STATUS_LINE_KEY], command="/old/compositor.py")
+            connection.execute(
+                "UPDATE providers SET settings_config = ? WHERE id = ?",
+                (json.dumps(external_fixture.rich_document(stale)), "p1"),
+            )
+        connection.close()
+
+        report = lifecycle.doctor(self.settings, self.home, owner=self.owner())
+        section = report["external_owner"]
+
+        self.assertEqual(len(section["diverged"]), 1)
+        self.assertFalse(section["survives_reapply"])
+        self.assertTrue(any("back into step" in line for line in report["remediation"]))
+
+    def test_a_seed_left_behind_after_removal_is_reported_as_one(self) -> None:
+        # What a user would be left with if `uninstall` ran while the manager's
+        # store was unreachable: the other tool would put the compositor back.
+        self.enable("fornax", owner=self.owner())
+        self.uninstall()
+
+        section = lifecycle.doctor(self.settings, self.home, owner=self.owner())["external_owner"]
+
+        self.assertEqual(section["seeded"], 3)
+        self.assertTrue(section["stale_seed"])
+        self.assertIsNone(section["survives_reapply"])
+
+    def test_a_report_reproduces_no_value_from_the_managers_store(self) -> None:
+        self.enable("fornax", owner=self.owner())
+        report = lifecycle.doctor(self.settings, self.home, owner=self.owner())
+        rendered = json.dumps(report) + lifecycle._describe_doctor(report)
+        for stored_value in ("gateway.example.invalid", "claude-opus-4", "600000"):
+            with self.subTest(value=stored_value):
+                self.assertNotIn(stored_value, rendered)
+
+
+class ExternalOwnerDetectionTest(ExternalOwnerCase):
+    def test_only_the_user_scope_file_is_claimed_to_be_managed(self) -> None:
+        # A project-scope settings file is not what the external manager reapplies,
+        # so claiming its store governs one would be a claim this cannot support.
+        project = self.root / "repo" / ".claude" / "settings.json"
+        project.parent.mkdir(parents=True)
+        project.write_bytes(lifecycle.serialize(rich_settings(), indent=2))
+        self.assertIsNone(lifecycle._detect_external(project))
+
+    def test_detection_failure_is_not_an_operation_failure(self) -> None:
+        with unittest.mock.patch.object(
+            external, "detect", side_effect=OSError(13, "Permission denied")
+        ):
+            self.assertIsNone(lifecycle._detect_external(self.settings))
 
 
 if __name__ == "__main__":

@@ -57,6 +57,7 @@ import sys
 
 import statusline_compositor as compositor
 import statusline_contract as contract
+import statusline_external as external
 import statusline_render as render
 
 # The key Claude Code reads, and the only key in the settings file this module
@@ -454,6 +455,7 @@ class Plan:
     notes: tuple[str, ...] = ()
     refusal: str | None = None
     remediation: tuple[str, ...] = ()
+    external: external.SeedPlan | None = None
 
     def __post_init__(self) -> None:
         """Enforce the all-or-nothing rule the three settings fields share.
@@ -487,10 +489,15 @@ class Plan:
 
     @property
     def mutates(self) -> bool:
+        # The external store counts, so that an install whose settings and registry
+        # are already correct still repairs a seed that has fallen out of step --
+        # which is the whole state a user lands in after the external manager has
+        # added a profile that never carried our key.
         return self.refusal is None and (
             self.settings_after is not None
             or self.registry_after is not None
             or bool(self.state_to_remove)
+            or (self.external is not None and self.external.mutates)
         )
 
     def to_json(self) -> dict:
@@ -510,6 +517,11 @@ class Plan:
             "requires_os_authorization": False,
             "changes": [change.to_json() for change in self.changes],
             "horonom_state_removed": [str(path) for path in self.state_to_remove],
+            # Disclosed as its own section rather than folded into `changes`,
+            # because it is the one part of a plan that writes outside the two
+            # files named above -- a reader deciding whether to approve this needs
+            # the second blast radius to be visible, not inferable.
+            "external_owner": None if self.external is None else self.external.to_json(),
             "notes": list(self.notes),
             "refusal": self.refusal,
             "remediation": list(self.remediation),
@@ -903,18 +915,84 @@ def _taking_the_slot(
     return dict(before), upstream, created, changes
 
 
+def _external_plan(
+    owner: external.ExternalOwner | None,
+    status_line: dict | None,
+    *,
+    releasing: bool,
+) -> tuple[external.SeedPlan | None, list[Change], list[str]]:
+    """What an external manager of the settings file costs this operation.
+
+    An unsupported store is a note, never a refusal. The statusline this operation
+    installs will work the moment it is written; what is at risk is only whether it
+    survives the other tool's next write, and refusing to install a working
+    statusline because a third party's database has an unfamiliar schema would
+    trade a certain loss for an uncertain one. Saying so is the honest answer --
+    and silently installing nothing, or silently disabling ourselves because
+    another manager exists, are the two failures this shape rules out.
+    """
+    if owner is None:
+        return None, [], []
+
+    where = f"{owner.name}{'' if owner.version is None else ' ' + owner.version}"
+    if not owner.supported:
+        return None, [], [
+            f"{where} also manages this settings file, and its store could not be used "
+            f"({owner.problem}); the statusline will work now but may not survive the "
+            "next time that tool reapplies a profile"
+        ]
+
+    plan = (
+        external.plan_unseed(owner, status_line)
+        if releasing
+        else external.plan_seed(owner, status_line)
+    )
+    if not plan.mutates:
+        return plan, [], []
+
+    changes = [
+        Change(
+            ChangeKind.REMOVE if releasing else ChangeKind.UPDATE,
+            target.locator,
+            (
+                f"{STATUS_LINE_KEY} handed back inside {where}'s own stored copy"
+                if releasing
+                else f"{STATUS_LINE_KEY} seeded into {where}'s own stored copy, so that "
+                "its next write to the settings file carries it"
+            ),
+        )
+        for target in plan.targets
+    ]
+    changes.append(
+        Change(
+            ChangeKind.PRESERVED_OTHER_PRODUCT,
+            f"{owner.name} store",
+            f"{len(plan.targets)} stored document(s) patched at {STATUS_LINE_KEY} only; "
+            "every provider, model and credential field in them is left as found",
+        )
+    )
+    return plan, changes, []
+
+
 def plan_enable(
     document: SettingsDocument,
     registry: RegistryDocument,
     registration: ProviderRegistration,
     *,
     adopt: bool = False,
+    owner: external.ExternalOwner | None = None,
 ) -> Plan:
     """What enabling this provider would change, without changing anything.
 
     The returned plan is the only thing `apply` will act on, and it carries the
     fingerprint of the settings file it was formed against so that applying a
     plan to state that has since moved on is a refusal rather than a clobber.
+
+    `owner` is an external manager of the same settings file, supplied by the
+    caller rather than discovered here. That direction is deliberate: a function
+    that may write into another tool's database must not be the thing that decides
+    there is one, so nothing reaches that store unless the entry point went looking
+    for it first.
     """
     ownership = classify(document)
     refusal, remediation = _enable_refusal(ownership, registry, adopt)
@@ -957,6 +1035,12 @@ def plan_enable(
     )
     changes.extend(_preservation_changes(document, others))
 
+    # Seeded with the same object that is about to be written to the live file, not
+    # a second one computed here: several copies of a statusline that disagree is
+    # the drift this is supposed to prevent, so they come from one place.
+    seed, seed_changes, notes = _external_plan(owner, status_line, releasing=False)
+    changes.extend(seed_changes)
+
     return Plan(
         operation="enable",
         settings_path=document.path,
@@ -967,6 +1051,8 @@ def plan_enable(
         registry_fingerprint=registry.fingerprint,
         settings_after=None if settings_after == document.data else settings_after,
         registry_after=None if registry_after == registry.data else registry_after,
+        notes=tuple(notes),
+        external=seed,
     )
 
 
@@ -1242,6 +1328,19 @@ class ApplyResult:
     settings_written: bool
     registry_written: bool
     verified: bool
+    external_written: tuple[str, ...] = ()
+    external_problem: str | None = None
+
+    @property
+    def durable(self) -> bool:
+        """Whether this will still be true after the external manager writes next.
+
+        A separate question from `verified`, and the reason both are reported: the
+        settings file can be exactly right and read back correct while another tool
+        is one profile switch away from undoing it. Collapsing the two would make a
+        statusline that is about to disappear indistinguishable from one that is not.
+        """
+        return self.external_problem is None
 
     def to_json(self) -> dict:
         return {
@@ -1249,6 +1348,9 @@ class ApplyResult:
             "settings_written": self.settings_written,
             "registry_written": self.registry_written,
             "read_back_verified": self.verified,
+            "external_owner_rows_written": list(self.external_written),
+            "survives_external_reapply": self.durable,
+            "external_owner_problem": self.external_problem,
             "changes": [change.to_json() for change in self.plan.changes],
         }
 
@@ -1318,6 +1420,28 @@ def _reread_or_refuse(plan: Plan) -> SettingsDocument | None:
     return current
 
 
+def _apply_external(plan: Plan, *, when: str) -> tuple[tuple[str, ...], str | None]:
+    """Seed or unseed the external manager's store, reporting failure rather than raising.
+
+    The one place in this module where a failed write does not abort the
+    operation. The reason is that the operation the user asked for has either
+    already succeeded or is about to, and the thing that failed is a durability
+    measure against a third party's future behaviour. Raising here would turn
+    "your statusline works but another tool may remove it" into "your statusline
+    could not be installed", which is both less true and less useful.
+
+    Nothing is swallowed: the problem comes back as text and `ApplyResult.durable`
+    goes false, which is what the caller prints.
+    """
+    if plan.external is None or plan.external.operation != when:
+        return (), None
+    try:
+        _, written = external.apply_seed(plan.external)
+    except external.ExternalOwnerError as exc:
+        return (), str(exc)
+    return written, None
+
+
 def apply(plan: Plan) -> ApplyResult:
     """Carry out a plan, or refuse to.
 
@@ -1331,6 +1455,13 @@ def apply(plan: Plan) -> ApplyResult:
     Giving the slot back writes the settings first, so a crash leaves the
     original command restored and merely a stale registry behind it. In both
     directions the file that could strand the user is written last.
+
+    An external manager's store takes its place in that same ordering, from the
+    same rule. Taking the slot seeds it last: a seed that fails leaves a
+    statusline that works and may not survive, which is reportable. Giving the
+    slot back unseeds it first: an unseed that fails after the files were written
+    would leave the other tool able to reinstall a statusline the user has just
+    uninstalled, which is not.
     """
     if plan.refusal is not None:
         raise OwnershipError(plan.refusal)
@@ -1338,6 +1469,8 @@ def apply(plan: Plan) -> ApplyResult:
         return ApplyResult(plan=plan, settings_written=False, registry_written=False, verified=True)
 
     current = _reread_or_refuse(plan)
+
+    unseeded, unseed_problem = _apply_external(plan, when="unseed")
 
     settings_write = None
     if plan.settings_after is not None:
@@ -1367,11 +1500,14 @@ def apply(plan: Plan) -> ApplyResult:
             path.unlink()
 
     _verify(plan)
+    seeded, seed_problem = _apply_external(plan, when="seed")
     return ApplyResult(
         plan=plan,
         settings_written=settings_write is not None,
         registry_written=registry_write is not None,
         verified=True,
+        external_written=unseeded + seeded,
+        external_problem=unseed_problem or seed_problem,
     )
 
 
@@ -1542,12 +1678,15 @@ def plan_remove(
     *,
     providers: tuple[str, ...],
     operation: str = "disable",
+    owner: external.ExternalOwner | None = None,
 ) -> Plan:
     """What removing these providers would change, without changing anything.
 
     The slot is given back only when the last provider goes, which is what makes
     disabling one product a registry-only operation that cannot disturb the
-    others or the user's own statusline.
+    others or the user's own statusline. The seed in an external manager's store
+    follows the slot for the same reason: while any provider is still registered
+    the statusline stays, so the seed that keeps it surviving must stay with it.
     """
     ownership = classify(document)
     refusal, remediation = _remove_refusal(ownership, registry)
@@ -1580,6 +1719,7 @@ def plan_remove(
 
     settings_after: dict | None = None
     state_to_remove: tuple[pathlib.Path, ...] = ()
+    unseed: external.SeedPlan | None = None
     if remaining:
         entries = [
             entry
@@ -1600,6 +1740,19 @@ def plan_remove(
         )
         changes.extend(last_changes)
         notes.extend(last_notes)
+        # Every seeded row gets the one statusline the live file is getting, not
+        # whatever that row held before it was seeded. Those per-row values are
+        # stale copies of a single thing -- the external manager captured the live
+        # document at different moments -- and putting one of them back is the
+        # stale-snapshot restore this lifecycle refuses to do. The freshest truth
+        # about the user's own statusline is the one being written to live now.
+        unseed, unseed_changes, unseed_notes = _external_plan(
+            owner,
+            None if settings_after is None else settings_after.get(STATUS_LINE_KEY),
+            releasing=True,
+        )
+        changes.extend(unseed_changes)
+        notes.extend(unseed_notes)
 
     return Plan(
         operation=operation,
@@ -1613,6 +1766,7 @@ def plan_remove(
         registry_after=None if registry_after == registry.data else registry_after,
         state_to_remove=state_to_remove,
         notes=tuple(notes),
+        external=unseed,
     )
 
 
@@ -1689,11 +1843,55 @@ def _doctor_providers(registry: RegistryDocument, home: pathlib.Path | None, pro
     return reports
 
 
+def _seeded_count(owner: external.ExternalOwner) -> int:
+    """How many of the manager's stored documents currently carry our marker."""
+    return sum(
+        1
+        for item in owner.representations
+        if isinstance(item.status_line, dict) and item.status_line.get(MARKER_KEY) is not None
+    )
+
+
+def _doctor_external(owner: external.ExternalOwner | None, status_line: object) -> dict:
+    """Whether anything else manages this settings file, and whether we survive it.
+
+    `status_line` is the live object when it is ours and `None` otherwise, which is
+    what makes the two interesting answers distinguishable: a store that does not
+    carry our statusline while we own the slot means the next profile switch
+    removes it, and a store that still carries it while we do not own the slot
+    means the next profile switch puts it back after an uninstall. Both are
+    reported; neither is inferable from a single count.
+    """
+    if owner is None:
+        return {"detected": False}
+    owned = isinstance(status_line, dict)
+    diverged = (
+        list(external.divergence(owner, status_line)) if owned and owner.supported else []
+    )
+    report = owner.to_json() | {
+        "detected": True,
+        "stored_documents": len(owner.representations),
+        "seeded": _seeded_count(owner),
+        "diverged": diverged,
+    }
+    if not owner.supported:
+        report["survives_reapply"] = None
+    elif owned:
+        report["survives_reapply"] = not diverged
+    else:
+        # Nothing of ours is on the line, so there is nothing to survive -- but a
+        # seed left behind is a statusline the other tool would reinstall.
+        report["survives_reapply"] = None
+        report["stale_seed"] = report["seeded"] > 0
+    return report
+
+
 def doctor(
     settings_path: str | os.PathLike | None = None,
     home: pathlib.Path | None = None,
     *,
     probe: bool = False,
+    owner: external.ExternalOwner | None = None,
 ) -> dict:
     """A read-only account of who owns the statusline and what would change it.
 
@@ -1707,6 +1905,10 @@ def doctor(
     Claude Code's support for a single `statusLine.command` is reported as the
     premise it is, not as something discovered at runtime -- this module only
     ever writes into a Claude Code settings file, so there is nothing to detect.
+
+    `owner` is supplied by the caller for the same reason the plan functions take
+    it: detection reads another tool's database, and a report run against a
+    throwaway settings file in a test must not reach the real one.
     """
     path = pathlib.Path(settings_path or DEFAULT_SETTINGS_PATH).expanduser()
     registry = read_registry(home)
@@ -1741,6 +1943,7 @@ def doctor(
         report["slot"] = {"owner": Ownership.UNSUPPORTED_SHAPE.value, "horonom_owned": False}
         report["drift"] = {"detected": True, "reason": str(exc)}
         report["providers"] = _doctor_providers(registry, home, probe)
+        report["external_owner"] = _doctor_external(owner, None)
         report["remediation"] = [
             f"repair {path} by hand; no lifecycle operation will write to it until it parses"
         ]
@@ -1769,12 +1972,43 @@ def doctor(
     }
     report["providers"] = _doctor_providers(registry, home, probe)
     report["drift"] = {"detected": detected, "reason": reason}
+    report["external_owner"] = _doctor_external(owner, document.status_line if owned else None)
     report["mutation_outlook"] = {
         "enabling_another_provider_changes_settings": not owned,
         "disabling_one_provider_changes_settings": owned and len(_provider_ids(registry)) == 1,
     }
-    report["remediation"] = _remediation(ownership, registry, owned)
+    report["remediation"] = _remediation(ownership, registry, owned) + _external_remediation(
+        report["external_owner"]
+    )
     return report
+
+
+def _external_remediation(section: dict) -> list[str]:
+    """What to do about an external manager, where there is anything to do.
+
+    Kept apart from `_remediation` because the advice is about a different tool's
+    state, and the two can both apply at once -- a drifted slot and a store that
+    will undo the repair are separate problems with separate next steps.
+    """
+    if not section.get("detected"):
+        return []
+    name = section["name"]
+    if not section["supported"]:
+        return [
+            f"{name} also manages this settings file and its store could not be used "
+            f"({section['problem']}); nothing here can make the statusline survive its next write"
+        ]
+    if section["diverged"]:
+        return [
+            f"`enable` again to bring {len(section['diverged'])} stored {name} document(s) back "
+            "into step; until then switching profile changes which statusline appears"
+        ]
+    if section.get("stale_seed"):
+        return [
+            f"{name} still has the compositor in {section['seeded']} stored document(s) while "
+            "nothing of ours is on the line; `uninstall` hands those back"
+        ]
+    return []
 
 
 def _remediation(ownership: Ownership, registry: RegistryDocument, owned: bool) -> list[str]:
@@ -2218,7 +2452,50 @@ def _describe(plan: Plan, result: ApplyResult | None) -> str:
             f"  applied: settings_written={result.settings_written} "
             f"registry_written={result.registry_written} read_back_verified={result.verified}"
         )
+        # Said out loud even when it went well, because the interesting case is the
+        # one where it did not: a user who never sees this line has no way to tell
+        # "nothing else manages this file" from "something does and we gave up".
+        if plan.external is not None:
+            lines.append(
+                f"  survives external reapply: {'yes' if result.durable else 'NO'} "
+                f"({len(result.external_written)} stored document(s) updated)"
+            )
+            if result.external_problem is not None:
+                lines.append(
+                    f"  WARNING: the statusline is installed and working, but "
+                    f"{plan.external.owner.name} may remove it: {result.external_problem}"
+                )
     return "\n".join(lines)
+
+
+def _external_lines(section: dict) -> list[str]:
+    """The external-manager section as prose.
+
+    "none detected" is printed rather than omitted. The question a user asks when
+    their statusline keeps vanishing is "is something else writing this file", and
+    a silent absence does not answer it.
+    """
+    if not section.get("detected"):
+        return ["other managers of this settings file: none detected"]
+    name = section["name"]
+    version = "" if section["version"] is None else f" {section['version']}"
+    lines = [
+        f"other manager of this settings file: {name}{version} "
+        f"({section['stored_documents']} stored document(s), {section['seeded']} carrying ours)"
+    ]
+    lines.extend(f"  evidence: {line}" for line in section["evidence"])
+    if not section["supported"]:
+        lines.append(f"  UNUSABLE: {section['problem']}")
+    elif section["diverged"]:
+        lines.append(f"  out of step: {', '.join(section['diverged'])}")
+    # Three outcomes, not two: unknown is its own answer here, and reading it as
+    # "no" would tell a user their statusline is doomed when nobody has checked.
+    verdicts = {True: "yes", False: "NO", None: "not applicable"}
+    lines.append(
+        "  statusline survives its next write: "
+        + verdicts[section.get("survives_reapply")]
+    )
+    return lines
 
 
 def _describe_doctor(report: dict) -> str:
@@ -2257,6 +2534,7 @@ def _describe_doctor(report: dict) -> str:
         lines.append(detail)
     drift = report["drift"]
     lines.append(f"drift: {'yes -- ' + drift['reason'] if drift['detected'] else 'none'}")
+    lines.extend(_external_lines(report.get("external_owner") or {"detected": False}))
     outlook = report.get("mutation_outlook")
     if outlook:
         lines.append(
@@ -2555,6 +2833,28 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _detect_external(
+    path: pathlib.Path, document: SettingsDocument | None = None
+) -> external.ExternalOwner | None:
+    """Look for another manager of this settings file, on the entry point's behalf.
+
+    The only place in this module that goes looking, which is what keeps every
+    other function unable to reach a third party's database unless it was handed
+    one. Detection failure is not an operation failure: a store that cannot even be
+    opened is reported by `detect` as an unsupported owner, and anything stranger
+    than that is nothing to report at all.
+
+    Only the user-scope settings file is considered. A project-scope file is not
+    what an external Claude-config manager reapplies, so claiming a store governs
+    one would be a claim this module cannot support.
+    """
+    if settings_scope(path) != "user":
+        return None
+    with contextlib.suppress(OSError):
+        return external.detect(None if document is None else document.data)
+    return None
+
+
 def _run_report(options: argparse.Namespace, path: pathlib.Path, stream: object) -> int:
     """The read-only commands, which answer without reading a plan at all.
 
@@ -2564,6 +2864,8 @@ def _run_report(options: argparse.Namespace, path: pathlib.Path, stream: object)
     """
     if options.command == "explain":
         report = explain(path, provider=options.provider, legend_only=options.legend_only)
+        # `explain` answers "what is my line saying", which is about the line that
+        # is there now. Who else manages the file is `doctor`'s question.
         print(
             json.dumps(report, indent=2) if options.json else _describe_explain(report),
             file=stream,
@@ -2572,7 +2874,9 @@ def _run_report(options: argparse.Namespace, path: pathlib.Path, stream: object)
         # asked to describe, including "nothing of ours is on your line" -- which
         # is an answer, not a failure to give one.
         return EXIT_OK
-    report = doctor(path, probe=getattr(options, "probe", False))
+    report = doctor(
+        path, probe=getattr(options, "probe", False), owner=_detect_external(path)
+    )
     if options.command == "list":
         # `.get`, because an unparseable settings file yields a report with no
         # `upstream` section at all -- and that is precisely the state a user
@@ -2620,6 +2924,7 @@ def main(argv: list[str] | None = None, stdout: object = None) -> int:
         print(f"{options.command} refused: {exc}", file=stream)
         return EXIT_REFUSED
     registry = read_registry()
+    owner = _detect_external(path, document)
 
     if options.command == "enable":
         try:
@@ -2633,12 +2938,18 @@ def main(argv: list[str] | None = None, stdout: object = None) -> int:
         except (LifecycleError, ValueError) as exc:
             print(f"enable refused: {exc}", file=stream)
             return EXIT_REFUSED
-        plan = plan_enable(document, registry, registration, adopt=options.adopt)
+        plan = plan_enable(document, registry, registration, adopt=options.adopt, owner=owner)
     elif options.command == "disable":
-        plan = plan_remove(document, registry, providers=(options.provider,), operation="disable")
+        plan = plan_remove(
+            document, registry, providers=(options.provider,), operation="disable", owner=owner
+        )
     else:
         plan = plan_remove(
-            document, registry, providers=_provider_ids(registry), operation="uninstall"
+            document,
+            registry,
+            providers=_provider_ids(registry),
+            operation="uninstall",
+            owner=owner,
         )
     return _run_plan(plan, options, stream)
 
