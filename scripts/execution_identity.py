@@ -212,34 +212,51 @@ class ExecutionIdentity:
         digest = hashlib.sha256(f"{dimension}:{raw}".encode("utf-8")).hexdigest()[:8]
         return f"{dimension}:{digest}"
 
+    def _cache_key_host(self) -> tuple[str, ...]:
+        return (self.host_id,)
+
+    def _cache_key_session(self) -> tuple[str, ...]:
+        if not self.provider_session_id:
+            raise ScopeIdentityMissing("SESSION scope requires provider_session_id")
+        return (self.host_id, self.tool_provider, self.provider_session_id)
+
+    def _cache_key_agent(self) -> tuple[str, ...]:
+        if not self.provider_session_id or not self.agent_id:
+            raise ScopeIdentityMissing("AGENT scope requires provider_session_id and agent_id")
+        return (self.host_id, self.tool_provider, self.provider_session_id, self.agent_id)
+
+    def _cache_key_turn_task(self) -> tuple[str, ...]:
+        if not self.provider_session_id or not self.agent_id or not self.turn_id:
+            raise ScopeIdentityMissing("TURN_TASK scope requires provider_session_id, agent_id, and turn_id")
+        return (self.host_id, self.tool_provider, self.provider_session_id, self.agent_id, self.turn_id)
+
+    def _cache_key_project_worktree(self) -> tuple[str, ...]:
+        if self.worktree_id:
+            return (self.worktree_id,)
+        if self.repo_id:
+            return (self.repo_id,)
+        raise ScopeIdentityMissing("PROJECT_WORKTREE scope requires worktree_id or repo_id")
+
     def cache_key(self, scope: Scope) -> tuple[str, ...]:
         """The minimal identity tuple that `scope`'s data is keyed on.
 
         Raises `ScopeIdentityMissing` rather than falling back to a broader
         scope's key — see execution-identity-contract.md#cache-keys-never-
-        widen-on-their-own.
+        widen-on-their-own. Each scope's key is computed by its own small
+        method below so every call site returns one fixed tuple shape (or
+        raises) rather than one function branching across five shapes.
         """
-        if scope is Scope.HOST:
-            return (self.host_id,)
-        if scope is Scope.SESSION:
-            if not self.provider_session_id:
-                raise ScopeIdentityMissing("SESSION scope requires provider_session_id")
-            return (self.host_id, self.tool_provider, self.provider_session_id)
-        if scope is Scope.AGENT:
-            if not self.provider_session_id or not self.agent_id:
-                raise ScopeIdentityMissing("AGENT scope requires provider_session_id and agent_id")
-            return (self.host_id, self.tool_provider, self.provider_session_id, self.agent_id)
-        if scope is Scope.TURN_TASK:
-            if not self.provider_session_id or not self.agent_id or not self.turn_id:
-                raise ScopeIdentityMissing("TURN_TASK scope requires provider_session_id, agent_id, and turn_id")
-            return (self.host_id, self.tool_provider, self.provider_session_id, self.agent_id, self.turn_id)
-        if scope is Scope.PROJECT_WORKTREE:
-            if self.worktree_id:
-                return (self.worktree_id,)
-            if self.repo_id:
-                return (self.repo_id,)
-            raise ScopeIdentityMissing("PROJECT_WORKTREE scope requires worktree_id or repo_id")
-        raise ScopeIdentityMissing(f"{scope} has no stable identity-keyed cache key by definition")
+        handlers = {
+            Scope.HOST: self._cache_key_host,
+            Scope.SESSION: self._cache_key_session,
+            Scope.AGENT: self._cache_key_agent,
+            Scope.TURN_TASK: self._cache_key_turn_task,
+            Scope.PROJECT_WORKTREE: self._cache_key_project_worktree,
+        }
+        handler = handlers.get(scope)
+        if handler is None:
+            raise ScopeIdentityMissing(f"{scope} has no stable identity-keyed cache key by definition")
+        return handler()
 
     def to_wire(self) -> dict:
         """Serialize to a JSON-compatible dict using wire field names."""
