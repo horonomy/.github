@@ -74,13 +74,15 @@ class ToolProviderTest(unittest.TestCase):
 
 class ConstructionValidationTest(unittest.TestCase):
     def test_naive_datetime_is_rejected(self) -> None:
+        naive = datetime.datetime(2026, 10, 2, 12, 0, 0)
         with self.assertRaises(ValueError):
-            _make(observed_at=datetime.datetime(2026, 10, 2, 12, 0, 0))
+            _make(observed_at=naive)
 
     def test_non_utc_timezone_is_rejected(self) -> None:
         tz = datetime.timezone(datetime.timedelta(hours=8))
+        non_utc = datetime.datetime(2026, 10, 2, 12, 0, 0, tzinfo=tz)
         with self.assertRaises(ValueError):
-            _make(observed_at=datetime.datetime(2026, 10, 2, 12, 0, 0, tzinfo=tz))
+            _make(observed_at=non_utc)
 
     def test_empty_host_id_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
@@ -130,7 +132,9 @@ class LineageTriStateTest(unittest.TestCase):
 
 class EqualityTest(unittest.TestCase):
     def test_identical_envelopes_are_equal(self) -> None:
-        self.assertEqual(_make(), _make())
+        first = _make()
+        second = _make()
+        self.assertEqual(first, second)
 
     def test_different_observed_at_makes_envelopes_unequal(self) -> None:
         a = _make(observed_at=_now())
@@ -180,7 +184,9 @@ class CorrelatesWithTest(unittest.TestCase):
 class RedactionTest(unittest.TestCase):
     def test_display_id_is_deterministic(self) -> None:
         identity = _make()
-        self.assertEqual(identity.display_id("provider_session_id"), identity.display_id("provider_session_id"))
+        first = identity.display_id("provider_session_id")
+        second = identity.display_id("provider_session_id")
+        self.assertEqual(first, second)
 
     def test_display_id_does_not_contain_the_raw_value(self) -> None:
         identity = _make(provider_session_id="super-secret-session-token")
