@@ -25,9 +25,9 @@ changes.
 
 LIVE_HOSTS mirrors atlas/destinations.mjs's fail-closed allowlist: a product
 only gets a real link once its canonical host is independently verified live.
-A product not on this list renders with no link and an "in development" note
-— this is the same non-goal atlas/destinations.mjs documents: never fabricate
-a public surface for a product that isn't actually live yet (e.g. Eridanus).
+The profile omits products without a verified canonical host; the Atlas may
+show them as non-link pending cards. Both avoid fabricating a public surface
+for a product that is not live yet (e.g. Eridanus).
 
 Usage:
     python3 scripts/generate_profile_products.py           # write in place
@@ -45,9 +45,9 @@ PROFILE_README_PATH = REPO_ROOT / "profile" / "README.md"
 
 REGISTRY_SOURCE = {
     "repo": "horonomy/official-website",
-    "commit": "f33d5025a4ffa6b4b5963a79c24f845dc37e61c3",
+    "commit": "75c1b152240f0fceaaf967c30272d7bc639b0420",
     "path": "src/data/productRegistry.ts",
-    "blob": "d3c38e8ef6ffd74d929256c201c0ea6183e24baf",
+    "blob": "039665c2f3cd86466d7c7b805060ea087b979eb6",
 }
 
 # Vendored verbatim (subset of fields needed for a profile card) from the
@@ -62,7 +62,7 @@ REGISTRY = [
         "category": "Agent runtime & governance",
         "problem": "Gives AI agents a runtime with permissions, approval checkpoints, and an audit trail instead of unrestricted tool access.",
         "canonical_url": "https://agent-assembly.com",
-        "docs_url": None,
+        "docs_url": "https://docs.agent-assembly.com",
         "github_url": "https://github.com/ai-agent-assembly",
         "order": 0,
     },
@@ -111,7 +111,7 @@ REGISTRY = [
         "problem": "Verifies real evidence for what an AI coding agent claims it did.",
         "canonical_url": "https://fornax.horonom.com",
         "docs_url": "https://docs.fornax.horonom.com",
-        "github_url": None,
+        "github_url": "https://github.com/horonomy/fornax-core",
         "order": 4,
     },
     {
@@ -133,8 +133,8 @@ REGISTRY = [
         "maturity": "experimental",
         "category": "Forensic provenance",
         "problem": "Traces a data leak back through transformations to its point of origin, after the fact.",
-        # Intentionally NOT a real canonical URL — see LIVE_HOSTS below.
-        "canonical_url": "https://eridanus.horo.run",
+        # Publication is gated; no canonical URL exists until that gate crosses.
+        "canonical_url": None,
         "docs_url": None,
         "github_url": None,
         "order": 6,
@@ -173,7 +173,9 @@ _MATURITY_LABELS = {
 }
 
 
-def _host(url: str) -> str:
+def _host(url: str | None) -> str:
+    if url is None:
+        return ""
     return url.split("://", 1)[-1].split("/", 1)[0]
 
 
@@ -227,8 +229,8 @@ def render_products_section() -> str:
         if p["docs_url"]:
             link_parts.append(f"📚 [docs]({p['docs_url']})")
         if p["github_url"]:
-            org = p["github_url"].rstrip("/").rsplit("/", 1)[-1]
-            link_parts.append(f"💻 [github.com/{org}]({p['github_url']})")
+            repository_path = p["github_url"].removeprefix("https://github.com/").rstrip("/")
+            link_parts.append(f"💻 [github.com/{repository_path}]({p['github_url']})")
         lines.append(" · ".join(link_parts))
         lines.append("")
     lines.append(

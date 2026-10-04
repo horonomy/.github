@@ -26,7 +26,7 @@ hand-edit between the markers; re-pin and regenerate instead.
 
 Agent runtime & governance — Gives AI agents a runtime with permissions, approval checkpoints, and an audit trail instead of unrestricted tool access.
 
-🌐 [agent-assembly.com](https://agent-assembly.com) · 💻 [github.com/ai-agent-assembly](https://github.com/ai-agent-assembly)
+🌐 [agent-assembly.com](https://agent-assembly.com) · 📚 [docs](https://docs.agent-assembly.com) · 💻 [github.com/ai-agent-assembly](https://github.com/ai-agent-assembly)
 
 ### 🧭 Octans — Experimental
 
@@ -50,7 +50,7 @@ Context continuity — Carries context across machine, tool, and user boundaries
 
 Agent integrity — Verifies real evidence for what an AI coding agent claims it did.
 
-🌐 [fornax.horonom.com](https://fornax.horonom.com) · 📚 [docs](https://docs.fornax.horonom.com)
+🌐 [fornax.horonom.com](https://fornax.horonom.com) · 📚 [docs](https://docs.fornax.horonom.com) · 💻 [github.com/horonomy/fornax-core](https://github.com/horonomy/fornax-core)
 
 ### ⏱️ Horologium — Experimental
 
