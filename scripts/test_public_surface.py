@@ -77,6 +77,10 @@ class PublicSurfaceTest(unittest.TestCase):
         self.assertIn("canonical-identity", self.rules(bad_base))
         bad_docs = self.manifest(docs_url="//docs.example.horonom.com/")
         self.assertIn("docs-link", self.rules(bad_docs))
+        hostless_docs = self.manifest(docs_url="https:///reference/")
+        self.assertIn("docs-link", self.rules(hostless_docs))
+        internal_docs = self.manifest(docs_url="https://intranet/reference/")
+        self.assertIn("docs-link", self.rules(internal_docs))
 
     def test_rejects_missing_same_site_docs_target(self):
         self.valid_site()
@@ -90,6 +94,24 @@ class PublicSurfaceTest(unittest.TestCase):
         findings = validate(self.manifest(required_navigation=[]), self.root)
         self.assertTrue({"private-origin", "secret-scan", "link-integrity"}.issubset({item.rule for item in findings}))
         self.assertNotIn("redacted", "\n".join(item.detail for item in findings))
+
+    def test_rejects_traversal_before_url_join_can_normalize_it(self):
+        self.valid_site()
+        self.write("docs/index.html", '<link rel="canonical" href="./"><a href="../">Home</a>')
+        self.assertIn("link-integrity", self.rules())
+
+    def test_rejects_every_unsafe_executable_url_without_echoing_values(self):
+        self.valid_site()
+        self.write(
+            "app.js",
+            'fetch("https://user:password@api.example.com/data"); '
+            'const api_url="https://api.example.com/data?token=private";',
+        )
+        findings = [item for item in validate(self.manifest(), self.root) if item.rule == "executable-url"]
+        self.assertEqual(len(findings), 2)
+        detail = "\n".join(item.detail for item in findings)
+        self.assertNotIn("password", detail)
+        self.assertNotIn("private", detail)
 
     def test_does_not_treat_versions_or_public_ipv6_as_private_origin(self):
         self.valid_site()
@@ -116,6 +138,22 @@ class PublicSurfaceTest(unittest.TestCase):
         self.valid_site()
         self.write("docs/index.html", '<link rel="canonical" href="./"><a href="next.html#details">Next</a>')
         self.write("docs/next.html", '<link rel="canonical" href="./next.html"><h2 id="details">Details</h2>')
+        self.assertEqual(validate(self.manifest(), self.root), [])
+
+    def test_allows_data_image_asset_but_rejects_data_navigation(self):
+        self.valid_site()
+        self.write("docs/index.html", '<link rel="canonical" href="./">'
+                   '<img src="data:image/png;base64,AA=="><a href="data:text/html,unsafe">Open</a>')
+        self.assertIn("link-integrity", self.rules())
+
+    def test_requires_page_canonical_to_match_its_public_url(self):
+        self.valid_site()
+        self.write("docs/index.html", '<link rel="canonical" href="https://example.horonom.com/">')
+        self.assertIn("canonical-identity", self.rules())
+
+    def test_allows_noindex_error_page_without_canonical(self):
+        self.valid_site()
+        self.write("404.html", '<meta name="robots" content="nofollow, noindex"><h1>Not found</h1>')
         self.assertEqual(validate(self.manifest(), self.root), [])
 
     def test_required_navigation_must_be_an_exact_anchor(self):

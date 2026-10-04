@@ -47,8 +47,9 @@ as `/docs/` or an absolute HTTPS URL on a dedicated public docs host.
 anchors on `index.html`. `analytics.enabled` is always explicit; enabled
 analytics also lists its `payload_fields`.
 
-The generated artifact must have exactly one same-site canonical link per
-HTML page, an index canonical equal to `base_url`, paired
+Every indexable HTML page must have exactly one self-referential same-site
+canonical link. An explicit `noindex` error page may omit it. The artifact
+must also have paired
 `robots.txt`/`sitemap.xml` files, an exact sitemap declaration, valid sitemap
 XML, and existing same-site page, asset, and fragment targets. External
 public HTTPS navigation such as GitHub and support links remains valid.

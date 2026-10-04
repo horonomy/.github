@@ -50,9 +50,10 @@ class Finding:
 @dataclass
 class HtmlFacts:
     canonicals: list[str]
-    links: list[str]
+    links: list[tuple[str, str, str]]
     anchors: list[str]
     ids: set[str]
+    noindex: bool = False
 
 
 class _HtmlFactsParser(HTMLParser):
@@ -66,14 +67,18 @@ class _HtmlFactsParser(HTMLParser):
             self.facts.ids.add(values["id"])
         if tag.lower() == "a" and "name" in values:
             self.facts.ids.add(values["name"])
+        normalized_tag = tag.lower()
         for attribute in ("href", "src"):
             if attribute in values:
-                self.facts.links.append(values[attribute])
-        if tag.lower() == "a" and "href" in values:
+                self.facts.links.append((values[attribute], normalized_tag, attribute))
+        if normalized_tag == "a" and "href" in values:
             self.facts.anchors.append(values["href"])
         rel = {item.lower() for item in values.get("rel", "").split()}
         if tag.lower() == "link" and "canonical" in rel and "href" in values:
             self.facts.canonicals.append(values["href"])
+        if normalized_tag == "meta" and values.get("name", "").lower() == "robots":
+            directives = re.split(r"[\s,]+", values.get("content", "").lower())
+            self.facts.noindex = "noindex" in directives
 
 
 def _decode_url(value: str) -> str:
@@ -104,6 +109,7 @@ def _host_is_public(hostname: str | None) -> bool:
         labels = ascii_host.split(".")
         return (
             len(ascii_host) <= 253
+            and len(labels) >= 2
             and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels)
         )
 
@@ -119,8 +125,12 @@ def _network_url(value: object, base_url: str) -> tuple[str | None, str]:
         parsed_input = urlparse(decoded)
         if parsed_input.scheme and parsed_input.scheme.lower() != "https":
             return None, "network URLs must use HTTPS"
+        if parsed_input.scheme and not parsed_input.netloc:
+            return None, "absolute URL is missing a host"
         if parsed_input.username or parsed_input.password:
             return None, "credential-bearing URL"
+        if "\\" in parsed_input.path or any(part == ".." for part in parsed_input.path.split("/")):
+            return None, "URL contains path traversal"
         resolved = urlparse(urljoin(base_url, decoded))
         _ = resolved.port
     except ValueError:
@@ -207,10 +217,13 @@ def _page_url(path: Path, root: Path, base_url: str) -> str:
 
 
 def _validate_internal_target(
-    raw: str, document_url: str, base_url: str, root: Path, html_facts: dict[Path, HtmlFacts]
+    raw: str, tag: str, attribute: str, document_url: str, base_url: str,
+    root: Path, html_facts: dict[Path, HtmlFacts]
 ) -> str | None:
     scheme = urlparse(html.unescape(raw.strip())).scheme.lower()
-    if scheme in {"data", "mailto", "tel"}:
+    if scheme == "data" and tag == "img" and attribute == "src" and raw.strip().lower().startswith("data:image/"):
+        return None
+    if scheme in {"mailto", "tel"}:
         return None
     if scheme and scheme not in {"http", "https"}:
         return "link uses an unsupported URL scheme"
@@ -261,9 +274,9 @@ def _scan_artifacts(paths: list[Path], texts: dict[Path, str], root: Path, base_
         executable_urls = (item for match in EXECUTABLE_URL.findall(text) for item in match if item)
         for candidate in executable_urls:
             _, reason = _network_url(candidate, base_url)
-            if reason == "URL exposes a non-public origin":
-                findings.append(Finding("private-origin", str(rel)))
-                break
+            if reason:
+                rule = "private-origin" if reason == "URL exposes a non-public origin" else "executable-url"
+                findings.append(Finding(rule, f"{rel}: {reason}"))
         if path.suffix.lower() == ".html":
             facts[path] = _parse_html(text)
     return facts
@@ -277,12 +290,14 @@ def _validate_html(root: Path, base_url: str, facts: dict[Path, HtmlFacts], find
         document_url = _page_url(path, root, base_url)
         normalized = [_network_url(item, document_url)[0] for item in page.canonicals]
         valid = [item for item in normalized if item and _same_identity(item, base_url) and _inside_base_path(item, base_url)]
-        if len(page.canonicals) != 1 or len(valid) != 1:
+        if page.noindex and not page.canonicals:
+            pass
+        elif len(page.canonicals) != 1 or len(valid) != 1:
             findings.append(Finding("canonical-identity", f"{rel} must have one same-site canonical link"))
-        elif rel == INDEX_HTML and valid[0] != base_url:
-            findings.append(Finding("canonical-identity", "index.html canonical does not match base_url"))
-        for raw in page.links:
-            reason = _validate_internal_target(raw, document_url, base_url, root, facts)
+        elif valid[0] != document_url:
+            findings.append(Finding("canonical-identity", f"{rel} canonical does not match its public URL"))
+        for raw, tag, attribute in page.links:
+            reason = _validate_internal_target(raw, tag, attribute, document_url, base_url, root, facts)
             if reason:
                 findings.append(Finding("link-integrity", f"{rel}: {reason}"))
 
@@ -309,7 +324,13 @@ def _validate_discovery(root: Path, base_url: str, texts: dict[Path, str], findi
         findings.append(Finding("robots-sitemap", "sitemap.xml has no loc entries"))
     for location in locations:
         normalized, _ = _network_url(location, base_url)
-        if not normalized or not _same_identity(normalized, base_url) or not _inside_base_path(normalized, base_url):
+        parsed = urlparse(normalized) if normalized else None
+        if (
+            not normalized
+            or not _same_identity(normalized, base_url)
+            or not _inside_base_path(normalized, base_url)
+            or bool(parsed and (parsed.query or parsed.fragment))
+        ):
             findings.append(Finding("robots-sitemap", "sitemap.xml contains a foreign or invalid URL"))
         elif _target_file(root, normalized, base_url) is None:
             findings.append(Finding("robots-sitemap", "sitemap.xml references an absent artifact page"))
