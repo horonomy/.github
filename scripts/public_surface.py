@@ -49,7 +49,7 @@ def _safe_url(value: str, base_host: str) -> tuple[bool, str]:
     return True, ""
 
 
-def validate(manifest: dict, root: Path) -> list[Finding]:  # NOSONAR
+def validate(manifest: dict, root: Path) -> list[Finding]:
     """Return deterministic findings; an empty list means the artifact passes."""
     findings: list[Finding] = []
     base = manifest.get("base_url", "")
@@ -131,7 +131,7 @@ def main(argv: list[str]) -> int:
     artifact_root = args.artifact_root.resolve(strict=True)
     if not manifest_path.is_file() or not artifact_root.is_dir():
         parser.error("manifest must be a file and artifact_root must be a directory")
-    findings = validate(json.loads(manifest_path.read_text(encoding="utf-8")), artifact_root)  # NOSONAR
+    findings = validate(json.loads(manifest_path.read_text(encoding="utf-8")), artifact_root)
     for finding in findings:
         print(f"FAIL [{finding.rule}] {finding.detail}")
     if not findings:
