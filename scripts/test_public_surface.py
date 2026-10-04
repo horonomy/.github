@@ -112,6 +112,12 @@ class PublicSurfaceTest(unittest.TestCase):
         findings = [item for item in validate(self.manifest(required_navigation=[]), self.root) if item.rule == "link-integrity"]
         self.assertEqual(len(findings), 2)
 
+    def test_resolves_relative_links_from_the_containing_page(self):
+        self.valid_site()
+        self.write("docs/index.html", '<link rel="canonical" href="./"><a href="next.html#details">Next</a>')
+        self.write("docs/next.html", '<link rel="canonical" href="./next.html"><h2 id="details">Details</h2>')
+        self.assertEqual(validate(self.manifest(), self.root), [])
+
     def test_required_navigation_must_be_an_exact_anchor(self):
         self.valid_site()
         self.assertIn("navigation", self.rules(self.manifest(required_navigation=["/docs/#start"])))

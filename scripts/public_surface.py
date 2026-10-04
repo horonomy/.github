@@ -197,15 +197,24 @@ def _target_file(root: Path, url: str, base_url: str) -> Path | None:
     return None
 
 
+def _page_url(path: Path, root: Path, base_url: str) -> str:
+    relative = path.relative_to(root).as_posix()
+    if relative == "index.html":
+        return base_url
+    if relative.endswith("/index.html"):
+        relative = relative[:-len("index.html")]
+    return urljoin(base_url, relative)
+
+
 def _validate_internal_target(
-    raw: str, base_url: str, root: Path, html_facts: dict[Path, HtmlFacts]
+    raw: str, document_url: str, base_url: str, root: Path, html_facts: dict[Path, HtmlFacts]
 ) -> str | None:
     scheme = urlparse(html.unescape(raw.strip())).scheme.lower()
     if scheme in {"data", "mailto", "tel"}:
         return None
     if scheme and scheme not in {"http", "https"}:
         return "link uses an unsupported URL scheme"
-    normalized, reason = _network_url(raw, base_url)
+    normalized, reason = _network_url(raw, document_url)
     if normalized is None:
         return reason
     if not _same_identity(normalized, base_url):
@@ -265,14 +274,15 @@ def _validate_html(root: Path, base_url: str, facts: dict[Path, HtmlFacts], find
         findings.append(Finding("artifact", "index.html is missing"))
     for path, page in facts.items():
         rel = path.relative_to(root)
-        normalized = [_network_url(item, base_url)[0] for item in page.canonicals]
+        document_url = _page_url(path, root, base_url)
+        normalized = [_network_url(item, document_url)[0] for item in page.canonicals]
         valid = [item for item in normalized if item and _same_identity(item, base_url) and _inside_base_path(item, base_url)]
         if len(page.canonicals) != 1 or len(valid) != 1:
             findings.append(Finding("canonical-identity", f"{rel} must have one same-site canonical link"))
         elif rel == INDEX_HTML and valid[0] != base_url:
             findings.append(Finding("canonical-identity", "index.html canonical does not match base_url"))
         for raw in page.links:
-            reason = _validate_internal_target(raw, base_url, root, facts)
+            reason = _validate_internal_target(raw, document_url, base_url, root, facts)
             if reason:
                 findings.append(Finding("link-integrity", f"{rel}: {reason}"))
 
