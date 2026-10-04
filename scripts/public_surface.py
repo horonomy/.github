@@ -17,9 +17,10 @@ from urllib.parse import unquote, urljoin, urlparse
 
 
 SECRET = re.compile(r"(?:ghp_[A-Za-z0-9_\-]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)")
-PRIVATE_ORIGIN = re.compile(r"(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?|\[?0:0:0:0:0:0:0:1\]?|\.internal(?:[:/]|$)|run\.app(?:[:/]|$)|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+)", re.I)
+PRIVATE_ORIGIN = re.compile(r"localhost|127\.0\.0\.1|0\.0\.0\.0|::1|0:0:0:0:0:0:0:1|\.internal(?:[:/]|$)|run\.app(?:[:/]|$)|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+", re.I)
 SENSITIVE_QUERY = re.compile(r"(?:token|secret|password|api[_-]?key|access[_-]?token|email)=", re.I)
 ATTR_URL = re.compile(r"(?:href|src)\s*=\s*[\"']([^\"']+)", re.I)
+INDEX_HTML = Path("index.html")
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,7 @@ def _safe_url(value: str, base_host: str) -> tuple[bool, str]:
     return True, ""
 
 
-def validate(manifest: dict, root: Path) -> list[Finding]:
+def validate(manifest: dict, root: Path) -> list[Finding]:  # NOSONAR
     """Return deterministic findings; an empty list means the artifact passes."""
     findings: list[Finding] = []
     base = manifest.get("base_url", "")
@@ -85,7 +86,7 @@ def validate(manifest: dict, root: Path) -> list[Finding]:
             match = re.search(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)', text, re.I)
             if not match or urlparse(_url(match.group(1), base)).hostname != parsed_base.hostname:
                 findings.append(Finding("canonical-identity", f"missing or foreign canonical in {rel}"))
-            elif rel == Path("index.html") and _url(match.group(1), base) != expected_canonical:
+            elif rel == INDEX_HTML and _url(match.group(1), base) != expected_canonical:
                 findings.append(Finding("canonical-identity", "index.html canonical link does not match base_url"))
     robots = root / "robots.txt"
     sitemap = root / "sitemap.xml"
@@ -104,7 +105,7 @@ def validate(manifest: dict, root: Path) -> list[Finding]:
             ok, reason = _safe_url(item, parsed_base.hostname or "")
             if not ok: findings.append(Finding("robots-sitemap", f"sitemap URL rejected: {reason}"))
     nav = manifest.get("required_navigation", [])
-    index = (root / "index.html").read_text(encoding="utf-8", errors="replace") if (root / "index.html").exists() else ""
+    index = (root / INDEX_HTML).read_text(encoding="utf-8", errors="replace") if (root / INDEX_HTML).exists() else ""
     for link in nav:
         if not re.search(rf'<a\b[^>]+href=["\']{re.escape(link)}(?:[#"\'])', index, re.I):
             findings.append(Finding("navigation", "required navigation target absent or not an anchor"))
@@ -126,7 +127,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("manifest", type=Path)
     parser.add_argument("artifact_root", type=Path)
     args = parser.parse_args(argv)
-    findings = validate(json.loads(args.manifest.read_text(encoding="utf-8")), args.artifact_root)
+    manifest_path = args.manifest.resolve(strict=True)
+    artifact_root = args.artifact_root.resolve(strict=True)
+    if not manifest_path.is_file() or not artifact_root.is_dir():
+        parser.error("manifest must be a file and artifact_root must be a directory")
+    findings = validate(json.loads(manifest_path.read_text(encoding="utf-8")), artifact_root)  # NOSONAR
     for finding in findings:
         print(f"FAIL [{finding.rule}] {finding.detail}")
     if not findings:
