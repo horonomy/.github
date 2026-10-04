@@ -30,6 +30,7 @@ EXECUTABLE_URL = re.compile(
 SENSITIVE_QUERY_KEYS = {
     "access_token", "api_key", "apikey", "email", "password", "secret", "token"
 }
+TRAVERSAL_ERROR = "URL contains path traversal"
 FORBIDDEN_ANALYTICS_TERMS = {
     "authenticated", "code", "email", "evidence", "prompt", "repo", "repository",
     "secret", "security", "tenant", "token",
@@ -96,7 +97,7 @@ def _has_parent_segment(path: str) -> bool:
     return any(part == ".." for part in path.split("/"))
 
 
-def _input_url_error(raw_value: str, decoded: str, parsed_input) -> str:
+def _input_url_error(raw_value: str, parsed_input) -> str:
     if parsed_input.scheme and parsed_input.scheme.lower() != "https":
         return "network URLs must use HTTPS"
     if parsed_input.scheme and not parsed_input.netloc:
@@ -104,10 +105,10 @@ def _input_url_error(raw_value: str, decoded: str, parsed_input) -> str:
     if parsed_input.username or parsed_input.password:
         return "credential-bearing URL"
     if "\\" in parsed_input.path:
-        return "URL contains path traversal"
+        return TRAVERSAL_ERROR
     raw_path = urlparse(html.unescape(raw_value.strip())).path
     if _has_parent_segment(parsed_input.path) and (parsed_input.netloc or not _has_parent_segment(raw_path)):
-        return "URL contains path traversal"
+        return TRAVERSAL_ERROR
     return ""
 
 
@@ -143,7 +144,7 @@ def _network_url(value: object, base_url: str) -> tuple[str | None, str]:
         return None, "URL uses an ambiguous or invalid form"
     try:
         parsed_input = urlparse(decoded)
-        input_error = _input_url_error(value, decoded, parsed_input)
+        input_error = _input_url_error(value, parsed_input)
         if input_error:
             return None, input_error
         resolved = urlparse(urljoin(base_url, decoded))
@@ -153,7 +154,7 @@ def _network_url(value: object, base_url: str) -> tuple[str | None, str]:
     if resolved.scheme != "https" or not _host_is_public(resolved.hostname):
         return None, "URL exposes a non-public origin"
     if "\\" in resolved.path or _has_parent_segment(resolved.path):
-        return None, "URL contains path traversal"
+        return None, TRAVERSAL_ERROR
     query_keys = {key.lower().replace("-", "_") for key, _ in parse_qsl(resolved.query, keep_blank_values=True)}
     if query_keys.intersection(SENSITIVE_QUERY_KEYS):
         return None, "URL contains a sensitive query parameter"
@@ -297,19 +298,30 @@ def _scan_artifacts(paths: list[Path], texts: dict[Path, str], root: Path, base_
     return facts
 
 
+def _canonical_finding(page: HtmlFacts, document_url: str, base_url: str, rel: Path) -> Finding | None:
+    if page.noindex and not page.canonicals:
+        return None
+    normalized = [_network_url(item, document_url)[0] for item in page.canonicals]
+    valid = [
+        item for item in normalized
+        if item and _same_identity(item, base_url) and _inside_base_path(item, base_url)
+    ]
+    if len(page.canonicals) != 1 or len(valid) != 1:
+        return Finding("canonical-identity", f"{rel} must have one same-site canonical link")
+    if valid[0] != document_url:
+        return Finding("canonical-identity", f"{rel} canonical does not match its public URL")
+    return None
+
+
 def _validate_html(root: Path, base_url: str, facts: dict[Path, HtmlFacts], findings: list[Finding]) -> None:
     if root / INDEX_HTML not in facts:
         findings.append(Finding("artifact", "index.html is missing"))
     for path, page in facts.items():
         rel = path.relative_to(root)
         document_url = _page_url(path, root, base_url)
-        normalized = [_network_url(item, document_url)[0] for item in page.canonicals]
-        valid = [item for item in normalized if item and _same_identity(item, base_url) and _inside_base_path(item, base_url)]
-        if page.canonicals or not page.noindex:
-            if len(page.canonicals) != 1 or len(valid) != 1:
-                findings.append(Finding("canonical-identity", f"{rel} must have one same-site canonical link"))
-            elif valid[0] != document_url:
-                findings.append(Finding("canonical-identity", f"{rel} canonical does not match its public URL"))
+        canonical_finding = _canonical_finding(page, document_url, base_url, rel)
+        if canonical_finding:
+            findings.append(canonical_finding)
         for raw, tag, attribute in page.links:
             reason = _validate_internal_target(raw, tag, attribute, document_url, base_url, root, facts)
             if reason:
