@@ -71,6 +71,14 @@ class DriftPreventionTest(unittest.TestCase):
         self.assertNotIn("Eridanus", section)
         self.assertNotIn("eridanus.horo.run", section)
 
+    def test_verified_docs_and_public_repository_links_are_rendered(self) -> None:
+        section = gpp.render_products_section()
+        self.assertIn("[docs](https://docs.agent-assembly.com)", section)
+        self.assertIn(
+            "[github.com/horonomy/fornax-core](https://github.com/horonomy/fornax-core)",
+            section,
+        )
+
     def test_duplicate_product_id_is_rejected(self) -> None:
         gpp.REGISTRY.append(dict(gpp.REGISTRY[0]))
         with self.assertRaisesRegex(ValueError, "duplicate product id"):
