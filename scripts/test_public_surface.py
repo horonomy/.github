@@ -191,6 +191,17 @@ class PublicSurfaceTest(unittest.TestCase):
         )
         self.assertEqual(validate(self.manifest(), self.root), [])
 
+    def test_accepts_a_literal_percent_encoded_target_id(self) -> None:
+        self.valid_site()
+        self.write(
+            "docs/index.html",
+            '<link rel="canonical" href="./">'
+            '<a id="impl-From%3C%26T%3E-for-U"></a>'
+            '<a href="#impl-From%3C%26T%3E-for-U">From implementation</a>',
+        )
+
+        self.assertEqual(validate(self.manifest(), self.root), [])
+
     def test_allows_mdbook_parent_link_inside_github_pages_project(self) -> None:
         self.write(
             "index.html",

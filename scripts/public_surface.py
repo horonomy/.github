@@ -284,7 +284,9 @@ def _validate_internal_target(
     if target is None:
         return "same-site target is absent from the artifact"
     fragment = unquote(urlparse(normalized).fragment)
-    if fragment and fragment not in html_facts.get(target, HtmlFacts([], [], [], set())).ids:
+    raw_fragment = urlparse(urljoin(document_url, html.unescape(raw.strip()))).fragment
+    target_ids = html_facts.get(target, HtmlFacts([], [], [], set())).ids
+    if fragment and fragment not in target_ids and raw_fragment not in target_ids:
         return "same-site fragment target is absent"
     return None
 
