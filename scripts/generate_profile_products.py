@@ -45,9 +45,9 @@ PROFILE_README_PATH = REPO_ROOT / "profile" / "README.md"
 
 REGISTRY_SOURCE = {
     "repo": "horonomy/official-website",
-    "commit": "75c1b152240f0fceaaf967c30272d7bc639b0420",
+    "commit": "d7af2fe938aa963c4f9b589fb630e64520051418",
     "path": "src/data/productRegistry.ts",
-    "blob": "039665c2f3cd86466d7c7b805060ea087b979eb6",
+    "blob": "4b61237b15d85c3e480865f0ae96eb94409065d3",
 }
 
 # Vendored verbatim (subset of fields needed for a profile card) from the
@@ -72,9 +72,9 @@ REGISTRY = [
         "emoji": "🧭",
         "maturity": "experimental",
         "category": "Change safety",
-        "problem": "Verifies a change is safe to ship before it reaches production, across distributed services.",
-        "canonical_url": "https://octans.horo.run",
-        "docs_url": None,
+        "problem": "Examines supported OpenAPI contract changes and proposes repairs for human review; an experimental static-analysis prototype.",
+        "canonical_url": "https://octans.horonom.com",
+        "docs_url": "https://octans.horonom.com/docs/",
         "github_url": None,
         "order": 1,
     },
@@ -147,7 +147,7 @@ REGISTRY = [
 LIVE_HOSTS = frozenset(
     {
         "agent-assembly.com",
-        "octans.horo.run",
+        "octans.horonom.com",
         "circinus.horonom.com",
         "ophiuchus.horonom.com",
         "fornax.horonom.com",

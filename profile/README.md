@@ -30,9 +30,9 @@ Agent runtime & governance — Gives AI agents a runtime with permissions, appro
 
 ### 🧭 Octans — Experimental
 
-Change safety — Verifies a change is safe to ship before it reaches production, across distributed services.
+Change safety — Examines supported OpenAPI contract changes and proposes repairs for human review; an experimental static-analysis prototype.
 
-🌐 [octans.horo.run](https://octans.horo.run)
+🌐 [octans.horonom.com](https://octans.horonom.com) · 📚 [docs](https://octans.horonom.com/docs/)
 
 ### 📐 Circinus — Experimental
 
