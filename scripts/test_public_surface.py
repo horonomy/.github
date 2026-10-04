@@ -95,9 +95,9 @@ class PublicSurfaceTest(unittest.TestCase):
         self.assertTrue({"private-origin", "secret-scan", "link-integrity"}.issubset({item.rule for item in findings}))
         self.assertNotIn("redacted", "\n".join(item.detail for item in findings))
 
-    def test_rejects_traversal_before_url_join_can_normalize_it(self):
+    def test_rejects_encoded_traversal_before_url_join_can_normalize_it(self):
         self.valid_site()
-        self.write("docs/index.html", '<link rel="canonical" href="./"><a href="../">Home</a>')
+        self.write("docs/index.html", '<link rel="canonical" href="./"><a href="/%2e%2e/">Escape</a>')
         self.assertIn("link-integrity", self.rules())
 
     def test_rejects_every_unsafe_executable_url_without_echoing_values(self):
@@ -139,6 +139,42 @@ class PublicSurfaceTest(unittest.TestCase):
         self.write("docs/index.html", '<link rel="canonical" href="./"><a href="next.html#details">Next</a>')
         self.write("docs/next.html", '<link rel="canonical" href="./next.html"><h2 id="details">Details</h2>')
         self.assertEqual(validate(self.manifest(), self.root), [])
+
+    def test_allows_mdbook_parent_link_inside_github_pages_project(self):
+        self.write(
+            "index.html",
+            '<link rel="canonical" href="https://chisanan232.github.io/glomeris/">'
+            '<a href="guide/install/">Install</a>',
+        )
+        self.write("guide/index.html", '<link rel="canonical" href="./">')
+        self.write(
+            "guide/install/index.html",
+            '<link rel="canonical" href="./"><a href="../">Guide</a>',
+        )
+        self.write("robots.txt", "Sitemap: https://chisanan232.github.io/glomeris/sitemap.xml\n")
+        self.write("sitemap.xml", "<urlset><url><loc>https://chisanan232.github.io/glomeris/</loc></url></urlset>")
+        manifest = {
+            "base_url": "https://chisanan232.github.io/glomeris/",
+            "docs_url": "https://chisanan232.github.io/glomeris/",
+            "required_navigation": ["guide/install/"],
+            "analytics": {"enabled": False},
+        }
+        self.assertEqual(validate(manifest, self.root), [])
+
+    def test_rejects_parent_link_that_escapes_github_pages_project(self):
+        self.write(
+            "index.html",
+            '<link rel="canonical" href="https://chisanan232.github.io/glomeris/">'
+            '<a href="../../outside/">Escape</a>',
+        )
+        self.write("robots.txt", "Sitemap: https://chisanan232.github.io/glomeris/sitemap.xml\n")
+        self.write("sitemap.xml", "<urlset><url><loc>https://chisanan232.github.io/glomeris/</loc></url></urlset>")
+        manifest = {
+            "base_url": "https://chisanan232.github.io/glomeris/",
+            "required_navigation": [],
+            "analytics": {"enabled": False},
+        }
+        self.assertIn("link-integrity", self.rules(manifest))
 
     def test_allows_data_image_asset_but_rejects_data_navigation(self):
         self.valid_site()

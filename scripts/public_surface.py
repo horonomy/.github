@@ -38,7 +38,8 @@ SENSITIVE_ASSIGNMENT = re.compile(
     r"(?i)\b(?:[a-z0-9]+[_-])*(?:prompt|email|tenant|authenticated_content|"
     r"api[_-]?key|access[_-]?token)(?:[_-][a-z0-9]+)*\s*[:=]"
 )
-INDEX_HTML = Path("index.html")
+INDEX_NAME = "index.html"
+INDEX_HTML = Path(INDEX_NAME)
 
 
 @dataclass(frozen=True)
@@ -78,7 +79,7 @@ class _HtmlFactsParser(HTMLParser):
             self.facts.canonicals.append(values["href"])
         if normalized_tag == "meta" and values.get("name", "").lower() == "robots":
             directives = re.split(r"[\s,]+", values.get("content", "").lower())
-            self.facts.noindex = "noindex" in directives
+            self.facts.noindex = self.facts.noindex or "noindex" in directives
 
 
 def _decode_url(value: str) -> str:
@@ -89,6 +90,25 @@ def _decode_url(value: str) -> str:
             break
         decoded = expanded
     return decoded
+
+
+def _has_parent_segment(path: str) -> bool:
+    return any(part == ".." for part in path.split("/"))
+
+
+def _input_url_error(raw_value: str, decoded: str, parsed_input) -> str:
+    if parsed_input.scheme and parsed_input.scheme.lower() != "https":
+        return "network URLs must use HTTPS"
+    if parsed_input.scheme and not parsed_input.netloc:
+        return "absolute URL is missing a host"
+    if parsed_input.username or parsed_input.password:
+        return "credential-bearing URL"
+    if "\\" in parsed_input.path:
+        return "URL contains path traversal"
+    raw_path = urlparse(html.unescape(raw_value.strip())).path
+    if _has_parent_segment(parsed_input.path) and (parsed_input.netloc or not _has_parent_segment(raw_path)):
+        return "URL contains path traversal"
+    return ""
 
 
 def _host_is_public(hostname: str | None) -> bool:
@@ -123,21 +143,16 @@ def _network_url(value: object, base_url: str) -> tuple[str | None, str]:
         return None, "URL uses an ambiguous or invalid form"
     try:
         parsed_input = urlparse(decoded)
-        if parsed_input.scheme and parsed_input.scheme.lower() != "https":
-            return None, "network URLs must use HTTPS"
-        if parsed_input.scheme and not parsed_input.netloc:
-            return None, "absolute URL is missing a host"
-        if parsed_input.username or parsed_input.password:
-            return None, "credential-bearing URL"
-        if "\\" in parsed_input.path or any(part == ".." for part in parsed_input.path.split("/")):
-            return None, "URL contains path traversal"
+        input_error = _input_url_error(value, decoded, parsed_input)
+        if input_error:
+            return None, input_error
         resolved = urlparse(urljoin(base_url, decoded))
         _ = resolved.port
     except ValueError:
         return None, "malformed URL"
     if resolved.scheme != "https" or not _host_is_public(resolved.hostname):
         return None, "URL exposes a non-public origin"
-    if "\\" in resolved.path or any(part == ".." for part in resolved.path.split("/")):
+    if "\\" in resolved.path or _has_parent_segment(resolved.path):
         return None, "URL contains path traversal"
     query_keys = {key.lower().replace("-", "_") for key, _ in parse_qsl(resolved.query, keep_blank_values=True)}
     if query_keys.intersection(SENSITIVE_QUERY_KEYS):
@@ -194,9 +209,9 @@ def _target_file(root: Path, url: str, base_url: str) -> Path | None:
     requested = root / relative
     candidates = [requested]
     if not relative or relative.endswith("/"):
-        candidates.append(requested / "index.html")
+        candidates.append(requested / INDEX_NAME)
     elif not Path(relative).suffix:
-        candidates.extend((root / f"{relative}.html", requested / "index.html"))
+        candidates.extend((root / f"{relative}.html", requested / INDEX_NAME))
     for candidate in candidates:
         try:
             candidate.resolve(strict=True).relative_to(root.resolve())
@@ -209,10 +224,10 @@ def _target_file(root: Path, url: str, base_url: str) -> Path | None:
 
 def _page_url(path: Path, root: Path, base_url: str) -> str:
     relative = path.relative_to(root).as_posix()
-    if relative == "index.html":
+    if relative == INDEX_NAME:
         return base_url
-    if relative.endswith("/index.html"):
-        relative = relative[:-len("index.html")]
+    if relative.endswith(f"/{INDEX_NAME}"):
+        relative = relative[:-len(INDEX_NAME)]
     return urljoin(base_url, relative)
 
 
@@ -290,16 +305,28 @@ def _validate_html(root: Path, base_url: str, facts: dict[Path, HtmlFacts], find
         document_url = _page_url(path, root, base_url)
         normalized = [_network_url(item, document_url)[0] for item in page.canonicals]
         valid = [item for item in normalized if item and _same_identity(item, base_url) and _inside_base_path(item, base_url)]
-        if page.noindex and not page.canonicals:
-            pass
-        elif len(page.canonicals) != 1 or len(valid) != 1:
-            findings.append(Finding("canonical-identity", f"{rel} must have one same-site canonical link"))
-        elif valid[0] != document_url:
-            findings.append(Finding("canonical-identity", f"{rel} canonical does not match its public URL"))
+        if page.canonicals or not page.noindex:
+            if len(page.canonicals) != 1 or len(valid) != 1:
+                findings.append(Finding("canonical-identity", f"{rel} must have one same-site canonical link"))
+            elif valid[0] != document_url:
+                findings.append(Finding("canonical-identity", f"{rel} canonical does not match its public URL"))
         for raw, tag, attribute in page.links:
             reason = _validate_internal_target(raw, tag, attribute, document_url, base_url, root, facts)
             if reason:
                 findings.append(Finding("link-integrity", f"{rel}: {reason}"))
+
+
+def _sitemap_location_is_invalid(location: str, base_url: str) -> tuple[bool, str | None]:
+    normalized, _ = _network_url(location, base_url)
+    if not normalized:
+        return True, None
+    parsed = urlparse(normalized)
+    invalid = (
+        not _same_identity(normalized, base_url)
+        or not _inside_base_path(normalized, base_url)
+        or bool(parsed.query or parsed.fragment)
+    )
+    return invalid, normalized
 
 
 def _validate_discovery(root: Path, base_url: str, texts: dict[Path, str], findings: list[Finding]) -> None:
@@ -323,16 +350,10 @@ def _validate_discovery(root: Path, base_url: str, texts: dict[Path, str], findi
     if not locations:
         findings.append(Finding("robots-sitemap", "sitemap.xml has no loc entries"))
     for location in locations:
-        normalized, _ = _network_url(location, base_url)
-        parsed = urlparse(normalized) if normalized else None
-        if (
-            not normalized
-            or not _same_identity(normalized, base_url)
-            or not _inside_base_path(normalized, base_url)
-            or bool(parsed and (parsed.query or parsed.fragment))
-        ):
+        invalid, normalized = _sitemap_location_is_invalid(location, base_url)
+        if invalid:
             findings.append(Finding("robots-sitemap", "sitemap.xml contains a foreign or invalid URL"))
-        elif _target_file(root, normalized, base_url) is None:
+        elif normalized and _target_file(root, normalized, base_url) is None:
             findings.append(Finding("robots-sitemap", "sitemap.xml references an absent artifact page"))
 
 

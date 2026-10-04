@@ -86,6 +86,69 @@ surface and whose current project link is
 only after their lifecycle and deployment gates authorize those domains.
 Glomeris reuses its existing GitHub Pages build and project path.
 
+## Deployment fragments
+
+For an authorized company surface, reuse its existing Cloudflare Pages
+project and account-scoped Pages token. Keep deployment disabled until the
+lifecycle gate and DNS are approved. Run the product build and baseline before
+the pinned deploy action:
+
+```yaml
+permissions:
+  contents: read
+jobs:
+  deploy:
+    if: ${{ vars.CLOUDFLARE_DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: npm ci && npm run build
+      - run: python3 tools/public_surface.py public-surface.json site/dist
+      - uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        with:
+          wranglerVersion: "4.130.0"
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy site/dist --project-name=product-site --branch=main
+```
+
+For an OSS repository, keep GitHub Pages in that repository. Preserve the
+repository's real build command, run the baseline on the assembled artifact,
+and use Pages' least-privilege permissions and pinned actions:
+
+```yaml
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Existing repository-owned build steps assemble the exact `site/` tree.
+      - run: python3 tools/public_surface.py public-surface.json site
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        with:
+          path: site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5
+```
+
+Both mechanisms have free tiers suitable for this baseline. Adoption does not
+authorize a paid plan, a new runtime host, or a new Pages project solely for
+portfolio symmetry.
+
 ## Adoption checklist
 
 - [ ] Define `public-surface.json` beside the product's site build.
@@ -96,4 +159,5 @@ Glomeris reuses its existing GitHub Pages build and project path.
 - [ ] Run the docs build, product link/accessibility/security checks, then this checker against the exact generated output in CI.
 - [ ] Verify browser behavior and network requests against the deployed artifact.
 - [ ] Capture external DNS, TLS, redirect, canonical, and link evidence after deployment.
+- [ ] Keep deploy actions and the shared checker pinned to immutable commits.
 - [ ] On rollback, restore the last verified artifact and keep the same gates enabled; fix the candidate before another rollout.
