@@ -37,7 +37,7 @@ class PublicSurfaceTest(unittest.TestCase):
         self.write("index.html", '<link rel="canonical" href="https://example.horonom.com/"><a href="https://localhost:8080/%2e%2e/admin?token=abc">/</a>\nAKIA1234567890ABCDEF')
         findings = validate(self.manifest(), self.root)
         rules = {item.rule for item in findings}
-        self.assertTrue({"private-origin", "secret-scan", "path-traversal", "query-leakage"} <= rules)
+        self.assertTrue({"private-origin", "secret-scan", "url-boundary"} <= rules)
 
     def test_fails_cross_host_sitemap_and_missing_navigation(self):
         self.write("index.html", '<link rel="canonical" href="https://example.horonom.com/">')
