@@ -34,11 +34,15 @@ A minimal product-owned manifest is:
 }
 ```
 
-The check is appropriate for company products with an established public
-lifecycle (`beta`, `release_candidate`, or `available`) and for OSS projects
-whose repository is the canonical project surface. It does not promote an
-`experimental` or `not_yet_public` product; lifecycle and release evidence
-remain governed by the Public Release Surface Contract.
+The check is appropriate for any product whose human-facing surface has been
+earned and authorized, including a truthfully scoped experimental surface,
+and for OSS projects whose repository is the canonical project surface. It
+does not authorize publication or change product maturity. Eligibility stays
+with the canonical [Product Surface Lifecycle
+Policy](https://github.com/horonomy/internal-docs/blob/main/docs/engineering/product-surface-lifecycle-policy.md),
+HORO-566, and product-owned authority. Where a surface also makes public
+release claims, keep the existing release/maturity checks in the same product
+workflow.
 
 The manifest accepts only `base_url`, `docs_url`, `required_navigation`, and
 `analytics`. `base_url` is required. `docs_url` may be a same-host path such
