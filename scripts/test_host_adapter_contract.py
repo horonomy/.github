@@ -5,6 +5,7 @@ import json
 import re
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 from referencing import Registry, Resource
@@ -272,12 +273,28 @@ def effective_capability_state(lifecycle, observations):
 class HostAdapterContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        if "date-time" not in CHECKER.checkers:
+            raise RuntimeError("required date-time checker unavailable")
         cls.schemas = {p.name.removesuffix(".schema.json"): load(p) for p in SCHEMAS.glob("*.schema.json")}
         cls.registry = Registry()
         for schema in cls.schemas.values():
             Draft202012Validator.check_schema(schema)
             if "$id" in schema:
                 cls.registry = cls.registry.with_resource(schema["$id"], Resource.from_contents(schema))
+
+    def test_timestamp_formats_and_checker_availability(self):
+        for fixture, part in (
+            ("valid-event-record-only.json", "canonical-host-event"),
+            ("valid-snapshot-admin-disabled.json", "host-capability-snapshot"),
+        ):
+            value = load(FIXTURES / fixture)
+            validator = self.validator(part)
+            validator.validate(value)
+            value["observed_at"] = "2026-99-99T99:99:99Z"
+            self.assert_invalid(validator, value)
+        with mock.patch.dict(CHECKER.checkers, {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "date-time checker unavailable"):
+                type(self).setUpClass()
 
     def validator(self, name):
         return Draft202012Validator(self.schemas[name], registry=self.registry, format_checker=CHECKER)
