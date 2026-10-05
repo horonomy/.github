@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+import re
 import unicodedata
 
 # Ordering is the contract's rule, not a presentation choice, so it is reused
@@ -293,9 +294,34 @@ def cluster_width(cluster: str) -> int:
     return max(total, 1)
 
 
+# Select Graphic Rendition only -- `ESC [ <params> m`. Deliberately not the
+# general CSI pattern: SGR is the one escape this module emits and the only one
+# that is reliably zero-width. A cursor-movement or erase sequence changes where
+# the next character lands, so silently charging it nothing would be a worse
+# answer than charging it for its bytes.
+_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_sgr(text: str) -> str:
+    """`text` without the colour sequences, which is what a reader actually sees.
+
+    The one place that knowledge lives, so a coloured string and its plain
+    equivalent cannot measure differently.
+    """
+    return _SGR_RE.sub("", text)
+
+
 def display_width(text: str) -> int:
-    """Terminal columns `text` may occupy, by the conservative rule above."""
-    return sum(cluster_width(cluster) for cluster in grapheme_clusters(text))
+    """Terminal columns `text` may occupy, by the conservative rule above.
+
+    Colour sequences are charged nothing, because they occupy nothing. This
+    matters more than it sounds: every layout decision in this module measures
+    an *already-rendered* string, so if an SGR sequence were charged for its
+    bytes a coloured reading would measure roughly ten columns wider than it
+    draws, and the fit ladder would shed readings to make room for width that
+    was never on the screen.
+    """
+    return sum(cluster_width(cluster) for cluster in grapheme_clusters(strip_sgr(text)))
 
 
 ELLIPSIS = "..."
@@ -311,11 +337,19 @@ def truncate_to_width(text: str, budget: int, *, ellipsis: str = ELLIPSIS) -> st
     Returns `""` when the budget cannot even hold the ellipsis, because a bare
     `...` conveys nothing and a partial cluster conveys mojibake. The caller's
     degradation ladder is the right place to recover from that, not here.
+
+    Shortening is done on the *visible* text, so a string that already carries
+    colour comes back plain rather than cut through the middle of an escape
+    sequence or left with its opening sequence and no reset — either of which
+    would spill one reading's colour across the rest of the user's line. Callers
+    inside this module colour after truncating and never hit this; it is the
+    behaviour for an outside caller that cannot be a corruption.
     """
     if budget <= 0:
         return ""
     if display_width(text) <= budget:
         return text
+    text = strip_sgr(text)
     marker_width = display_width(ellipsis)
     if marker_width >= budget:
         return ""
