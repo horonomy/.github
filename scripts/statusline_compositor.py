@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import dataclasses
+import enum
 import hashlib
 import json
 import os
@@ -116,6 +117,136 @@ class ProviderEntry:
     timeout_ms: int
 
 
+class ColorPreference(enum.Enum):
+    """What the user asked for, as distinct from what the terminal can do.
+
+    `AUTO` is the default and means "decide from the environment". The three
+    explicit values exist for the cases detection cannot get right from inside a
+    captured process: a user whose terminal renders 256-colour sequences as
+    literal text, and a user who wants the emphasis on a surface we would not
+    have guessed.
+
+    Unrecognised input resolves to `NEVER`, which is the opposite of how `mode`
+    and `depth` fall back. Those two decide how the line *looks* and an
+    unreadable line is worse than an ignored preference, so they fall back to a
+    working default. Colour decides only emphasis on a line that is already
+    complete in words, so the cost of falling back to "off" is nothing a reader
+    needs, and the cost of falling back to "on" is `ESC[32m` printed literally
+    into the prompt of whoever typoed it.
+    """
+
+    AUTO = "auto"
+    NEVER = "never"
+    ANSI16 = "ansi16"
+    ANSI256 = "ansi256"
+
+    @classmethod
+    def parse(cls, value: object) -> "ColorPreference":
+        if value is None:
+            return cls.AUTO
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, str):
+            name = value.strip().lower().replace("-", "_")
+            for member in cls:
+                if member.value == name:
+                    return member
+            # The spellings a reader would reasonably write for "off" and "on".
+            # `always` resolves to the conservative rung rather than the rich one:
+            # 16-colour sequences render on everything that renders colour at all.
+            if name in ("no", "off", "false", "none"):
+                return cls.NEVER
+            if name in ("yes", "on", "true", "always", "ansi"):
+                return cls.ANSI16
+        return cls.NEVER
+
+
+# The environment variables that decide capability, and what each one is evidence
+# of. Kept here rather than inline because three of the four are conventions this
+# module did not invent and a reader should be able to see all of them at once.
+#
+# `NO_COLOR` (https://no-color.org) is honoured whenever it is present and
+# non-empty, ahead of the registry's own preference. It is the user's accessibility
+# switch and the registry is a per-install cosmetic setting; a reader who exported
+# `NO_COLOR` because escape sequences are unreadable to them is not asking for a
+# per-product exception. `TERM=dumb` is honoured the same way for a simpler reason:
+# it is not a preference at all, it is the terminal saying it cannot.
+NO_COLOR_ENV = "NO_COLOR"
+TERM_ENV = "TERM"
+COLORTERM_ENV = "COLORTERM"
+# Claude Code sets this in the statusline command's environment. It is the one
+# piece of evidence that makes a non-TTY destination still worth colouring: the
+# host captures our stdout -- so `isatty` is always false here -- and renders what
+# we return into a terminal that does take escapes. Without this, the correct
+# answer for a captured stream is "no colour", and the statusline would be
+# permanently monochrome in exactly the surface this feature is for.
+HOST_ENV = "CLAUDECODE"
+
+# What `COLORTERM`/`TERM` have to say for the 256-colour rung to be used. Narrow
+# on purpose: the fallback is 16-colour, which renders everywhere colour renders
+# at all, so being wrong here costs an amber that becomes a bold yellow.
+_TRUECOLOR_VALUES = frozenset({"truecolor", "24bit"})
+_ANSI256_TERM_MARKERS = ("256color", "direct")
+
+
+def color_capability(
+    preference: ColorPreference,
+    environ: "dict[str, str] | None" = None,
+    stream: object = None,
+) -> render.ColorCapability:
+    """How much colour may actually be emitted, given preference and environment.
+
+    The order is: the two refusals that are not preferences, then the explicit
+    preference, then detection. `NO_COLOR` and `TERM=dumb` come first because one
+    is an accessibility opt-out and the other is a statement of incapability, and
+    neither is something a registry written months earlier should be able to
+    overrule.
+
+    Detection treats a real TTY and a Claude Code capture as equally colourable,
+    and everything else as not. A pipe into a file, a `$(...)`, a test harness
+    reading our stdout -- those are destinations where an escape sequence becomes
+    literal text in whatever reads them next, which is how a colour feature turns
+    into corrupted evidence in a bug report.
+    """
+    env = os.environ if environ is None else environ
+    if env.get(NO_COLOR_ENV):
+        return render.ColorCapability.NONE
+    if (env.get(TERM_ENV) or "").strip().lower() == "dumb":
+        return render.ColorCapability.NONE
+    if preference is ColorPreference.NEVER:
+        return render.ColorCapability.NONE
+    if preference is ColorPreference.ANSI16:
+        return render.ColorCapability.ANSI16
+    if preference is ColorPreference.ANSI256:
+        return render.ColorCapability.ANSI256
+    if not (_is_a_terminal(stream) or env.get(HOST_ENV)):
+        return render.ColorCapability.NONE
+    return _richest_rung(env)
+
+
+def _is_a_terminal(stream: object) -> bool:
+    """Whether `stream` is a terminal, treating an unanswerable question as no.
+
+    A stream object that cannot be asked -- a `StringIO` in a test, a wrapper
+    without the method -- is not evidence of a terminal, and guessing yes would
+    put escape sequences into the one place they are hardest to notice.
+    """
+    try:
+        return bool(stream is not None and stream.isatty())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _richest_rung(env: "dict[str, str]") -> render.ColorCapability:
+    """The best colour rung the environment claims, defaulting to the safe one."""
+    if (env.get(COLORTERM_ENV) or "").strip().lower() in _TRUECOLOR_VALUES:
+        return render.ColorCapability.ANSI256
+    term = (env.get(TERM_ENV) or "").strip().lower()
+    if any(marker in term for marker in _ANSI256_TERM_MARKERS):
+        return render.ColorCapability.ANSI256
+    return render.ColorCapability.ANSI16
+
+
 @dataclasses.dataclass(frozen=True)
 class Registry:
     """The read model of Horonom-owned statusline state.
@@ -132,6 +263,11 @@ class Registry:
     depth: render.InformationDepth
     width_budget: int | None
     deadline_ms: int
+    # The *preference*, not the capability: the capability depends on the
+    # environment and the output stream, which are known at render time and not
+    # when this document was written. Defaulted so a registry predating the field
+    # reads as `auto` rather than failing to parse.
+    color: ColorPreference = ColorPreference.AUTO
 
 
 def state_home() -> pathlib.Path:
@@ -238,12 +374,12 @@ def _parse_upstream_command(upstream: object) -> str | None:
     return command
 
 
-def _parse_presentation(presentation: object) -> tuple[object, object, int | None]:
-    """The raw mode and depth preferences, and the validated width budget.
+def _parse_presentation(presentation: object) -> tuple[object, object, int | None, object]:
+    """The raw mode, depth and colour preferences, and the validated width budget.
 
-    Returns mode and depth unvalidated on purpose — `parse_registry` hands them
-    to parsers that fall back rather than refuse, for the reason given there. The
-    width is validated here because a nonsensical budget is not a cosmetic
+    Returns mode, depth and colour unvalidated on purpose — `parse_registry` hands
+    them to parsers that fall back rather than refuse, for the reason given there.
+    The width is validated here because a nonsensical budget is not a cosmetic
     problem: it decides how much gets dropped from the line.
     """
     if not isinstance(presentation, dict):
@@ -251,7 +387,12 @@ def _parse_presentation(presentation: object) -> tuple[object, object, int | Non
     width = presentation.get("width_budget")
     if width is not None and (isinstance(width, bool) or not isinstance(width, int) or width < 1):
         raise RegistryError("presentation.width_budget must be a positive integer or absent")
-    return presentation.get("mode"), presentation.get("depth"), width
+    return (
+        presentation.get("mode"),
+        presentation.get("depth"),
+        width,
+        presentation.get("color"),
+    )
 
 
 def parse_registry(payload: object) -> Registry:
@@ -292,7 +433,7 @@ def parse_registry(payload: object) -> Registry:
     if len(identifiers) != len(set(identifiers)):
         raise RegistryError("provider ids must be unique in the registry")
 
-    mode, depth, width = _parse_presentation(payload.get("presentation", {}))
+    mode, depth, width, color = _parse_presentation(payload.get("presentation", {}))
 
     return Registry(
         upstream_command=upstream_command,
@@ -311,6 +452,9 @@ def parse_registry(payload: object) -> Registry:
         depth=render.InformationDepth.parse(depth),
         width_budget=width,
         deadline_ms=_bounded_ms(payload, "deadline_ms", DEFAULT_DEADLINE_MS, MAX_DEADLINE_MS),
+        # Falls back to *off* rather than to the default, unlike the two above.
+        # See `ColorPreference.parse` for why the asymmetry is the safe direction.
+        color=ColorPreference.parse(color),
     )
 
 
@@ -724,6 +868,10 @@ def _render(reader: object, writer: object) -> None:
             mode=registry.mode,
             width_budget=registry.width_budget,
             depth=registry.depth,
+            # Resolved here, at the one point that has both the registry and the
+            # stream we are about to write to. The renderer is pure and may not
+            # look at either.
+            color=color_capability(registry.color, stream=writer),
         )
     except Exception as exc:  # noqa: BLE001
         # The broadest catch in this module, and deliberately so: the first
