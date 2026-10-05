@@ -229,8 +229,8 @@
       "provider_command": "libra-governor statusline provider",
       "provider_version": "0.0.2",
       "product_repo": "libra-governor",
-      "product_repo_commit": "428857eb89a91cfa241dc7e5fbed5c3c379204cc",
-      "captured_at": "2026-10-01T05:50:36Z"
+      "product_repo_commit": "273c0cb4ffc7bea9e2cbff847b6ccab66331c452",
+      "captured_at": "2026-10-05T12:03:42Z"
     },
     "libra/active_no_estimate": {
       "product": "libra",
@@ -240,8 +240,8 @@
       "provider_command": "libra-governor statusline provider",
       "provider_version": "0.0.2",
       "product_repo": "libra-governor",
-      "product_repo_commit": "428857eb89a91cfa241dc7e5fbed5c3c379204cc",
-      "captured_at": "2026-10-01T05:50:36Z"
+      "product_repo_commit": "273c0cb4ffc7bea9e2cbff847b6ccab66331c452",
+      "captured_at": "2026-10-05T12:03:42Z"
     },
     "libra/active_with_estimate": {
       "product": "libra",
@@ -251,8 +251,8 @@
       "provider_command": "libra-governor statusline provider",
       "provider_version": "0.0.2",
       "product_repo": "libra-governor",
-      "product_repo_commit": "428857eb89a91cfa241dc7e5fbed5c3c379204cc",
-      "captured_at": "2026-10-01T05:50:36Z"
+      "product_repo_commit": "273c0cb4ffc7bea9e2cbff847b6ccab66331c452",
+      "captured_at": "2026-10-05T12:03:42Z"
     },
     "libra/budget_exhausted": {
       "product": "libra",
@@ -262,8 +262,30 @@
       "provider_command": "libra-governor statusline provider",
       "provider_version": "0.0.2",
       "product_repo": "libra-governor",
-      "product_repo_commit": "428857eb89a91cfa241dc7e5fbed5c3c379204cc",
-      "captured_at": "2026-10-01T05:50:36Z"
+      "product_repo_commit": "273c0cb4ffc7bea9e2cbff847b6ccab66331c452",
+      "captured_at": "2026-10-05T12:03:42Z"
+    },
+    "libra/budget_pressure_caution": {
+      "product": "libra",
+      "case": "budget_pressure_caution",
+      "route": "staged-store",
+      "how": "A settled required-work reservation taking utilization into the daemon's caution band, read back by its own headroom arithmetic.",
+      "provider_command": "libra-governor statusline provider",
+      "provider_version": "0.0.2",
+      "product_repo": "libra-governor",
+      "product_repo_commit": "273c0cb4ffc7bea9e2cbff847b6ccab66331c452",
+      "captured_at": "2026-10-05T12:05:18Z"
+    },
+    "libra/budget_pressure_warning": {
+      "product": "libra",
+      "case": "budget_pressure_warning",
+      "route": "staged-store",
+      "how": "The same, settled higher so the daemon classifies the utilization as its warning band.",
+      "provider_command": "libra-governor statusline provider",
+      "provider_version": "0.0.2",
+      "product_repo": "libra-governor",
+      "product_repo_commit": "273c0cb4ffc7bea9e2cbff847b6ccab66331c452",
+      "captured_at": "2026-10-05T12:05:45Z"
     },
     "libra/escalated_awaiting_approval": {
       "product": "libra",
@@ -273,8 +295,8 @@
       "provider_command": "libra-governor statusline provider",
       "provider_version": "0.0.2",
       "product_repo": "libra-governor",
-      "product_repo_commit": "428857eb89a91cfa241dc7e5fbed5c3c379204cc",
-      "captured_at": "2026-10-01T05:50:37Z"
+      "product_repo_commit": "273c0cb4ffc7bea9e2cbff847b6ccab66331c452",
+      "captured_at": "2026-10-05T12:03:42Z"
     },
     "libra/idle": {
       "product": "libra",
@@ -284,8 +306,8 @@
       "provider_command": "libra-governor statusline provider",
       "provider_version": "0.0.2",
       "product_repo": "libra-governor",
-      "product_repo_commit": "428857eb89a91cfa241dc7e5fbed5c3c379204cc",
-      "captured_at": "2026-10-01T05:51:50Z"
+      "product_repo_commit": "273c0cb4ffc7bea9e2cbff847b6ccab66331c452",
+      "captured_at": "2026-10-05T12:03:42Z"
     },
     "libra/no_reading_daemon_unreachable": {
       "product": "libra",
@@ -295,8 +317,8 @@
       "provider_command": "libra-governor statusline provider",
       "provider_version": "0.0.2",
       "product_repo": "libra-governor",
-      "product_repo_commit": "428857eb89a91cfa241dc7e5fbed5c3c379204cc",
-      "captured_at": "2026-10-01T05:50:36Z"
+      "product_repo_commit": "273c0cb4ffc7bea9e2cbff847b6ccab66331c452",
+      "captured_at": "2026-10-05T12:03:42Z"
     }
   },
   "unreachable_states": {
