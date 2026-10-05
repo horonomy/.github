@@ -117,6 +117,8 @@ EXPECTED_CASES = {
             "active_no_estimate",
             "active_with_estimate",
             "active_long_estimate",
+            "budget_pressure_caution",
+            "budget_pressure_warning",
             "budget_exhausted",
             "escalated_awaiting_approval",
             "no_reading_daemon_unreachable",
@@ -695,12 +697,18 @@ class LibraClearTest(unittest.TestCase):
     def test_the_schedule_expectation_reaches_clear_with_its_quantile_named(self) -> None:
         # `5d4h` alone would be a span with no claim attached. The Founder's shape
         # is `P90 5d4h`, and the quantile is the part that makes it a commitment.
-        expected = {"active_with_estimate": "P90 6s", "active_long_estimate": "P90 5d4h"}
-        for case, phrase in expected.items():
+        #
+        # `active_with_estimate` is matched as a pattern rather than a literal
+        # because its span is a quantile over a receipt the capture *measured* --
+        # a real four-second hold lands on five or six seconds depending on the
+        # machine, so a pinned literal would make a correct re-capture fail. What
+        # has to survive is the shape: a named quantile with a span attached.
+        expected = {"active_with_estimate": r"P90 \ds", "active_long_estimate": r"P90 5d4h"}
+        for case, pattern in expected.items():
             item = payload(f"libra/{case}")
             with self.subTest(fixture=item.name):
-                self.assertIn(phrase, text(item.status, CLEAR))
-                self.assertIn(phrase, text(item.status, DETAIL))
+                self.assertRegex(text(item.status, CLEAR), pattern)
+                self.assertRegex(text(item.status, DETAIL), pattern)
 
     def test_the_budget_posture_keeps_the_axis_it_arrived_with(self) -> None:
         # `53%` could mean used or left, which are opposite readings of the same

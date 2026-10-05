@@ -987,6 +987,7 @@ class WireParsingTest(unittest.TestCase):
                     "order_hint": 3,
                     "clear_role": "posture",
                     "fresh_for_seconds": 86400,
+                    "semantic_state": "caution",
                 }
             ],
         )

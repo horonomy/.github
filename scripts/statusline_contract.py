@@ -135,6 +135,60 @@ class SegmentState(enum.Enum):
         return self not in (SegmentState.NEUTRAL, SegmentState.UNKNOWN)
 
 
+class SemanticState(enum.Enum):
+    """How much pressure or risk one reading carries, as a token, never a colour.
+
+    `SegmentState` answers "which glyph", and that is a different question from
+    "how alarming". Libra's budget segment is the case that separates them: its
+    `state` is `neutral` in every healthy posture, because a budget share is a
+    posture and not a health claim, yet a task that has drawn 92% of its
+    envelope is in trouble and a task that has drawn 4% is not. Deriving the
+    second answer from the first would make those two indistinguishable.
+
+    A provider declares this when it knows something the host cannot compute —
+    a utilisation band, a verdict's standing — and leaves it unset otherwise,
+    in which case the host derives a token from `state` and `clear_role`
+    (`statusline_render.semantic_tone`). Either way what crosses the wire is
+    this enum: a provider that shipped its own ANSI would be one more place for
+    two products to disagree about what "warning" looks like, and would be
+    unrenderable in the plain, `NO_COLOR` and JSON surfaces that must carry the
+    same meaning. The palette, the 16-colour fallback and the monochrome
+    fallback are all the renderer's.
+
+    `INFO` is the member worth being careful about. It is for a reading that is
+    live, deliberate and worth noticing without being good news — Fornax
+    `observing`, Circinus shadow mode. Collapsing it into `SAFE` is how
+    "something is watching" starts reading as "something has been verified".
+    `UNAVAILABLE` is the absence of a reading, which must never look like
+    `SAFE` either. `NEUTRAL` is context that carries no pressure at all and is
+    deliberately rendered without emphasis of any kind.
+    """
+
+    SAFE = "safe"
+    INFO = "info"
+    CAUTION = "caution"
+    WARNING = "warning"
+    CRITICAL = "critical"
+    UNAVAILABLE = "unavailable"
+    NEUTRAL = "neutral"
+
+    @property
+    def is_reassuring(self) -> bool:
+        """Whether this token would let a reader stop looking at the line.
+
+        The three that would are the three a stale or unavailable reading must
+        not be allowed to keep, which is the one host-owned demotion the
+        renderer applies over a provider's own declaration. A token of
+        `CAUTION` or worse survives staleness untouched: an alarm nobody has
+        refreshed is still the worst thing known.
+        """
+        return self in (
+            SemanticState.SAFE,
+            SemanticState.INFO,
+            SemanticState.NEUTRAL,
+        )
+
+
 class Confidence(enum.Enum):
     """How much a producer trusts a value it computed without confirmation.
 
@@ -713,6 +767,12 @@ class Segment:
     # minutes is stale. A shared host guess would be one number applied to a
     # security verification and a policy decision alike.
     fresh_for_seconds: int | None = None
+    # How much pressure this reading carries, when the product knows something
+    # the host cannot derive from `state` -- a utilisation band, a verdict's
+    # standing. `None` means "not declared", and the host answers it with a
+    # documented derivation rather than with `SAFE`: an undeclared reading is
+    # not a reassuring one.
+    semantic_state: SemanticState | None = None
 
     @property
     def is_stale(self) -> bool:
@@ -749,6 +809,10 @@ class Segment:
         require_bounded_int(self.order_hint, "segment.order_hint", MAX_ORDER_HINT)
         if self.clear_role is not None and not isinstance(self.clear_role, ClearRole):
             raise ContractViolation("segment.clear_role must be a ClearRole")
+        if self.semantic_state is not None and not isinstance(
+            self.semantic_state, SemanticState
+        ):
+            raise ContractViolation("segment.semantic_state must be a SemanticState")
         self._validate_freshness()
 
     def _validate_freshness(self) -> None:
@@ -963,6 +1027,15 @@ class ProviderStatus:
         5d4h` beside an unreachable daemon is the same false-currency claim a
         count would be.
 
+        Nor a `semantic_state` of `safe` or `info`. Both assert that a live
+        reading was taken — `safe` that it came back good, `info` that something
+        is actively watching — so either one beside an unreachable daemon is the
+        false all-clear in its most direct form, and it would be rendered in the
+        same reassuring colour as a genuinely healthy reading. The pressure
+        tokens are left alone: a provider that went down *while* critical is
+        entitled to keep saying so. So is `neutral`, which claims nothing, and
+        `unavailable`, which is the honest token for exactly this state.
+
         `age_seconds` is deliberately still allowed, and it is the one field that
         should be: "last read two hours ago, unavailable now" is a true and
         useful thing to say, and it is how a reader tells a provider that just
@@ -993,6 +1066,12 @@ class ProviderStatus:
                     f"availability {self.availability.value!r} cannot carry a "
                     "duration; an estimate about work in progress cannot be "
                     "current when the state behind it could not be read"
+                )
+            if segment.semantic_state in (SemanticState.SAFE, SemanticState.INFO):
+                raise ContractViolation(
+                    f"availability {self.availability.value!r} cannot carry a "
+                    f"{segment.semantic_state.value!r} semantic_state; a provider "
+                    "that could not read its state has nothing to call safe"
                 )
 
     def _validate_clear_authority(self) -> None:
@@ -1163,6 +1242,8 @@ def _segment_to_wire(segment: Segment) -> dict:
         payload["order_hint"] = segment.order_hint
     if segment.clear_role is not None:
         payload["clear_role"] = segment.clear_role.value
+    if segment.semantic_state is not None:
+        payload["semantic_state"] = segment.semantic_state.value
     return payload
 
 
@@ -1259,6 +1340,27 @@ def _parse_clear_role(value: object) -> ClearRole | None:
     return None
 
 
+def _parse_semantic_state(value: object) -> SemanticState | None:
+    """Parse an optional `semantic_state`, treating anything unrecognised as undeclared.
+
+    Same policy as `_parse_clear_role`, for the same reason: refusing the whole
+    payload would lose a provider's health claim over a presentation field, and
+    there is no `unknown` member to degrade to because every member asserts
+    something specific about pressure. Guessing would be the worst of the three
+    -- an unrecognised token landing on `SAFE` is exactly the failure this field
+    exists to prevent.
+
+    Undeclared is a state the host already answers with a documented derivation
+    from `state` and `clear_role`, so an unreadable token resolves to that.
+    """
+    if value is None:
+        return None
+    for member in SemanticState:
+        if member.value == value:
+            return member
+    return None
+
+
 def _parse_clear_authority(value: object) -> ClearAuthority:
     """Parse `clear_authority`, degrading anything unrecognised to `HOST`.
 
@@ -1319,6 +1421,7 @@ def _segment_from_wire(payload: object, index: int) -> Segment:
         order_hint=payload.get("order_hint", 0),
         clear_role=_parse_clear_role(payload.get("clear_role")),
         fresh_for_seconds=payload.get("fresh_for_seconds"),
+        semantic_state=_parse_semantic_state(payload.get("semantic_state")),
     )
 
 

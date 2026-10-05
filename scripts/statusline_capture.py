@@ -1095,13 +1095,22 @@ class LibraStage:
         run(["pkill", "-f", str(self.state)], timeout=30, check=False)
         time.sleep(1)
 
-    def exhaust_budget(self) -> None:
-        """Settle a reservation that consumes the whole required-work envelope.
+    def spend_budget(self, fraction: float = 1.0) -> None:
+        """Settle a reservation consuming ``fraction`` of the required-work envelope.
 
         ``staged-store``: spending a 150k-token budget for real would mean
         running a real multi-hour task. The row is the same shape the daemon
         writes, and the daemon's own ``available()`` arithmetic then reports
-        the exhaustion.
+        the resulting headroom.
+
+        ``fraction`` is how the pressure-band fixtures are reached (HORO-1719).
+        A band is a function of utilization, so the only thing that has to vary
+        between a caution capture and a critical one is how much of the envelope
+        a settled row consumes — the staging, the arithmetic and the serializer
+        are identical, which is what makes the four captures comparable. The
+        amount is still spent through the product's own ledger, so the band on
+        the wire is the product's own classification of its own headroom and not
+        a number this script chose.
         """
         with contextlib.closing(sqlite3.connect(self.ledger)) as conn:
             row = conn.execute(
@@ -1117,23 +1126,25 @@ class LibraStage:
             if session is None:
                 raise CaptureFailed("no reservation to copy a session from")
             now = utc_now()
+            spent = float(hard_limit) * fraction
             # `ReservationLedger::headroom` is `hard_limit - SUM(settled_amount
             # where state='settled') - SUM(amount where state='active')`, so a
             # single settled row at the hard limit takes the envelope to zero
-            # by the product's own arithmetic rather than by a flag we invent.
+            # by the product's own arithmetic rather than by a flag we invent,
+            # and a row below the hard limit lands the headroom proportionally.
             conn.execute(
                 "insert into reservations (id, task_id, session_id, class, resource_kind, "
                 "  amount, drawn_from_reserve, state, settled_amount, usage_known, "
                 "  idempotency_key, created_at, expires_at, settled_at) "
                 "values (?, ?, ?, 'required_work', ?, ?, 0.0, 'settled', ?, 1, ?, ?, ?, ?)",
                 (
-                    "capture-exhausting-reservation",
+                    "capture-spending-reservation",
                     task_id,
                     session[0],
                     resource_kind,
-                    float(hard_limit),
-                    float(hard_limit),
-                    "capture:exhaust",
+                    spent,
+                    spent,
+                    "capture:spend",
                     now,
                     now,
                     now,
@@ -1181,9 +1192,19 @@ def capture_libra(work: pathlib.Path, only: set[str] | None) -> list[Capture]:
         ("active_no_estimate", "live-cli", "A real UserPromptSubmit preflight admitting the very first task: no local history, so no duration bound."),
         ("active_with_estimate", "live-cli", "One real task governed to completion, then a second admitted: the estimate is a real quantile over a real receipt."),
         ("active_long_estimate", "staged-store", "The same, with the real receipt's measured duration rewritten to a multi-day span — the Founder-scale shape no bounded live run reaches."),
+        ("budget_pressure_caution", "staged-store", "A settled required-work reservation taking utilization into the daemon's caution band, read back by its own headroom arithmetic."),
+        ("budget_pressure_warning", "staged-store", "The same, settled higher so the daemon classifies the utilization as its warning band."),
         ("budget_exhausted", "staged-store", "A settled required-work reservation consuming the whole envelope, read back by the daemon's own headroom arithmetic."),
         ("escalated_awaiting_approval", "staged-store", "Three recorded auto-replans, so the daemon's hysteresis requires human approval before the next one."),
     ]
+
+    # How much of the envelope each pressure capture settles. The numbers are
+    # fractions rather than target percentages because the admitted task holds
+    # an active reservation of its own that also counts against the envelope:
+    # what the band reflects is total utilization, so the fraction settled here
+    # is only part of it, and the capture is validated by the band the product
+    # puts on the wire rather than by arithmetic repeated in this script.
+    spend = {"budget_pressure_caution": 0.15, "budget_pressure_warning": 0.78, "budget_exhausted": 1.0}
 
     for case, route, how in specs:
         if not wanted(case):
@@ -1203,8 +1224,8 @@ def capture_libra(work: pathlib.Path, only: set[str] | None) -> list[Capture]:
                     stage.preflight("continue the capture fixture")
                 else:
                     stage.preflight()
-                    if case == "budget_exhausted":
-                        stage.exhaust_budget()
+                    if case in spend:
+                        stage.spend_budget(spend[case])
                     else:
                         stage.escalate_replans()
                     # `Status` returns the daemon's in-memory summary; only the

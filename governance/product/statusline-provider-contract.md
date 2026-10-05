@@ -91,6 +91,7 @@ allowlist. There is deliberately **no free-text field**: see
 | `order_hint` | no | int | 0–1000 within the provider. |
 | `clear_role` | no | enum | `exception` / `posture` / `vital` / `supporting`. See [Clear-mode selection](#clear-mode-selection). |
 | `fresh_for_seconds` | no | int | How long this reading stays current. Requires `age_seconds`. |
+| `semantic_state` | no | enum | `safe` / `info` / `caution` / `warning` / `critical` / `unavailable` / `neutral`. How much pressure this reading carries. See [Semantic state](#semantic-state). |
 
 `duration_seconds` / `duration_label` were added for HORO-1569 under
 `contract_version` 1: both are optional and host-side, which the [version
@@ -101,7 +102,8 @@ table above.
 `clear_role` and `fresh_for_seconds` (HORO-1626) and `clear_authority`
 (HORO-1631) arrived the same way, for the same reason one level up: a product
 declares which of its facts earns the one-line summary and when that fact goes
-stale, and the host still owns every character of the rendering.
+stale, and the host still owns every character of the rendering. `semantic_state`
+(HORO-1719) is the same division applied to emphasis.
 
 ### Truthfulness rules the host enforces
 
@@ -130,6 +132,11 @@ cannot reach the renderer:
 - `confidence` and `confidence_of` must be set together. A bare
   `high`/`medium`/`low` reads as risk or priority; Libra's is *preflight
   confidence*, and the contract will not let that be ambiguous.
+- The same provider cannot carry a `safe` or `info` `semantic_state`. Both assert
+  that a live reading was taken — `safe` that it came back good, `info` that
+  something is actively watching — so either beside an unreachable daemon is the
+  false all-clear in its most direct form, and it would be rendered in the colour
+  a reader trusts most.
 - Not-available states are never silent. An empty `segments` array renders as
   nothing, and nothing reads as all-clear, so a provider that cannot answer
   still emits one segment saying so with a bounded reason.
@@ -193,6 +200,64 @@ An unrecognised `clear_authority` value degrades to `host`, and an unrecognised
 so a future provider loses a presentation hint rather than its whole health
 claim. Declaring authority relaxes no other rule: a declared `exception` on an
 unavailable provider still cannot carry a `count`.
+
+### Semantic state
+
+`state` answers *which glyph*; `semantic_state` answers *how alarming*. They are
+separate fields because Libra separates them: its budget segment is `neutral` in
+every healthy posture — a budget share is a posture, not a health claim — and yet
+a task that has drawn 92% of its envelope is in trouble while one that has drawn
+4% is not. Deriving emphasis from `state` makes those two indistinguishable.
+
+The vocabulary is a pressure axis, and the two members in the middle of it are
+the ones products get wrong:
+
+| Token | Means | Not |
+|---|---|---|
+| `safe` | A live reading came back good. | A reading nobody took. |
+| `info` | Something is deliberately happening and is worth noticing. | Good news. Fornax `observing` and Circinus shadow mode are *stances*, not verdicts. |
+| `caution` | Pressure is building; nothing is blocked. | A warning. |
+| `warning` | Action is likely needed, or something *would* have happened. | An executed outcome. Circinus's would-block lives here. |
+| `critical` | The thing happened: an envelope is consumed, a claim is contradicted, a block was enforced. | A forecast. |
+| `unavailable` | No reading could be taken, or the last one has expired. | `safe`. This is the whole reason the token exists. |
+| `neutral` | Context carrying no pressure at all, rendered with no emphasis. | Reassurance. |
+
+**A product declares a band only for the thing a band can describe.** Libra's
+bands are a function of *utilisation of the active task's envelope*, so a payload
+with no task under governance carries no budget segment to tone at all — an idle
+governor at "100% remaining" of a default it is not spending against would read
+as a healthy task that does not exist. The host cannot police this, because it
+never sees which budget scope a reading came from; it is the product's rule, and
+the host's half of it is that emphasis is **never** derived from a label. `38%
+budget left` is 61% pressure, and anything that reads the number a user can see
+lands two rungs below where the product put it.
+
+Two caps the host applies over whatever a provider declared, which a provider
+cannot opt out of:
+
+- a `hypothetical` reading may not reach `critical` — the top of the scale is for
+  something that happened, and a shadow-mode would-block is precisely something
+  that did not. It renders as `warning`, distinct from both an enforced block
+  above it and a would-allow below;
+- a stale or unreachable reading may not stay reassuring — `safe`, `info` and
+  `neutral` all let a reader stop looking, so they demote to `unavailable`.
+  `caution` and worse survive untouched: an alarm nobody has refreshed is still
+  the worst thing known, and dimming it is the one unsafe direction.
+
+What the host deliberately does **not** do is second-guess a product's severity.
+Circinus calls disconnected hooks `attention` and Fornax calls a contradicted
+claim `critical`; both come through as declared. Cross-product inconsistency in
+those judgements is a real open question (HORO-1651) and it stays visible rather
+than being colour-corrected into an agreement that was never reached.
+
+Colour itself is **supplemental everywhere**. A coloured line stripped of its
+escapes is byte-identical to the plain line at every mode, depth and width, so
+the words never depended on the colour arriving: no colour in the JSON surfaces,
+none when `NO_COLOR` is set or the stream is not a terminal, none by default, and
+a 16-colour terminal separates `caution` from `warning` by weight because it has
+no amber. A provider that emits its own ANSI is **refused**, not stripped —
+silently filtering it would leave that provider shipping a contract violation
+that appears to work.
 
 ### Scope is explicit
 

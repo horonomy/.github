@@ -99,6 +99,7 @@ import test_statusline_external_gate as external_gate
 import test_statusline_lifecycle as lifecycle_tests
 import test_statusline_performance as performance_tests
 import test_statusline_release_gate as gate
+import test_statusline_tone_gate as tone_gate
 
 # Guards proven clean once per run. The clean run exists to establish that a
 # failure under mutation is the mutation's doing; re-establishing that for every
@@ -459,9 +460,14 @@ def summarising_the_state_in_clears_own_words() -> object:
     """
     real = render.render_segment
 
-    def mutated(segment, mode, depth=render.InformationDepth.DETAIL):
+    # `**presentation` forwards whatever emphasis-only keywords the renderer has
+    # grown -- `color`, `live` -- without this stub having to know them. A stub
+    # that enumerated them would start raising `TypeError` the next time one is
+    # added, and a mutation that dies on a signature mismatch proves nothing about
+    # the guard it was meant to defeat.
+    def mutated(segment, mode, depth=render.InformationDepth.DETAIL, **presentation):
         if depth.shows_supporting_detail:
-            return real(segment, mode, depth)
+            return real(segment, mode, depth, **presentation)
         state = render._enum_value(segment.state)
         return f"{render.state_marker(state, mode)} {render.STATE_TEXT[state].title()}"
 
@@ -477,8 +483,8 @@ def a_summary_that_does_not_name_the_product() -> object:
     """
     real = render.provider_parts
 
-    def mutated(status, mode, depth=render.InformationDepth.DETAIL):
-        name, scope, readings = real(status, mode, depth)
+    def mutated(status, mode, depth=render.InformationDepth.DETAIL, **presentation):
+        name, scope, readings = real(status, mode, depth, **presentation)
         if depth.shows_supporting_detail:
             return name, scope, readings
         return "", scope, readings
@@ -510,8 +516,8 @@ def dropping_the_hypothetical_marker_from_the_summary() -> object:
     real = render.render_segment
     aside = f" [{render.HYPOTHETICAL_TEXT}]"
 
-    def mutated(segment, mode, depth=render.InformationDepth.DETAIL):
-        text = real(segment, mode, depth)
+    def mutated(segment, mode, depth=render.InformationDepth.DETAIL, **presentation):
+        text = real(segment, mode, depth, **presentation)
         if depth.shows_supporting_detail:
             return text
         return text.replace(aside, "")
@@ -563,8 +569,8 @@ def keeping_the_confidence_in_the_summary() -> object:
     """
     real = render.render_segment
 
-    def mutated(segment, mode, depth=render.InformationDepth.DETAIL):
-        text = real(segment, mode, depth)
+    def mutated(segment, mode, depth=render.InformationDepth.DETAIL, **presentation):
+        text = real(segment, mode, depth, **presentation)
         confidence = render._enum_value(getattr(segment, "confidence", None))
         if depth.shows_supporting_detail or confidence is None:
             return text
@@ -615,8 +621,8 @@ def telling_the_reader_which_explain_topic_to_open() -> object:
     """
     real = render.render_segment
 
-    def mutated(segment, mode, depth=render.InformationDepth.DETAIL):
-        text = real(segment, mode, depth)
+    def mutated(segment, mode, depth=render.InformationDepth.DETAIL, **presentation):
+        text = real(segment, mode, depth, **presentation)
         key = getattr(segment, "explain_key", None)
         if not depth.shows_supporting_detail or not key:
             return text
@@ -1341,6 +1347,130 @@ def declining_to_install_because_another_tool_manages_the_file() -> object:
         )
 
     return unittest.mock.patch.object(lifecycle, "plan_enable", mutated)
+
+
+def toning_a_budget_by_the_percentage_on_the_line() -> object:
+    """The band computed from the number the label shows, on correct thresholds.
+
+    The most likely version of this defect by a distance, because it needs no bad
+    judgement -- only the assumption that the host can see what the reader can.
+    The ladder here is the product's own, unchanged: above ninety is critical,
+    above seventy a warning, above fifty caution. What is wrong is the axis. A
+    budget label reports headroom and a band reports pressure, so reading `38%
+    budget left` as thirty-eight per cent of pressure lands two rungs below where
+    the product put it, and the one reading that exists to warn a user their work
+    is about to stop goes green at the point it starts mattering.
+
+    Routed back through the real function so the host's own caps still apply:
+    this is a mutation of where the band comes from, not of what is done with it.
+    """
+    real = render.semantic_tone
+
+    def mutated(segment, *, live=True):
+        label = getattr(segment, "label", "") or ""
+        head = label.split("%")[0]
+        if "%" not in label or not head.isdigit():
+            return real(segment, live=live)
+        percent = int(head)
+        if percent > 90:
+            band = contract.SemanticState.CRITICAL
+        elif percent > 70:
+            band = contract.SemanticState.WARNING
+        elif percent > 50:
+            band = contract.SemanticState.CAUTION
+        else:
+            band = contract.SemanticState.SAFE
+        return real(dataclasses.replace(segment, semantic_state=band), live=live)
+
+    return unittest.mock.patch.object(render, "semantic_tone", mutated)
+
+
+def reading_nothing_to_report_as_a_clean_bill_of_health() -> object:
+    """`INFO` folded into `SAFE`, because neither of them is a problem.
+
+    True, and beside the point. The two tones do not differ in severity, they
+    differ in what has been established: Fornax's empty store means nothing has
+    contradicted anything *yet*, and green reports that something was checked and
+    held. A reader who trusts a claim because the line was green has been told
+    something the product never said.
+
+    The same collapse quietly endorses Circinus's shadow mode, which is the other
+    stance this tone exists for -- a mode that is deliberately not enforcing is
+    worth noticing, and is not a safe state.
+    """
+    real = render.semantic_tone
+
+    def mutated(segment, *, live=True):
+        tone = real(segment, live=live)
+        if tone is contract.SemanticState.INFO:
+            return contract.SemanticState.SAFE
+        return tone
+
+    return unittest.mock.patch.object(render, "semantic_tone", mutated)
+
+
+def keeping_a_reassurance_nobody_can_refresh() -> object:
+    """The staleness cap deleted, with the declaration and the hypothetical cap kept.
+
+    A reimplementation rather than a disabled branch, because that is the shape it
+    takes: the cap looks like it is second-guessing the provider, and deleting it
+    reads as respecting the declaration. What survives is the last tone a dead
+    daemon managed to send. An unreachable Fornax keeps reporting verified, an
+    unreachable Circinus keeps reporting allow, and the reader's only signal that
+    the product stopped answering is the one thing the colour has overwritten.
+
+    This is the direction that cannot be allowed to fail safe-looking. The cap it
+    removes is the reason `UNAVAILABLE` exists as a tone at all.
+    """
+
+    def mutated(segment, *, live=True):
+        declared = getattr(segment, "semantic_state", None)
+        tone = declared if isinstance(declared, contract.SemanticState) else None
+        if tone is None:
+            state = render._enum_value(segment.state)
+            tone = render._DERIVED_TONE.get(state, contract.SemanticState.UNAVAILABLE)
+            if (
+                tone is contract.SemanticState.NEUTRAL
+                and getattr(segment, "clear_role", None) is contract.ClearRole.POSTURE
+            ):
+                tone = contract.SemanticState.INFO
+        if tone is contract.SemanticState.CRITICAL and getattr(segment, "hypothetical", False):
+            tone = contract.SemanticState.WARNING
+        return tone
+
+    return unittest.mock.patch.object(render, "semantic_tone", mutated)
+
+
+@contextlib.contextmanager
+def colouring_every_render_by_default():
+    """The renderer coloured unless a caller opts out, instead of asked to.
+
+    The refactor that arrives with the first reader who finds their line plain:
+    the capability was detected, so use it, and let whoever wants plain text pass
+    `NONE`. It is wrong in one place nobody looks -- `explain` quotes each
+    rendered reading into its JSON so a reader can match the line against the
+    decode, and it quotes them by calling the renderer without an opinion about
+    colour. The quoted text then carries escapes, and every consumer of that
+    document is parsing a colour it did not ask for out of a field that is
+    supposed to be the authoritative text.
+
+    The default is reversed rather than the argument ignored, so a caller that
+    does pass `NONE` is still honoured. That is what makes the defect survive
+    review: everything anyone thought to check still works.
+    """
+    rung = render.ColorCapability.ANSI256
+    real_segment = render.render_segment
+    real_provider = render.render_provider
+
+    def segment(*args, color=rung, **kwargs):
+        return real_segment(*args, color=color, **kwargs)
+
+    def provider(*args, color=rung, **kwargs):
+        return real_provider(*args, color=color, **kwargs)
+
+    with unittest.mock.patch.object(render, "render_segment", segment):
+        with unittest.mock.patch.object(render, "render_provider", provider):
+            yield
 
 
 class HarnessTest(MutationCase):
@@ -2088,6 +2218,48 @@ class ExternalCoexistenceTest(MutationCase):
             "test_installing_into_a_file_another_tool_already_manages",
             declining_to_install_because_another_tool_manages_the_file(),
             expect="manages this settings file",
+        )
+
+
+class SemanticPresentationTest(MutationCase):
+    """The four HORO-1719 defects, which all render as a line a reader accepts.
+
+    Nothing here crashes, nothing is dropped, and the text is correct in every
+    case -- only the colour is wrong, and colour is the one part of the line a
+    reader has no way to check. Three of the four make something look better than
+    it is, which is why they are the ones worth proving a test would notice.
+    """
+
+    def test_toning_a_budget_by_its_own_label_is_caught(self) -> None:
+        self.assert_guard_catches(
+            tone_gate.LibraPressureTest,
+            "test_a_reading_below_half_left_is_not_green",
+            toning_a_budget_by_the_percentage_on_the_line(),
+            expect="<SemanticState.SAFE: 'safe'> is not <SemanticState.CAUTION: 'caution'>",
+        )
+
+    def test_observing_rendered_as_verified_is_caught(self) -> None:
+        self.assert_guard_catches(
+            tone_gate.FornaxVerdictTest,
+            "test_observing_is_not_verification",
+            reading_nothing_to_report_as_a_clean_bill_of_health(),
+            expect="unexpectedly identical",
+        )
+
+    def test_an_unreadable_product_left_looking_healthy_is_caught(self) -> None:
+        self.assert_guard_catches(
+            tone_gate.UnreadableIsNotHealthyTest,
+            "test_no_payload_without_live_readings_tones_anything_reassuringly",
+            keeping_a_reassurance_nobody_can_refresh(),
+            expect="True is not false",
+        )
+
+    def test_colour_reaching_the_machine_readable_text_is_caught(self) -> None:
+        self.assert_guard_catches(
+            tone_gate.NoEscapeInMachineOutputTest,
+            "test_a_reading_quoted_into_json_is_rendered_without_colour",
+            colouring_every_render_by_default(),
+            expect="unexpectedly found in",
         )
 
 

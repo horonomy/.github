@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+import re
 import unicodedata
 
 # Ordering is the contract's rule, not a presentation choice, so it is reused
@@ -293,9 +294,34 @@ def cluster_width(cluster: str) -> int:
     return max(total, 1)
 
 
+# Select Graphic Rendition only -- `ESC [ <params> m`. Deliberately not the
+# general CSI pattern: SGR is the one escape this module emits and the only one
+# that is reliably zero-width. A cursor-movement or erase sequence changes where
+# the next character lands, so silently charging it nothing would be a worse
+# answer than charging it for its bytes.
+_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_sgr(text: str) -> str:
+    """`text` without the colour sequences, which is what a reader actually sees.
+
+    The one place that knowledge lives, so a coloured string and its plain
+    equivalent cannot measure differently.
+    """
+    return _SGR_RE.sub("", text)
+
+
 def display_width(text: str) -> int:
-    """Terminal columns `text` may occupy, by the conservative rule above."""
-    return sum(cluster_width(cluster) for cluster in grapheme_clusters(text))
+    """Terminal columns `text` may occupy, by the conservative rule above.
+
+    Colour sequences are charged nothing, because they occupy nothing. This
+    matters more than it sounds: every layout decision in this module measures
+    an *already-rendered* string, so if an SGR sequence were charged for its
+    bytes a coloured reading would measure roughly ten columns wider than it
+    draws, and the fit ladder would shed readings to make room for width that
+    was never on the screen.
+    """
+    return sum(cluster_width(cluster) for cluster in grapheme_clusters(strip_sgr(text)))
 
 
 ELLIPSIS = "..."
@@ -311,11 +337,19 @@ def truncate_to_width(text: str, budget: int, *, ellipsis: str = ELLIPSIS) -> st
     Returns `""` when the budget cannot even hold the ellipsis, because a bare
     `...` conveys nothing and a partial cluster conveys mojibake. The caller's
     degradation ladder is the right place to recover from that, not here.
+
+    Shortening is done on the *visible* text, so a string that already carries
+    colour comes back plain rather than cut through the middle of an escape
+    sequence or left with its opening sequence and no reset — either of which
+    would spill one reading's colour across the rest of the user's line. Callers
+    inside this module colour after truncating and never hit this; it is the
+    behaviour for an outside caller that cannot be a corruption.
     """
     if budget <= 0:
         return ""
     if display_width(text) <= budget:
         return text
+    text = strip_sgr(text)
     marker_width = display_width(ellipsis)
     if marker_width >= budget:
         return ""
@@ -447,6 +481,186 @@ def state_marker(state: str, mode: PresentationMode) -> str:
     if mode.is_compact and state in EMPHATIC_STATES:
         return f"{glyph} {STATE_TEXT[state]}"
     return glyph
+
+
+# ------------------------------------------------------------- semantic tones
+#
+# Colour, as the one supplement to a line that is already complete without it
+# (HORO-1719). Everything above this point is the meaning; everything here is
+# emphasis on meaning that is already spelled out in words, so every surface
+# that cannot carry colour -- a pipe, a plain mode, `NO_COLOR`, the JSON -- loses
+# nothing but the emphasis.
+#
+# Products never choose a colour. They declare a `SemanticState` or they declare
+# nothing and the host derives one, for the same reason iconography is host-owned:
+# two products independently picking a red is how a shared line stops being
+# readable, and a product that shipped ANSI would be unrenderable in four of the
+# five surfaces above.
+
+
+class ColorCapability(enum.Enum):
+    """How much colour the host has established the destination can carry.
+
+    Three rungs rather than a boolean because the useful palette changes shape
+    between them, not just in size. `ANSI256` can say amber, which is the one
+    colour that makes caution and warning separable at a glance; `ANSI16` cannot,
+    so it separates them by weight instead. Collapsing the two would mean either
+    sending a 256-colour sequence to a terminal that renders it as garbage, or
+    never using the distinction on the terminals that do.
+
+    `NONE` is the default everywhere in this module, so a caller that has not
+    established anything emits no escapes at all. That is the honest default: the
+    cost of being wrong in this direction is a line with no colour, and the cost
+    of being wrong in the other is literal `[32m` printed into the user's prompt.
+    """
+
+    NONE = "none"
+    ANSI16 = "ansi16"
+    ANSI256 = "ansi256"
+
+    @property
+    def emits_escapes(self) -> bool:
+        """Whether a renderer may put an escape sequence on the line."""
+        return self is not ColorCapability.NONE
+
+
+_SGR_RESET = "\x1b[0m"
+
+# Parameters only; the sequence is assembled in `tone_sgr`. The 16-colour column
+# uses the terminal's *own* palette rather than absolute RGB, so a reader on a
+# light theme gets their red and not ours.
+#
+# `warning` is the entry these two columns exist for. HORO-1719 asks for amber
+# where amber is available, which 256-colour has (208) and 16-colour does not --
+# and the fallback must still be distinguishable from `caution` or the band
+# between "approaching the limit" and "about to blow it" disappears. So the
+# 16-colour fallback keeps caution's hue and adds weight, which is a difference a
+# monochrome-but-bold terminal can also render.
+#
+# `neutral` is deliberately absent rather than mapped to an explicit default-colour
+# sequence. A reading that carries no pressure should be the thing on the line that
+# draws no eye at all, and emitting `ESC[39m` around it would both cost columns in
+# the JSON-adjacent surfaces and override a terminal theme that had already chosen.
+_TONE_SGR_ANSI16 = {
+    "safe": "32",  # green
+    "info": "36",  # cyan
+    "caution": "33",  # yellow
+    "warning": "1;33",  # bold yellow, standing in for an amber this rung lacks
+    "critical": "1;31",  # bold red
+    "unavailable": "2",  # dim, which is the absence of a reading rendered as such
+}
+
+_TONE_SGR_ANSI256 = dict(_TONE_SGR_ANSI16, warning="38;5;208")  # amber
+
+_TONE_SGR = {
+    ColorCapability.ANSI16: _TONE_SGR_ANSI16,
+    ColorCapability.ANSI256: _TONE_SGR_ANSI256,
+}
+
+# The host's answer when a provider declared no `semantic_state`. Keyed on the
+# contract state, which is the only pressure-adjacent thing every provider
+# already sends.
+#
+# `unknown` becomes `unavailable` rather than `neutral`: a provider that could not
+# read its own state is the reading most likely to be misread as fine, and the
+# emphasis a reader needs is "this is not an answer".
+_DERIVED_TONE = {
+    "ok": statusline_contract.SemanticState.SAFE,
+    "attention": statusline_contract.SemanticState.CAUTION,
+    "warn": statusline_contract.SemanticState.WARNING,
+    "critical": statusline_contract.SemanticState.CRITICAL,
+    "neutral": statusline_contract.SemanticState.NEUTRAL,
+    "unknown": statusline_contract.SemanticState.UNAVAILABLE,
+}
+
+
+def semantic_tone(
+    segment: object,
+    *,
+    live: bool = True,
+) -> statusline_contract.SemanticState:
+    """How much pressure one reading carries, as a token the palette can read.
+
+    A provider's own `semantic_state` wins, because it is the only party that can
+    know. Libra is the case: its budget segment is `neutral` in every healthy
+    posture, so nothing derivable from `state` can tell 92% drawn from 4% drawn,
+    and `38% left` must not go green merely because 38 is a small number — the
+    axis is utilisation, and the provider is who computes it.
+
+    Where nothing is declared, `_DERIVED_TONE` answers from the contract state,
+    with one addition: a `neutral` reading the provider declared its **posture**
+    becomes `INFO` rather than `NEUTRAL`. That is the stance a product is in —
+    Fornax `observing`, Circinus shadow mode — and it is live, deliberate and
+    worth noticing without being good news. Leaving it `NEUTRAL` is how "something
+    is watching" renders as indistinguishable from "nothing to report"; promoting
+    it to `SAFE` would be how it renders as "something has been verified". A
+    `neutral` reading in any other role is context and stays quiet.
+
+    Then two caps the host applies over whatever came back, which a provider
+    cannot opt out of:
+
+    - A **hypothetical** reading may not reach `CRITICAL`. The top of the scale is
+      reserved for something that happened, and Circinus's would-block in shadow
+      mode is precisely something that did not. It lands on `WARNING`, which keeps
+      it distinct from both an executed block above it and a would-allow below.
+    - A **stale or not-live** reading may not stay reassuring. `SAFE`, `INFO` and
+      `NEUTRAL` all let a reader stop looking, and an unrefreshed or unreachable
+      provider has not earned that; they demote to `UNAVAILABLE`. `CAUTION` and
+      worse survive untouched, because an alarm nobody has refreshed is still the
+      worst thing known and dimming it would be the one unsafe direction.
+
+    What this function deliberately does *not* do is second-guess a product's
+    severity. Circinus calls disconnected hooks `attention` and Fornax calls a
+    contradicted claim `critical`; both come through as declared. Any cross-product
+    inconsistency in those judgements (HORO-1651) stays visible here rather than
+    being colour-corrected into agreement, which would hide the disagreement
+    instead of resolving it.
+    """
+    declared = getattr(segment, "semantic_state", None)
+    tone = declared if isinstance(declared, statusline_contract.SemanticState) else None
+    if tone is None:
+        state = _enum_value(segment.state)
+        tone = _DERIVED_TONE.get(state, statusline_contract.SemanticState.UNAVAILABLE)
+        if (
+            tone is statusline_contract.SemanticState.NEUTRAL
+            and getattr(segment, "clear_role", None)
+            is statusline_contract.ClearRole.POSTURE
+        ):
+            tone = statusline_contract.SemanticState.INFO
+    if (
+        tone is statusline_contract.SemanticState.CRITICAL
+        and getattr(segment, "hypothetical", False)
+    ):
+        tone = statusline_contract.SemanticState.WARNING
+    if (not live or not _is_current(segment)) and tone.is_reassuring:
+        tone = statusline_contract.SemanticState.UNAVAILABLE
+    return tone
+
+
+def tone_sgr(tone: statusline_contract.SemanticState, color: ColorCapability) -> str:
+    """The opening escape sequence for `tone`, or `""` when there is none.
+
+    `""` for every tone at `ColorCapability.NONE` and for `NEUTRAL` at every
+    capability, which is what makes `paint` a no-op rather than a wrapper that
+    emits an empty pair of sequences.
+    """
+    parameters = _TONE_SGR.get(color, {}).get(tone.value)
+    return f"\x1b[{parameters}m" if parameters else ""
+
+
+def paint(text: str, tone: statusline_contract.SemanticState, color: ColorCapability) -> str:
+    """Wrap `text` in `tone`'s sequence, resetting at the end.
+
+    Always resets, never relies on the next sequence to overwrite: this text is
+    concatenated with the user's own statusline output, and leaving an unterminated
+    colour would bleed ours into theirs. Empty text is returned untouched so a
+    degradation rung that produced nothing does not acquire two escapes and a
+    width this module would then have to explain.
+    """
+    opening = tone_sgr(tone, color)
+    if not opening or not text:
+        return text
+    return f"{opening}{text}{_SGR_RESET}"
 
 
 def format_age(age_seconds: int, mode: PresentationMode) -> str:
@@ -647,6 +861,9 @@ def render_segment(
     segment: object,
     mode: PresentationMode,
     depth: InformationDepth = InformationDepth.DETAIL,
+    *,
+    color: ColorCapability = ColorCapability.NONE,
+    live: bool = True,
 ) -> str:
     """Render one provider segment as a single readable phrase.
 
@@ -667,6 +884,27 @@ def render_segment(
     The hypothetical marker is placed outside the parenthesised details, welded
     to the label, so no degradation step and no careless reading can separate
     "would block" from "not enforced".
+
+    `color` and `live` only affect emphasis, never content (HORO-1719). The tone
+    is applied to the whole reading, once, at the end — not to the state marker
+    and label alone. Tinting only the head is more legible in isolation and
+    breaks something load-bearing: `explain` quotes a reading's rendered text and
+    the lifecycle gate requires that text to appear in the composed line
+    verbatim, which is the tie that keeps the diagnostic a decode of the user's
+    line rather than a second renderer's opinion of it. An escape sequence
+    between the label and its own parenthesised detail severs that quote. One
+    span per reading also means a dimmed stale reading dims the age that explains
+    why, instead of leaving the age the brightest thing in it.
+
+    Because this function is the single leaf both depths render through, the same
+    snapshot necessarily carries the same tone in Clear and in Detail; there is no
+    second place for the two to disagree.
+
+    `live=True` is the safe default. It only ever *withholds* the staleness
+    demotion in `semantic_tone`, and the contract already guarantees that a
+    provider with no live readings cannot claim a reassuring state — so a caller
+    that does not know lands on "colour by what the reading says", not on
+    "colour a dead provider green".
     """
     state = _enum_value(segment.state)
     head = f"{state_marker(state, mode)} {segment.label}".strip()
@@ -717,9 +955,10 @@ def render_segment(
     if supporting and segment.age_seconds is not None:
         details.append(format_age(segment.age_seconds, mode))
 
+    tone = semantic_tone(segment, live=live)
     if not details:
-        return head
-    return f"{head} ({DETAIL_SEPARATOR.join(details)})"
+        return paint(head, tone, color)
+    return paint(f"{head} ({DETAIL_SEPARATOR.join(details)})", tone, color)
 
 
 # --------------------------------------------------------- the clear projection
@@ -1099,6 +1338,8 @@ def provider_parts(
     status: object,
     mode: PresentationMode,
     depth: InformationDepth = InformationDepth.DETAIL,
+    *,
+    color: ColorCapability = ColorCapability.NONE,
 ) -> tuple[str, str, tuple[str, ...]]:
     """One provider split into who is speaking and what they said.
 
@@ -1114,16 +1355,29 @@ def provider_parts(
     reading saying so, because silence on a status line reads as all-clear; see
     `render_provider` for why the host states that rather than trusting the
     provider to.
+
+    This is where liveness enters the tone (HORO-1719). The availability of the
+    *provider* is not visible from a segment, so it has to be resolved at the
+    level that holds both and passed down; a stale-but-reassuring reading from a
+    daemon that is not answering is exactly the case colour must not soften.
     """
     segments = statusline_contract.order_segments(status)
     if segments and not depth.shows_supporting_detail:
         segments = clear_readings(status)
+    live = _has_live_readings(status)
     if segments:
-        readings = tuple(render_segment(segment, mode, depth) for segment in segments)
-    elif getattr(status, "fallback_text", None):
-        readings = (f"{state_marker(UNKNOWN_STATE, mode)} {status.fallback_text}",)
+        readings = tuple(
+            render_segment(segment, mode, depth, color=color, live=live)
+            for segment in segments
+        )
     else:
-        readings = (f"{state_marker(UNKNOWN_STATE, mode)} {NO_SEGMENTS_LABEL}",)
+        # The absence of a reading, toned as such. A provider that said nothing
+        # is the one case where there is no segment to ask, and leaving it
+        # untinted beside a green one would make "reported nothing" the most
+        # restful thing on the line.
+        absent = statusline_contract.SemanticState.UNAVAILABLE
+        text = getattr(status, "fallback_text", None) or NO_SEGMENTS_LABEL
+        readings = (paint(f"{state_marker(UNKNOWN_STATE, mode)} {text}", absent, color),)
     return (
         provider_display_name(status.provider),
         scope_marker(_enum_value(status.scope), mode),
@@ -1135,6 +1389,8 @@ def render_provider(
     status: object,
     mode: PresentationMode,
     depth: InformationDepth = InformationDepth.DETAIL,
+    *,
+    color: ColorCapability = ColorCapability.NONE,
 ) -> str:
     """Render one provider's whole group: attribution, scope, then segments.
 
@@ -1159,8 +1415,13 @@ def render_provider(
     states the absence explicitly rather than trusting them. `fallback_text` is
     used for that only when present — it is a convenience rendering, never the
     primary one.
+
+    The provider's own name and scope marker stay plain at every capability. They
+    are attribution, not a reading, and tinting them would mean a product's name
+    changed colour as its state did — which reads as the *product* being the thing
+    at risk.
     """
-    name, scope, readings = provider_parts(status, mode, depth)
+    name, scope, readings = provider_parts(status, mode, depth, color=color)
     return f"{name} {scope} {SEGMENT_SEPARATORS[mode].join(readings)}"
 
 
@@ -1245,8 +1506,15 @@ def _render_groups(
     mode: PresentationMode,
     hidden: int = 0,
     depth: InformationDepth = InformationDepth.DETAIL,
+    *,
+    color: ColorCapability = ColorCapability.NONE,
 ) -> str:
-    text = SEGMENT_SEPARATORS[mode].join(render_provider(s, mode, depth) for s in statuses)
+    # The hidden-count marker stays plain. It is the host speaking about the line
+    # rather than a product speaking about its state, and giving it a tone would
+    # invent a severity for the fact that the terminal is narrow.
+    text = SEGMENT_SEPARATORS[mode].join(
+        render_provider(s, mode, depth, color=color) for s in statuses
+    )
     if hidden:
         marker = _hidden_marker(hidden)
         text = f"{text}{SEGMENT_SEPARATORS[mode]}{marker}" if text else marker
@@ -1320,7 +1588,13 @@ def _wrap_provider(
     return lines
 
 
-def _detail_block(statuses: tuple, mode: PresentationMode, budget: int | None) -> str | None:
+def _detail_block(
+    statuses: tuple,
+    mode: PresentationMode,
+    budget: int | None,
+    *,
+    color: ColorCapability = ColorCapability.NONE,
+) -> str | None:
     """Every provider on a line of its own, in the contract's order.
 
     Product names are padded into a column so the state markers line up, because
@@ -1336,9 +1610,17 @@ def _detail_block(statuses: tuple, mode: PresentationMode, budget: int | None) -
     emoji occupies — a wide glyph moves the text after it and cannot silently
     shift a product's identity out from under its own line.
 
+    The name column is padded off `display_width`, which charges colour sequences
+    nothing, so a toned reading cannot push a product's name out of its column.
+    Names are unpainted anyway; the measurement being escape-blind is what keeps
+    that true for the readings beside them.
+
     Returns `None` when even one provider cannot be laid out within `budget`.
     """
-    parts = [provider_parts(status, mode, InformationDepth.DETAIL) for status in statuses]
+    parts = [
+        provider_parts(status, mode, InformationDepth.DETAIL, color=color)
+        for status in statuses
+    ]
     widest = max(display_width(name) for name, _, _ in parts)
     laid_out = []
     for columns in dict.fromkeys((widest, 0)):
@@ -1422,6 +1704,8 @@ def _fit_by_dropping(
     mode: PresentationMode,
     budget: int,
     depth: InformationDepth = InformationDepth.DETAIL,
+    *,
+    color: ColorCapability = ColorCapability.NONE,
 ) -> str | None:
     """Shed the least important segments until the block fits.
 
@@ -1473,7 +1757,7 @@ def _fit_by_dropping(
             break
         dropped.add(candidate)
         remaining = _without_dropped(statuses, dropped)
-        text = _render_groups(remaining, mode, hidden=len(dropped), depth=depth)
+        text = _render_groups(remaining, mode, hidden=len(dropped), depth=depth, color=color)
         if display_width(text) <= budget:
             return text
     return None
@@ -1485,7 +1769,13 @@ def _fit_by_dropping(
 MIN_LABEL_COLUMNS = 6
 
 
-def _fit_minimal(statuses: tuple, mode: PresentationMode, budget: int) -> str:
+def _fit_minimal(
+    statuses: tuple,
+    mode: PresentationMode,
+    budget: int,
+    *,
+    color: ColorCapability = ColorCapability.NONE,
+) -> str:
     """The narrowest honest rung: the single worst state, and what it hides.
 
     Reduces to one marker plus one truncated label plus the hidden-segment
@@ -1510,26 +1800,37 @@ def _fit_minimal(statuses: tuple, mode: PresentationMode, budget: int) -> str:
     ]
     if not candidates:
         return ""
-    _, _, _, worst = max(
+    _, _, worst_status, worst = max(
         candidates,
         key=lambda item: (STATE_SEVERITY[_enum_value(item[3].state)], item[0], item[1]),
     )
 
     hidden = _segment_count(statuses) - 1
-    suffix = f"{SEGMENT_SEPARATORS[mode]}{_hidden_marker(hidden)}" if hidden else ""
-    if getattr(worst, "hypothetical", False):
-        # Welded ahead of the hidden-segment marker so it sits immediately after
-        # the label, exactly where `render_segment` puts it. Nothing may come
-        # between a would-have and its disclaimer.
-        suffix = f" [{HYPOTHETICAL_TEXT}]{suffix}"
+    hidden_suffix = f"{SEGMENT_SEPARATORS[mode]}{_hidden_marker(hidden)}" if hidden else ""
+    # Welded ahead of the hidden-segment marker so it sits immediately after the
+    # label, exactly where `render_segment` puts it. Nothing may come between a
+    # would-have and its disclaimer.
+    hypothetical = f" [{HYPOTHETICAL_TEXT}]" if getattr(worst, "hypothetical", False) else ""
     head = f"{state_marker(_enum_value(worst.state), mode)} "
-    label_budget = budget - display_width(suffix) - display_width(head)
+    label_budget = (
+        budget - display_width(hidden_suffix) - display_width(hypothetical) - display_width(head)
+    )
     if label_budget < MIN_LABEL_COLUMNS:
         return ""
     label = truncate_to_width(worst.label, label_budget)
     if not label:
         return ""
-    return f"{head}{label}{suffix}"
+    # Toned after truncation, so the escape sequences cannot be what gets cut --
+    # a label severed mid-sequence would leave an opening colour with no reset and
+    # bleed our red into the user's own prompt. `truncate_to_width` also strips
+    # colour from whatever it shortens, which is why this rung paints last rather
+    # than painting the label and trimming it.
+    toned = paint(
+        f"{head}{label}{hypothetical}",
+        semantic_tone(worst, live=_has_live_readings(worst_status)),
+        color,
+    )
+    return f"{toned}{hidden_suffix}"
 
 
 def _appended(upstream: str, block: str) -> str:
@@ -1553,6 +1854,8 @@ def _detail_rows(
     ordered: tuple,
     mode: PresentationMode,
     width_budget: int | None,
+    *,
+    color: ColorCapability = ColorCapability.NONE,
 ) -> str | None:
     """One provider per row, in the first allowed style that can be laid out.
 
@@ -1564,7 +1867,7 @@ def _detail_rows(
     of them can.
     """
     for candidate in _mode_candidates(mode):
-        block = _detail_block(ordered, candidate, width_budget)
+        block = _detail_block(ordered, candidate, width_budget, color=color)
         if block is not None:
             return _appended(upstream, block)
     return None
@@ -1576,6 +1879,8 @@ def _shared_line(
     mode: PresentationMode,
     width_budget: int | None,
     depth: InformationDepth,
+    *,
+    color: ColorCapability = ColorCapability.NONE,
 ) -> str:
     """Every provider on one shared line, shedding readings until it fits.
 
@@ -1587,7 +1892,7 @@ def _shared_line(
     cannot be said honestly, the upstream text is returned alone.
     """
     candidates = [
-        (candidate, _render_groups(ordered, candidate, depth=depth))
+        (candidate, _render_groups(ordered, candidate, depth=depth, color=color))
         for candidate in _mode_candidates(mode)
     ]
     chosen_mode, block = candidates[0]
@@ -1598,10 +1903,12 @@ def _shared_line(
                 break
         else:
             chosen_mode, _ = min(candidates, key=lambda pair: display_width(pair[1]))
-            dropped = _fit_by_dropping(ordered, chosen_mode, width_budget, depth)
+            dropped = _fit_by_dropping(
+                ordered, chosen_mode, width_budget, depth, color=color
+            )
             block = (
                 dropped if dropped is not None
-                else _fit_minimal(ordered, chosen_mode, width_budget)
+                else _fit_minimal(ordered, chosen_mode, width_budget, color=color)
             )
 
     if not block:
@@ -1618,6 +1925,7 @@ def compose(
     mode: PresentationMode = PresentationMode.BALANCED,
     width_budget: int | None = None,
     depth: InformationDepth = InformationDepth.DETAIL,
+    color: ColorCapability = ColorCapability.NONE,
 ) -> str:
     """Build the final statusline from the user's own output plus provider state.
 
@@ -1656,6 +1964,22 @@ def compose(
     The two layouts are `_detail_rows` and `_shared_line`, which is where the
     degradation each one performs is described. Whichever answers, the user's own
     line is the last thing to go and never the first.
+
+    `color` defaults to `NONE`, which means this function is pure text unless a
+    caller has established otherwise. That default is the whole of HORO-1719's
+    "colour is supplemental" guarantee in one place: every surface that cannot
+    carry escapes — a pipe, a file, `NO_COLOR`, `TERM=dumb`, a JSON payload, a
+    bug report pasted into a ticket — reaches this function without asking for
+    colour and therefore gets a line whose meaning is entirely in its words.
+    Deciding whether the destination *can* carry colour needs an environment and
+    a file descriptor, neither of which this module is allowed to touch, so it
+    belongs to `scripts/statusline_compositor.py`.
+
+    Colour never changes which readings survive. It is applied inside the
+    rendering of a reading, and `display_width` charges escape sequences nothing,
+    so every width measurement, every degradation rung and every `[+N more]` count
+    is identical with colour on and off. A reader comparing a screenshot with a
+    piped capture sees the same line twice.
     """
     ordered = project_to_depth(statuses, depth)
     upstream = upstream_text or ""
@@ -1663,11 +1987,11 @@ def compose(
         return upstream
 
     if depth.shows_supporting_detail:
-        rows = _detail_rows(upstream, ordered, mode, width_budget)
+        rows = _detail_rows(upstream, ordered, mode, width_budget, color=color)
         if rows is not None:
             return rows
 
-    return _shared_line(upstream, ordered, mode, width_budget, depth)
+    return _shared_line(upstream, ordered, mode, width_budget, depth, color=color)
 
 
 # ------------------------------------------------------------ the explain surface
