@@ -885,13 +885,20 @@ def render_segment(
     to the label, so no degradation step and no careless reading can separate
     "would block" from "not enforced".
 
-    `color` and `live` only affect emphasis, never content (HORO-1719). Colour is
-    applied to the head — marker, label, hypothetical marker — and never to the
-    parenthesised details: the head is the reading, and tinting a whole phrase
-    including its age and its counters makes the pressure harder to locate rather
-    than easier. Because this function is the single leaf both depths render
-    through, the same snapshot necessarily carries the same tone in Clear and in
-    Detail; there is no second place for the two to disagree.
+    `color` and `live` only affect emphasis, never content (HORO-1719). The tone
+    is applied to the whole reading, once, at the end — not to the state marker
+    and label alone. Tinting only the head is more legible in isolation and
+    breaks something load-bearing: `explain` quotes a reading's rendered text and
+    the lifecycle gate requires that text to appear in the composed line
+    verbatim, which is the tie that keeps the diagnostic a decode of the user's
+    line rather than a second renderer's opinion of it. An escape sequence
+    between the label and its own parenthesised detail severs that quote. One
+    span per reading also means a dimmed stale reading dims the age that explains
+    why, instead of leaving the age the brightest thing in it.
+
+    Because this function is the single leaf both depths render through, the same
+    snapshot necessarily carries the same tone in Clear and in Detail; there is no
+    second place for the two to disagree.
 
     `live=True` is the safe default. It only ever *withholds* the staleness
     demotion in `semantic_tone`, and the contract already guarantees that a
@@ -903,7 +910,6 @@ def render_segment(
     head = f"{state_marker(state, mode)} {segment.label}".strip()
     if getattr(segment, "hypothetical", False):
         head = f"{head} [{HYPOTHETICAL_TEXT}]"
-    head = paint(head, semantic_tone(segment, live=live), color)
 
     supporting = depth.shows_supporting_detail
     details: list[str] = []
@@ -949,9 +955,10 @@ def render_segment(
     if supporting and segment.age_seconds is not None:
         details.append(format_age(segment.age_seconds, mode))
 
+    tone = semantic_tone(segment, live=live)
     if not details:
-        return head
-    return f"{head} ({DETAIL_SEPARATOR.join(details)})"
+        return paint(head, tone, color)
+    return paint(f"{head} ({DETAIL_SEPARATOR.join(details)})", tone, color)
 
 
 # --------------------------------------------------------- the clear projection
