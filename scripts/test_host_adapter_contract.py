@@ -566,16 +566,18 @@ class HostAdapterContractTests(unittest.TestCase):
                 parse_bounded_json(raw)
         with self.assertRaises(ValueError):
             parse_bounded_json(b" " * 65537)
+        oversized_nodes = json.dumps({f"k{i}": i for i in range(2048)}).encode()
         with self.assertRaises(ValueError):
-            parse_bounded_json(json.dumps({f"k{i}": i for i in range(2048)}).encode())
+            parse_bounded_json(oversized_nodes)
         nested_settings = []
         cursor = nested_settings
         for _ in range(17):
             child = []
             cursor.append(child)
             cursor = child
+        nested_settings_json = json.dumps(nested_settings).encode()
         with self.assertRaises(ValueError):
-            parse_bounded_json(json.dumps(nested_settings).encode())
+            parse_bounded_json(nested_settings_json)
 
     def test_capability_states_remain_closed_and_shape_only_example_is_unknown(self):
         validator = self.validator("host-capability-snapshot")

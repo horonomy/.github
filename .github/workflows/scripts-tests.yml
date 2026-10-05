@@ -59,7 +59,7 @@ jobs:
       - name: Show Python version
         run: python3 --version
       - name: Install pinned schema validator
-        run: python3 -m pip install jsonschema==4.26.0
+        run: python3 -m pip install --only-binary :all: jsonschema==4.26.0
       - name: Run scripts/ tests
         run: python3 -m unittest discover -s scripts
       - name: Run agents/common/ tests
