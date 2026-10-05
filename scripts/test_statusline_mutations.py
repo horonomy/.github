@@ -459,9 +459,14 @@ def summarising_the_state_in_clears_own_words() -> object:
     """
     real = render.render_segment
 
-    def mutated(segment, mode, depth=render.InformationDepth.DETAIL):
+    # `**presentation` forwards whatever emphasis-only keywords the renderer has
+    # grown -- `color`, `live` -- without this stub having to know them. A stub
+    # that enumerated them would start raising `TypeError` the next time one is
+    # added, and a mutation that dies on a signature mismatch proves nothing about
+    # the guard it was meant to defeat.
+    def mutated(segment, mode, depth=render.InformationDepth.DETAIL, **presentation):
         if depth.shows_supporting_detail:
-            return real(segment, mode, depth)
+            return real(segment, mode, depth, **presentation)
         state = render._enum_value(segment.state)
         return f"{render.state_marker(state, mode)} {render.STATE_TEXT[state].title()}"
 
@@ -477,8 +482,8 @@ def a_summary_that_does_not_name_the_product() -> object:
     """
     real = render.provider_parts
 
-    def mutated(status, mode, depth=render.InformationDepth.DETAIL):
-        name, scope, readings = real(status, mode, depth)
+    def mutated(status, mode, depth=render.InformationDepth.DETAIL, **presentation):
+        name, scope, readings = real(status, mode, depth, **presentation)
         if depth.shows_supporting_detail:
             return name, scope, readings
         return "", scope, readings
@@ -510,8 +515,8 @@ def dropping_the_hypothetical_marker_from_the_summary() -> object:
     real = render.render_segment
     aside = f" [{render.HYPOTHETICAL_TEXT}]"
 
-    def mutated(segment, mode, depth=render.InformationDepth.DETAIL):
-        text = real(segment, mode, depth)
+    def mutated(segment, mode, depth=render.InformationDepth.DETAIL, **presentation):
+        text = real(segment, mode, depth, **presentation)
         if depth.shows_supporting_detail:
             return text
         return text.replace(aside, "")
@@ -563,8 +568,8 @@ def keeping_the_confidence_in_the_summary() -> object:
     """
     real = render.render_segment
 
-    def mutated(segment, mode, depth=render.InformationDepth.DETAIL):
-        text = real(segment, mode, depth)
+    def mutated(segment, mode, depth=render.InformationDepth.DETAIL, **presentation):
+        text = real(segment, mode, depth, **presentation)
         confidence = render._enum_value(getattr(segment, "confidence", None))
         if depth.shows_supporting_detail or confidence is None:
             return text
@@ -615,8 +620,8 @@ def telling_the_reader_which_explain_topic_to_open() -> object:
     """
     real = render.render_segment
 
-    def mutated(segment, mode, depth=render.InformationDepth.DETAIL):
-        text = real(segment, mode, depth)
+    def mutated(segment, mode, depth=render.InformationDepth.DETAIL, **presentation):
+        text = real(segment, mode, depth, **presentation)
         key = getattr(segment, "explain_key", None)
         if not depth.shows_supporting_detail or not key:
             return text
