@@ -1848,6 +1848,10 @@ BOOKKEEPING = status(
             # only be asserted absent by accident.
             order_hint=613,
             clear_role=contract.ClearRole.POSTURE,
+            # A token whose wire value is a word a reader could plausibly be
+            # shown, so asserting it absent is a real constraint: the host may
+            # colour by it but must never print it.
+            semantic_state=contract.SemanticState.CAUTION,
         ),
         segment(
             key="remaining_work",
