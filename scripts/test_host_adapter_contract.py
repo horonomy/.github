@@ -58,6 +58,15 @@ def parse_bounded_json(raw):
     return value
 
 
+def _json_scalars_equal(left, right):
+    """Compare JSON scalars using JSON Schema value equality."""
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return left == right
+    return type(left) is type(right) and left == right
+
+
 def validate_config_profile(node, *, root=False, depth=0, budget=None):
     """Check the published bounded schema profile before using Draft 2020-12."""
     if budget is None:
@@ -117,7 +126,16 @@ def validate_config_profile(node, *, root=False, depth=0, budget=None):
         raise ValueError("items used on non-array schema")
     if "enum" in node:
         enum = node["enum"]
-        if not isinstance(enum, list) or not 1 <= len(enum) <= 64 or len({json.dumps(v, sort_keys=True) for v in enum}) != len(enum) or any(isinstance(v, (dict, list)) for v in enum):
+        if (
+            not isinstance(enum, list)
+            or not 1 <= len(enum) <= 64
+            or any(isinstance(v, (dict, list)) for v in enum)
+            or any(
+                _json_scalars_equal(enum[left], enum[right])
+                for left in range(len(enum))
+                for right in range(left + 1, len(enum))
+            )
+        ):
             raise ValueError("enum must contain 1..64 unique JSON scalars")
     if "const" in node and isinstance(node["const"], (dict, list)):
         raise ValueError("const must be a JSON scalar")
@@ -501,6 +519,19 @@ class HostAdapterContractTests(unittest.TestCase):
             else:
                 self.assertTrue(list(config_validator.iter_errors(settings)))
             configuration_limits(settings)
+        for enum_values in ([True, 1], [False, 0]):
+            mixed_scalar_schema = copy.deepcopy(schema)
+            mixed_scalar_schema["properties"]["mixed"] = {
+                "type": "number", "enum": enum_values,
+            }
+            validate_config_profile(mixed_scalar_schema, root=True)
+        for enum_values in ([1, 1.0], [0, -0.0], [True, True], [False, False]):
+            duplicate_scalar_schema = copy.deepcopy(schema)
+            duplicate_scalar_schema["properties"]["duplicate"] = {
+                "type": "number", "enum": enum_values,
+            }
+            with self.assertRaises(ValueError):
+                validate_config_profile(duplicate_scalar_schema, root=True)
         for edit in (
             lambda s: s.update(**{"$ref": "https://example.invalid/schema"}),
             lambda s: s.update(pattern=".*"), lambda s: s.update(customValidator="exec"),
