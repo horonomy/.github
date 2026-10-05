@@ -19,6 +19,9 @@ on:
     branches: [main]
     paths:
       - scripts/**
+      - governance/product/host-adapter/**
+      - governance/product/host-adapter-contract.md
+      - governance/product/execution-identity-contract.md
       - agents/common/**
       - agents/adapters/**
       - agents/skills/**
@@ -29,6 +32,9 @@ on:
     branches: [main]
     paths:
       - scripts/**
+      - governance/product/host-adapter/**
+      - governance/product/host-adapter-contract.md
+      - governance/product/execution-identity-contract.md
       - agents/common/**
       - agents/adapters/**
       - agents/skills/**
@@ -52,6 +58,8 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Show Python version
         run: python3 --version
+      - name: Install pinned schema validator
+        run: 'python3 -m pip install --only-binary :all: jsonschema==4.26.0'
       - name: Run scripts/ tests
         run: python3 -m unittest discover -s scripts
       - name: Run agents/common/ tests
