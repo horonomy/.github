@@ -38,7 +38,13 @@ class ManifestValidationTest(unittest.TestCase):
         repos = hw.load_manifest()
         names = {r["name"] for r in repos}
         self.assertIn("governance", names)
+        self.assertIn("libra", names)
         self.assertIn("circinus", names)
+        libra = next(entry for entry in repos if entry["name"] == "libra")
+        self.assertEqual(
+            (libra["org"], libra["repo"], libra["category"]),
+            ("horonomy", "libra-governor", "product"),
+        )
         for entry in repos:
             self.assertIn(entry["category"], ("company", "product"))
 
