@@ -26,6 +26,8 @@ import horonom_workspace
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INVENTORY_PATH = REPO_ROOT / "governance" / "workspace" / "first-party-products.yaml"
+LOCAL_STATE_PARTS = (".local", "state")
+CARGO_BIN_PARTS = (".cargo", "bin")
 RECEIPT_SCHEMA = 1
 STATUSES = frozenset({"CURRENT", "DRIFTED", "UNVERIFIABLE", "BASE_HEAD_NOT_DEPLOYABLE"})
 DISPOSITIONS = frozenset({"managed", "unverifiable", "not_present"})
@@ -118,7 +120,7 @@ def _command(value: Any, where: str) -> tuple[str, ...]:
     return tuple(value)
 
 
-def load_inventory(path: Path = INVENTORY_PATH) -> Inventory:
+def _inventory_document(path: Path) -> tuple[bytes, dict[str, Any]]:
     try:
         raw = path.read_bytes()
         data = json.loads(raw)
@@ -128,85 +130,97 @@ def load_inventory(path: Path = INVENTORY_PATH) -> Inventory:
         raise ConvergenceError("first-party inventory: root must be an object")
     if data.get("schema_version") != 1:
         raise ConvergenceError("first-party inventory: unsupported schema_version")
+    return raw, data
+
+
+def _managed_lifecycle(item: dict[str, Any], where: str) -> tuple[
+    str | None, tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...] | None
+]:
+    lifecycle = item.get("lifecycle")
+    validation_raw = item.get("validation", [])
+    installer_raw = item.get("installer")
+    if item["disposition"] != "managed":
+        if any(key in item for key in ("lifecycle", "validation", "installer")):
+            raise ConvergenceError(f"{where}: non-managed product may not carry executable lifecycle fields")
+        return None, (), None
+    if lifecycle not in LIFECYCLES:
+        raise ConvergenceError(f"{where}: managed product needs a known lifecycle")
+    if not isinstance(validation_raw, list) or not validation_raw:
+        raise ConvergenceError(f"{where}: managed product needs validation commands")
+    if not isinstance(installer_raw, list) or not installer_raw:
+        raise ConvergenceError(f"{where}.installer: expected one or more argv arrays")
+    validation = tuple(_command(command, f"{where}.validation") for command in validation_raw)
+    installer = tuple(_command(command, f"{where}.installer") for command in installer_raw)
+    return lifecycle, validation, installer
+
+
+def _parse_product(
+    item: Any,
+    index: int,
+    workspace: dict[str, dict[str, str]],
+    seen: set[str],
+) -> Product:
+    where = f"products[{index}]"
+    if not isinstance(item, dict):
+        raise ConvergenceError(f"{where}: expected an object")
+    required = ("id", "workspace_name", "checkout", "org", "repo", "disposition")
+    if any(not isinstance(item.get(key), str) or not item[key] for key in required):
+        raise ConvergenceError(f"{where}: missing required string field")
+    product_id = item["id"]
+    if not SAFE_ID.fullmatch(product_id) or product_id in seen:
+        raise ConvergenceError(f"{where}: unsafe or duplicate id {product_id!r}")
+    if not SAFE_ID.fullmatch(item["workspace_name"]):
+        raise ConvergenceError(f"{where}: unsafe workspace_name")
+    if not SAFE_REPO.fullmatch(item["checkout"]) or item["checkout"] in {".", ".."}:
+        raise ConvergenceError(f"{where}: unsafe checkout")
+    if item["org"] != "horonomy" or not SAFE_REPO.fullmatch(item["repo"]):
+        raise ConvergenceError(f"{where}: only explicit horonomy repositories are first-party")
+    if item["disposition"] not in DISPOSITIONS:
+        raise ConvergenceError(f"{where}: invalid disposition")
+    manifest = workspace.get(item["workspace_name"])
+    expected = (item["org"], item["repo"], "product")
+    observed = (manifest["org"], manifest["repo"], manifest["category"]) if manifest else None
+    if observed != expected:
+        raise ConvergenceError(f"{where}: source identity disagrees with workspace manifest")
+    lifecycle, validation, installer = _managed_lifecycle(item, where)
+    seen.add(product_id)
+    return Product(
+        id=product_id,
+        workspace_name=item["workspace_name"],
+        checkout=item["checkout"],
+        org=item["org"],
+        repo=item["repo"],
+        disposition=item["disposition"],
+        lifecycle=lifecycle,
+        validation=validation,
+        installer=installer,
+        reason=item.get("reason"),
+    )
+
+
+def _parse_exclusion(item: Any, index: int, product_ids: set[str]) -> Exclusion:
+    where = f"third_party_exclusions[{index}]"
+    fields = {"id", "owner", "repository", "policy_owner"}
+    if not isinstance(item, dict) or set(item) != fields:
+        raise ConvergenceError(f"{where}: exclusion rows are metadata-only")
+    if not all(isinstance(item[key], str) and item[key] for key in fields):
+        raise ConvergenceError(f"{where}: invalid exclusion metadata")
+    if item["id"] in product_ids:
+        raise ConvergenceError(f"{where}: first-party and third-party IDs overlap")
+    return Exclusion(**item)
+
+
+def load_inventory(path: Path = INVENTORY_PATH) -> Inventory:
+    raw, data = _inventory_document(path)
     products_raw = data.get("products")
     exclusions_raw = data.get("third_party_exclusions")
     if not isinstance(products_raw, list) or not isinstance(exclusions_raw, list):
         raise ConvergenceError("first-party inventory: products and exclusions must be arrays")
-
     workspace = {entry["name"]: entry for entry in horonom_workspace.load_manifest()}
-    products: list[Product] = []
-    ids: set[str] = set()
-    for index, item in enumerate(products_raw):
-        where = f"products[{index}]"
-        if not isinstance(item, dict):
-            raise ConvergenceError(f"{where}: expected an object")
-        for key in ("id", "workspace_name", "checkout", "org", "repo", "disposition"):
-            if not isinstance(item.get(key), str) or not item[key]:
-                raise ConvergenceError(f"{where}: missing {key}")
-        product_id = item["id"]
-        if not SAFE_ID.fullmatch(product_id) or product_id in ids:
-            raise ConvergenceError(f"{where}: unsafe or duplicate id {product_id!r}")
-        if not SAFE_ID.fullmatch(item["workspace_name"]):
-            raise ConvergenceError(f"{where}: unsafe workspace_name")
-        if not SAFE_REPO.fullmatch(item["checkout"]) or item["checkout"] in {".", ".."}:
-            raise ConvergenceError(f"{where}: unsafe checkout")
-        ids.add(product_id)
-        if item["org"] != "horonomy" or not SAFE_REPO.fullmatch(item["repo"]):
-            raise ConvergenceError(f"{where}: only explicit horonomy repositories are first-party")
-        if item["disposition"] not in DISPOSITIONS:
-            raise ConvergenceError(f"{where}: invalid disposition")
-        manifest = workspace.get(item["workspace_name"])
-        if not manifest or (manifest["org"], manifest["repo"], manifest["category"]) != (
-            item["org"],
-            item["repo"],
-            "product",
-        ):
-            raise ConvergenceError(f"{where}: source identity disagrees with workspace manifest")
-
-        lifecycle = item.get("lifecycle")
-        validation_raw = item.get("validation", [])
-        installer_raw = item.get("installer")
-        if item["disposition"] == "managed":
-            if lifecycle not in LIFECYCLES:
-                raise ConvergenceError(f"{where}: managed product needs a known lifecycle")
-            if not isinstance(validation_raw, list) or not validation_raw:
-                raise ConvergenceError(f"{where}: managed product needs validation commands")
-            validation = tuple(_command(command, f"{where}.validation") for command in validation_raw)
-            if not isinstance(installer_raw, list) or not installer_raw:
-                raise ConvergenceError(f"{where}.installer: expected one or more argv arrays")
-            installer = tuple(_command(command, f"{where}.installer") for command in installer_raw)
-        else:
-            if any(key in item for key in ("lifecycle", "validation", "installer")):
-                raise ConvergenceError(f"{where}: non-managed product may not carry executable lifecycle fields")
-            validation = ()
-            installer = None
-            lifecycle = None
-        products.append(
-            Product(
-                id=product_id,
-                workspace_name=item["workspace_name"],
-                checkout=item["checkout"],
-                org=item["org"],
-                repo=item["repo"],
-                disposition=item["disposition"],
-                lifecycle=lifecycle,
-                validation=validation,
-                installer=installer,
-                reason=item.get("reason"),
-            )
-        )
-
-    exclusions: list[Exclusion] = []
-    for index, item in enumerate(exclusions_raw):
-        where = f"third_party_exclusions[{index}]"
-        if not isinstance(item, dict) or set(item) != {"id", "owner", "repository", "policy_owner"}:
-            raise ConvergenceError(f"{where}: exclusion rows are metadata-only")
-        if not all(isinstance(item[key], str) and item[key] for key in item):
-            raise ConvergenceError(f"{where}: invalid exclusion metadata")
-        if item["id"] in ids:
-            raise ConvergenceError(f"{where}: first-party and third-party IDs overlap")
-        exclusions.append(Exclusion(**item))
-    return Inventory(tuple(products), tuple(exclusions), hashlib.sha256(raw).hexdigest())
+    seen: set[str] = set()
+    products = tuple(_parse_product(item, index, workspace, seen) for index, item in enumerate(products_raw))
+    exclusions = tuple(_parse_exclusion(item, index, seen) for index, item in enumerate(exclusions_raw))
+    return Inventory(products, exclusions, hashlib.sha256(raw).hexdigest())
 
 
 def _checkout_path(root: Path, product: Product) -> Path | None:
@@ -231,61 +245,68 @@ def _remote_identity(url: str) -> tuple[str, str] | None:
     return (match.group(1).lower(), match.group(2)) if match else None
 
 
+def _canonical_remote(
+    product: Product,
+    checkout: Path,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> str | None:
+    remotes = runner(["git", "remote"], cwd=checkout)
+    if remotes.returncode:
+        return None
+    matches = []
+    for remote in remotes.stdout.splitlines():
+        result = runner(["git", "remote", "get-url", remote], cwd=checkout)
+        if result.returncode == 0 and _remote_identity(result.stdout) == (product.org, product.repo):
+            matches.append(remote)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _remote_base(
+    remote: str,
+    checkout: Path,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> tuple[str, str] | None:
+    symref = runner(["git", "ls-remote", "--symref", remote, "HEAD"], cwd=checkout)
+    first = symref.stdout.splitlines()[0] if symref.returncode == 0 and symref.stdout.splitlines() else ""
+    match = re.fullmatch(r"ref: refs/heads/([^\s]+)\s+HEAD", first)
+    if not match:
+        return None
+    branch = match.group(1)
+    result = runner(["git", "ls-remote", remote, f"refs/heads/{branch}"], cwd=checkout)
+    head = result.stdout.split()[0] if result.returncode == 0 and result.stdout.split() else ""
+    return (branch, head) if SHA.fullmatch(head) else None
+
+
 def inspect_source(product: Product, root: Path, runner: Callable[..., subprocess.CompletedProcess[str]]) -> SourceState:
     state = SourceState(checkout=_checkout_path(root, product))
     if state.checkout is None:
         state.error = "checkout_missing_or_unsafe"
         return state
     checkout = state.checkout
-    state.main_worktree = (checkout / ".git").is_dir()
+    state.main_worktree = (checkout / ".git").is_dir() and not (checkout / ".git").is_symlink()
     if not state.main_worktree:
         state.error = "linked_worktree"
         return state
     status = runner(["git", "status", "--porcelain", "--untracked-files=no"], cwd=checkout)
-    if status.returncode:
-        state.error = "git_status_failed"
+    if status.returncode or status.stdout.strip():
+        state.clean = status.returncode == 0 and not bool(status.stdout.strip())
+        state.error = "git_status_failed" if status.returncode else "tracked_checkout_dirty"
         return state
-    state.clean = not bool(status.stdout.strip())
-    if not state.clean:
-        state.error = "tracked_checkout_dirty"
-        return state
-    remotes = runner(["git", "remote"], cwd=checkout)
-    if remotes.returncode:
-        state.error = "remote_list_failed"
-        return state
-    matches: list[str] = []
-    for remote in remotes.stdout.splitlines():
-        result = runner(["git", "remote", "get-url", remote], cwd=checkout)
-        if result.returncode == 0 and _remote_identity(result.stdout) == (product.org, product.repo):
-            matches.append(remote)
-    if len(matches) != 1:
+    state.clean = True
+    state.remote = _canonical_remote(product, checkout, runner)
+    if state.remote is None:
         state.error = "canonical_remote_not_unique"
         return state
-    state.remote = matches[0]
-    symref = runner(["git", "ls-remote", "--symref", state.remote, "HEAD"], cwd=checkout)
-    if symref.returncode:
+    base = _remote_base(state.remote, checkout, runner)
+    if base is None:
         state.error = "remote_default_unavailable"
         return state
-    first = symref.stdout.splitlines()[0] if symref.stdout.splitlines() else ""
-    match = re.fullmatch(r"ref: refs/heads/([^\s]+)\s+HEAD", first)
-    if not match:
-        state.error = "remote_default_unresolved"
-        return state
-    state.base_branch = match.group(1)
-    remote = runner(
-        ["git", "ls-remote", state.remote, f"refs/heads/{state.base_branch}"], cwd=checkout
-    )
-    head = remote.stdout.split()[0] if remote.returncode == 0 and remote.stdout.split() else ""
-    if not SHA.fullmatch(head):
-        state.error = "remote_head_unresolved"
-        return state
-    state.remote_head = head
+    state.base_branch, state.remote_head = base
     local = runner(["git", "rev-parse", "HEAD"], cwd=checkout)
-    local_head = local.stdout.strip()
-    if local.returncode or not SHA.fullmatch(local_head):
+    state.local_head = local.stdout.strip()
+    if local.returncode or not SHA.fullmatch(state.local_head):
         state.error = "local_head_unresolved"
         return state
-    state.local_head = local_head
     branch = runner(["git", "branch", "--show-current"], cwd=checkout)
     if branch.returncode or branch.stdout.strip() != state.base_branch:
         state.error = "not_on_configured_base_branch"
@@ -294,7 +315,7 @@ def inspect_source(product: Product, root: Path, runner: Callable[..., subproces
 
 def receipt_root() -> Path:
     base = os.environ.get("HORONOM_CONVERGENCE_STATE_DIR")
-    return Path(base).expanduser() if base else Path.home() / ".local" / "state" / "horonom" / "convergence"
+    return Path(base).expanduser() if base else Path.home().joinpath(*LOCAL_STATE_PARTS, "horonom", "convergence")
 
 
 def receipt_path(product_id: str) -> Path:
@@ -340,14 +361,14 @@ def _libra_runtime(
     receipt: dict[str, Any] | None,
     runner: Callable[..., subprocess.CompletedProcess[str]],
 ) -> dict[str, Any]:
-    binary = Path.home() / ".cargo" / "bin" / "libra-governor"
+    binary = Path.home().joinpath(*CARGO_BIN_PARTS, "libra-governor")
     artifact_hash = _sha256(binary)
     installed = None
     running = None
     healthy = False
     if receipt and receipt.get("artifact_sha256") == artifact_hash:
         installed = receipt.get("source_revision")
-    pid_path = Path.home() / ".local" / "state" / "libra-governor" / "daemon.pid"
+    pid_path = Path.home().joinpath(*LOCAL_STATE_PARTS, "libra-governor", "daemon.pid")
     try:
         pid_value = json.loads(pid_path.read_text(encoding="utf-8"))
         pid = pid_value if isinstance(pid_value, dict) else {}
@@ -384,7 +405,7 @@ def _libra_runtime(
 
 def _circinus_runtime(receipt: dict[str, Any] | None, runner: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
     command = shutil.which("circinus")
-    manifest_path = Path.home() / ".local" / "state" / "circinus" / "install.json"
+    manifest_path = Path.home().joinpath(*LOCAL_STATE_PARTS, "circinus", "install.json")
     manifest_hash = None
     installed_hash = None
     try:
@@ -590,7 +611,7 @@ def _write_receipt(product: Product, revision: str, artifact_sha256: str) -> Non
 
 def _artifact_path(product: Product) -> Path:
     if product.lifecycle == "libra":
-        return Path.home() / ".cargo" / "bin" / "libra-governor"
+        return Path.home().joinpath(*CARGO_BIN_PARTS, "libra-governor")
     command = shutil.which("circinus") if product.lifecycle == "circinus" else None
     if not command:
         raise ConvergenceError(f"{product.id}: installed artifact not found")
@@ -599,7 +620,7 @@ def _artifact_path(product: Product) -> Path:
 
 def _artifact_measurement(product: Product) -> str | None:
     if product.lifecycle == "libra":
-        return _sha256(Path.home() / ".cargo" / "bin" / "libra-governor")
+        return _sha256(Path.home().joinpath(*CARGO_BIN_PARTS, "libra-governor"))
     if product.lifecycle == "circinus":
         try:
             manifest = json.loads(
@@ -610,6 +631,37 @@ def _artifact_measurement(product: Product) -> str | None:
         value = manifest.get("entrypoint_sha256")
         return value if isinstance(value, str) and value else None
     return None
+
+
+def _revalidate_source(product: Product, root: Path, expected: SourceState, runner: Callable[..., subprocess.CompletedProcess[str]]) -> SourceState:
+    current = inspect_source(product, root, runner)
+    stable = (
+        current.error is None
+        and current.remote == expected.remote
+        and current.base_branch == expected.base_branch
+        and current.remote_head == expected.remote_head
+        and current.local_head == expected.local_head
+    )
+    if not stable:
+        raise ConvergenceError(f"{product.id}: source changed after validation")
+    return current
+
+
+def _reconcile_daemon(
+    product: Product,
+    target: str,
+    prior_runtime: dict[str, Any],
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> None:
+    previous = prior_runtime.get("running_revision")
+    if previous is None or previous == target:
+        return
+    artifact = str(_artifact_path(product))
+    if product.lifecycle == "libra":
+        runner([artifact, "daemon", "stop"], timeout=30, check=True)
+    elif product.lifecycle == "circinus":
+        runner([artifact, "stop"], timeout=30, check=True)
+        runner([artifact, "start"], timeout=30, check=True)
 
 
 def apply_product(
@@ -649,15 +701,7 @@ def apply_product(
     # checkout fingerprint before invoking an installer so a base advance or a
     # concurrent local edit can never turn a previously valid plan into a stale
     # deployment source.
-    preinstall = inspect_source(product, root, runner)
-    if (
-        preinstall.error
-        or preinstall.remote != refreshed.remote
-        or preinstall.base_branch != refreshed.base_branch
-        or preinstall.remote_head != refreshed.remote_head
-        or preinstall.local_head != refreshed.local_head
-    ):
-        raise ConvergenceError(f"{product.id}: source changed after validation")
+    preinstall = _revalidate_source(product, root, refreshed, runner)
     prior_runtime = inspect_runtime(product, runner)
     assert product.installer and preinstall.checkout and preinstall.remote_head
     for command in product.installer:
@@ -667,19 +711,7 @@ def apply_product(
         raise ConvergenceError(f"{product.id}: installed artifact could not be measured")
     _write_receipt(product, preinstall.remote_head, artifact_hash)
 
-    # Installation can make an existing daemon stale. Restart only when the
-    # pre-install running revision was positively known and different; missing
-    # identity is UNVERIFIABLE, not permission to terminate a process.
-    if (
-        prior_runtime.get("running_revision") is not None
-        and prior_runtime.get("running_revision") != preinstall.remote_head
-    ):
-        if product.lifecycle == "libra":
-            runner([str(_artifact_path(product)), "daemon", "stop"], timeout=30, check=True)
-            # Libra intentionally starts on the next real UserPromptSubmit hook.
-        elif product.lifecycle == "circinus":
-            runner([str(_artifact_path(product)), "stop"], timeout=30, check=True)
-            runner([str(_artifact_path(product)), "start"], timeout=30, check=True)
+    _reconcile_daemon(product, preinstall.remote_head, prior_runtime, runner)
     return inspect_product(product, root, runner, validate=True)
 
 
@@ -717,8 +749,10 @@ def _cmd_check(args: argparse.Namespace) -> int:
     report = inspect_inventory(
         inventory, Path(args.root), Runner(), product_ids=_selected(args), validate=args.validate
     )
-    print(json.dumps(report, indent=2, sort_keys=True) if args.json else "", end="" if args.json else "")
-    if not args.json:
+    output = json.dumps(report, indent=2, sort_keys=True)
+    if args.json:
+        print(output)
+    else:
         _print_report(report)
     return 0 if all(row["status"] == "CURRENT" for row in report["first_party_products"] if row["disposition"] == "managed") else 1
 
@@ -727,8 +761,10 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     inventory = load_inventory()
     report = inspect_inventory(inventory, Path(args.root), Runner(), product_ids=_selected(args), validate=True)
     report["mode"] = "plan"
-    print(json.dumps(report, indent=2, sort_keys=True) if args.json else "", end="" if args.json else "")
-    if not args.json:
+    output = json.dumps(report, indent=2, sort_keys=True)
+    if args.json:
+        print(output)
+    else:
         _print_report(report)
         print("\nRead-only plan: no source, installer, process, or receipt state was changed.")
     return 0 if all(row["status"] == "CURRENT" for row in report["first_party_products"] if row["disposition"] == "managed") else 1
@@ -765,8 +801,10 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         ],
         "mode": "apply",
     }
-    print(json.dumps(report, indent=2, sort_keys=True) if args.json else "", end="" if args.json else "")
-    if not args.json:
+    output = json.dumps(report, indent=2, sort_keys=True)
+    if args.json:
+        print(output)
+    else:
         _print_report(report)
     return 0 if all(row["status"] == "CURRENT" for row in rows if row["disposition"] == "managed") else 1
 

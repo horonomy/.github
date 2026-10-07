@@ -233,8 +233,11 @@ class ApplySafetyTest(unittest.TestCase):
         with mock.patch.object(fc, "inspect_source", side_effect=lambda *_: next(states)), mock.patch.object(
             fc, "run_validation", return_value={"status": "passed", "commands": []}
         ), mock.patch.object(fc, "load_inventory", return_value=fc.load_inventory()):
+            def apply():
+                return fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, runner)
+
             with self.assertRaisesRegex(fc.ConvergenceError, "source changed after validation"):
-                fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, runner)
+                apply()
         flat = [call for call, _cwd in runner.calls]
         for command in product.installer or ():
             self.assertNotIn(command, flat)
@@ -283,9 +286,12 @@ class ApplySafetyTest(unittest.TestCase):
         product = fc.load_inventory().products[0]
         bad = source("2" * 40)
         bad.error = "not_on_configured_base_branch"
+        def apply():
+            return fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, FakeRunner())
+
         with mock.patch.object(fc, "inspect_source", return_value=bad):
             with self.assertRaisesRegex(fc.ConvergenceError, "not_on_configured_base_branch"):
-                fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, FakeRunner())
+                apply()
 
     def test_third_party_exclusions_are_never_apply_candidates(self):
         inventory = fc.load_inventory()
