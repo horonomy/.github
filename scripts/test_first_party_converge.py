@@ -304,6 +304,33 @@ class ApplySafetyTest(unittest.TestCase):
         self.assertNotIn("shell=True", source_text)
 
 
+class RuntimeEvidenceTest(unittest.TestCase):
+    def test_libra_doctor_requires_well_formed_all_non_error_findings(self):
+        good = subprocess.CompletedProcess(
+            [], 0, json.dumps({"findings": [{"severity": "ok", "message": "daemon 0.0.2 reachable"}]}), ""
+        )
+        mixed = subprocess.CompletedProcess(
+            [],
+            0,
+            json.dumps({"findings": [
+                {"severity": "ok", "message": "daemon 0.0.2 reachable"},
+                {"severity": "error", "message": "stale runtime"},
+            ]}),
+            "",
+        )
+        malformed = subprocess.CompletedProcess([], 0, json.dumps({"findings": [None]}), "")
+        self.assertTrue(fc._libra_doctor_healthy(good))
+        self.assertFalse(fc._libra_doctor_healthy(mixed))
+        self.assertFalse(fc._libra_doctor_healthy(malformed))
+        self.assertFalse(fc._libra_doctor_healthy(subprocess.CompletedProcess([], 0, "[]", "")))
+
+    def test_circinus_doctor_rejects_malformed_check_rows(self):
+        runner = FakeRunner({
+            ("circinus", "doctor", "--json"): (0, json.dumps({"checks": [None]}), "")
+        })
+        self.assertEqual(fc._circinus_doctor_state("circinus", runner), (False, False))
+
+
 class CommandStatusTest(unittest.TestCase):
     def test_plan_fails_for_unverifiable_managed_product(self):
         report = {

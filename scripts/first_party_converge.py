@@ -357,6 +357,30 @@ def _process_alive(pid: object) -> bool:
     return True
 
 
+def _json_object(raw: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _libra_doctor_healthy(result: subprocess.CompletedProcess[str] | None) -> bool:
+    if result is None or result.returncode != 0:
+        return False
+    payload = _json_object(result.stdout)
+    findings = payload.get("findings") if payload else None
+    if not isinstance(findings, list) or not findings:
+        return False
+    valid = [item for item in findings if isinstance(item, dict)]
+    if len(valid) != len(findings) or any(item.get("severity") == "error" for item in valid):
+        return False
+    return any(
+        item.get("severity") == "ok" and str(item.get("message", "")).startswith("daemon ")
+        for item in valid
+    )
+
+
 def _libra_runtime(
     receipt: dict[str, Any] | None,
     runner: Callable[..., subprocess.CompletedProcess[str]],
@@ -376,22 +400,13 @@ def _libra_runtime(
         pid = {}
     recorded_hash = pid.get("exe_sha256")
     doctor = runner([str(binary), "doctor", "--json"], timeout=30) if binary.exists() else None
-    doctor_reachable = False
-    if doctor and doctor.returncode == 0:
-        try:
-            payload = json.loads(doctor.stdout)
-            doctor_reachable = any(
-                item.get("severity") == "ok" and str(item.get("message", "")).startswith("daemon ")
-                for item in payload.get("findings", [])
-            )
-        except json.JSONDecodeError:
-            pass
+    doctor_healthy = _libra_doctor_healthy(doctor)
     healthy = bool(
         _process_alive(pid.get("pid"))
         and recorded_hash
         and recorded_hash == artifact_hash
         and pid.get("exe_path") == str(binary)
-        and doctor_reachable
+        and doctor_healthy
     )
     if installed and healthy:
         running = installed
@@ -403,61 +418,63 @@ def _libra_runtime(
     }
 
 
+def _circinus_manifest_hash() -> str | None:
+    path = Path.home().joinpath(*LOCAL_STATE_PARTS, "circinus", "install.json")
+    try:
+        payload = _json_object(path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    value = payload.get("entrypoint_sha256") if payload else None
+    return value if isinstance(value, str) and SHA.fullmatch(value) else None
+
+
+def _circinus_installed_hash(
+    command: str | None,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> str | None:
+    if not command:
+        return None
+    python = Path(command).resolve().parent / "python"
+    result = runner(
+        [
+            str(python),
+            "-c",
+            "from circinus.daemon.identity import compute_entrypoint_identity; "
+            "import json; print(json.dumps(compute_entrypoint_identity().to_json()))",
+        ],
+        timeout=30,
+    )
+    payload = _json_object(result.stdout) if result.returncode == 0 else None
+    value = payload.get("package_tree_sha256") if payload else None
+    return value if isinstance(value, str) and SHA.fullmatch(value) else None
+
+
+def _circinus_doctor_state(
+    command: str | None,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> tuple[bool, bool]:
+    if not command:
+        return False, False
+    result = runner([command, "doctor", "--json"], timeout=30)
+    payload = _json_object(result.stdout) if result.returncode == 0 else None
+    raw = payload.get("checks") if payload else None
+    if not isinstance(raw, list) or not all(isinstance(item, dict) for item in raw):
+        return False, False
+    checks = {item.get("id"): item for item in raw if isinstance(item.get("id"), str)}
+    return (
+        checks.get("daemon_reachable", {}).get("status") == "pass",
+        checks.get("daemon_entrypoint_identity", {}).get("status") == "pass",
+    )
+
+
 def _circinus_runtime(receipt: dict[str, Any] | None, runner: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
     command = shutil.which("circinus")
-    manifest_path = Path.home().joinpath(*LOCAL_STATE_PARTS, "circinus", "install.json")
-    manifest_hash = None
-    installed_hash = None
-    try:
-        manifest_value = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest = manifest_value if isinstance(manifest_value, dict) else {}
-        manifest_hash = manifest.get("entrypoint_sha256")
-    except (OSError, json.JSONDecodeError):
-        pass
-    if command:
-        tool_root = Path(command).resolve().parent
-        python = tool_root / "python"
-        identity = runner(
-            [
-                str(python),
-                "-c",
-                "from circinus.daemon.identity import compute_entrypoint_identity; "
-                "import json; print(json.dumps(compute_entrypoint_identity().to_json()))",
-            ],
-            timeout=30,
-        )
-        if identity.returncode == 0:
-            try:
-                identity_payload = json.loads(identity.stdout)
-                if isinstance(identity_payload, dict):
-                    installed_hash = identity_payload.get("package_tree_sha256")
-            except json.JSONDecodeError:
-                pass
+    manifest_hash = _circinus_manifest_hash()
+    installed_hash = _circinus_installed_hash(command, runner)
     installed = None
-    if (
-        isinstance(manifest_hash, str)
-        and SHA.fullmatch(manifest_hash)
-        and manifest_hash == installed_hash
-        and receipt
-        and receipt.get("artifact_sha256") == installed_hash
-    ):
+    if manifest_hash == installed_hash and receipt and receipt.get("artifact_sha256") == installed_hash:
         installed = receipt.get("source_revision")
-    status = runner([command, "doctor", "--json"], timeout=30) if command else None
-    healthy = False
-    identity_matches = False
-    if status and status.returncode == 0:
-        try:
-            payload = json.loads(status.stdout)
-            raw_checks = payload.get("checks", []) if isinstance(payload, dict) else []
-            checks = {
-                item.get("id"): item
-                for item in raw_checks
-                if isinstance(item, dict) and isinstance(item.get("id"), str)
-            }
-            healthy = checks.get("daemon_reachable", {}).get("status") == "pass"
-            identity_matches = checks.get("daemon_entrypoint_identity", {}).get("status") == "pass"
-        except json.JSONDecodeError:
-            pass
+    healthy, identity_matches = _circinus_doctor_state(command, runner)
     running = installed if installed and healthy and identity_matches else None
     return {
         "installed_revision": installed,
