@@ -17,14 +17,20 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class FakeRunner:
-    def __init__(self, responses: dict[tuple[str, ...], tuple[int, str, str]] | None = None):
+    def __init__(
+        self,
+        responses: dict[tuple[str, ...], tuple[int, str, str]] | None = None,
+        sequences: dict[tuple[str, ...], list[tuple[int, str, str]]] | None = None,
+    ):
         self.responses = responses or {}
+        self.sequences = {key: list(values) for key, values in (sequences or {}).items()}
         self.calls: list[tuple[tuple[str, ...], Path | None]] = []
 
     def __call__(self, argv, *, cwd=None, timeout=120, check=False, env=None):
         key = tuple(argv)
         self.calls.append((key, cwd))
-        rc, stdout, stderr = self.responses.get(key, (0, "", ""))
+        sequence = self.sequences.get(key, [])
+        rc, stdout, stderr = sequence.pop(0) if sequence else self.responses.get(key, (0, "", ""))
         result = subprocess.CompletedProcess(list(argv), rc, stdout, stderr)
         if check and rc:
             raise fc.ConvergenceError(f"{argv[0]} failed")
@@ -78,6 +84,23 @@ class InventoryBoundaryTest(unittest.TestCase):
             (Path(directory) / "libra.json").write_text("[]")
             self.assertIsNone(fc._read_receipt("libra"))
 
+    def test_receipt_requires_distinct_git_and_sha256_lengths(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            fc, "receipt_root", return_value=Path(directory)
+        ):
+            path = Path(directory) / "libra.json"
+            payload = {
+                "schema_version": fc.RECEIPT_SCHEMA,
+                "product": "libra",
+                "source_revision": "a" * 40,
+                "artifact_sha256": "b" * 64,
+            }
+            path.write_text(json.dumps(payload))
+            self.assertIsNotNone(fc._read_receipt("libra"))
+            payload["artifact_sha256"] = "b" * 40
+            path.write_text(json.dumps(payload))
+            self.assertIsNone(fc._read_receipt("libra"))
+
     def test_inventory_rejects_checkout_escape(self):
         raw = json.loads(fc.INVENTORY_PATH.read_text())
         raw["products"][0]["checkout"] = "../../outside"
@@ -95,6 +118,68 @@ class InventoryBoundaryTest(unittest.TestCase):
             path.write_text(json.dumps(raw))
             with self.assertRaisesRegex(fc.ConvergenceError, "may not carry executable"):
                 fc.load_inventory(path)
+
+
+class LibraInstallMarkerTest(unittest.TestCase):
+    def test_marker_accepts_only_the_trusted_binary_path_without_probing_input(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            fc.Path, "home", return_value=Path(directory)
+        ):
+            binary = Path(directory) / "bin" / "libra-governor"
+            marker = Path(directory).joinpath(*fc.LOCAL_STATE_PARTS, "libra-governor", "install.json")
+            marker.parent.mkdir(parents=True)
+            for marked_path in (
+                str(binary),
+                str(binary.parent / "other"),
+                "libra-governor",
+                str(binary.parent / ".." / "bin" / "libra-governor"),
+                "\x00",
+                123,
+                None,
+            ):
+                payload = {"installed_by": "libra-governor", "binary_path": marked_path}
+                marker.write_text(json.dumps(payload))
+                with self.subTest(marked_path=marked_path), mock.patch.object(
+                    fc.Path, "resolve", side_effect=AssertionError("marker path probed")
+                ):
+                    self.assertEqual(
+                        fc._libra_install_marker(binary),
+                        payload if marked_path == str(binary) else None,
+                    )
+            marker.write_text(json.dumps({"installed_by": "unknown", "binary_path": str(binary)}))
+            self.assertIsNone(fc._libra_install_marker(binary))
+
+    def test_process_absence_requires_process_lookup_failure(self):
+        for error, expected in (
+            (ProcessLookupError(), True),
+            (PermissionError(), False),
+            (OSError(), False),
+            (OverflowError(), False),
+            (None, False),
+        ):
+            with self.subTest(error=error), mock.patch.object(fc.os, "kill", side_effect=error):
+                self.assertEqual(fc._process_absent(12345), expected)
+
+    def test_marker_hash_must_match_the_measured_trusted_binary(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            fc.Path, "home", return_value=Path(directory)
+        ):
+            binary = Path(directory) / "libra-governor"
+            binary.write_bytes(b"fixture binary")
+            expected = hashlib.sha256(binary.read_bytes()).hexdigest()
+            marker = Path(directory).joinpath(*fc.LOCAL_STATE_PARTS, "libra-governor", "install.json")
+            marker.parent.mkdir(parents=True)
+            for digest in (expected, "b" * 64, "b" * 40, None):
+                marker.write_text(json.dumps({
+                    "installed_by": "libra-governor",
+                    "binary_path": str(binary),
+                    "binary_sha256": digest,
+                }))
+                with self.subTest(digest=digest):
+                    self.assertEqual(
+                        fc._libra_install_marker_hash(binary),
+                        expected if digest == expected else None,
+                    )
 
 
 class RemoteResolutionTest(unittest.TestCase):
@@ -274,6 +359,170 @@ class ApplySafetyTest(unittest.TestCase):
         indices = [calls.index(command) for command in product.installer or ()]
         self.assertEqual(indices, sorted(indices))
 
+    def test_libra_owned_legacy_daemon_allows_exactly_one_retry_after_clean_dormancy(self):
+        product = fc.load_inventory().products[0]
+        sha = "8" * 40
+        binary = Path.home() / ".cargo/bin/libra-governor"
+        prior_hash = "a" * 64
+        installed_hash = "b" * 64
+        absent_doctor = json.dumps({"findings": [
+            {"id": "daemon_reachable", "severity": "warn", "message": "daemon is not running — it starts on demand on the next Claude Code prompt (this is normal)"},
+            {"id": "claude_settings", "severity": "ok", "message": "settings wired"},
+        ]})
+        runner = FakeRunner(sequences={
+            product.installer[0]: [(1, "Install complete.", "protocol version mismatch"), (0, "Install complete.", "")],
+            (str(binary), "doctor", "--json"): [(0, absent_doctor, "")],
+        })
+        with mock.patch.object(fc, "inspect_source", return_value=source(sha)), mock.patch.object(
+            fc, "run_validation", return_value={"status": "passed", "commands": []}
+        ), mock.patch.object(fc, "load_inventory", return_value=fc.load_inventory()), mock.patch.object(
+            fc, "_read_receipt", return_value=None
+        ), mock.patch.object(fc, "_libra_legacy_daemon_owned", return_value=12345), mock.patch.object(
+            fc, "_sha256", side_effect=[prior_hash, installed_hash]
+        ), mock.patch.object(fc, "_libra_install_marker_hash", return_value=installed_hash), mock.patch.object(
+            fc, "inspect_runtime", return_value={"installed_revision": None, "running_revision": None, "running_healthy": False}
+        ), mock.patch.object(fc, "_artifact_measurement", return_value=installed_hash), mock.patch.object(
+            fc, "_write_receipt"
+        ) as write_receipt, mock.patch.object(fc, "_reconcile_daemon") as reconcile, mock.patch.object(
+            fc, "_revalidate_source", side_effect=lambda _product, _root, expected, _runner: expected
+        ), mock.patch.object(fc, "_process_absent", return_value=True) as absent:
+            result = fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, runner)
+        absent.assert_called_once_with(12345)
+        self.assertEqual(result["status"], "UNVERIFIABLE")
+        self.assertEqual(sum(call == product.installer[0] for call, _cwd in runner.calls), 2)
+        write_receipt.assert_called_once_with(product, sha, installed_hash)
+        reconcile.assert_called_once()
+        self.assertFalse(any("stop" in call or "run" in call for call, _cwd in runner.calls))
+
+    def test_libra_persistent_mismatch_or_malformed_doctor_never_retries_or_writes_receipt(self):
+        product = fc.load_inventory().products[0]
+        binary = Path.home() / ".cargo/bin/libra-governor"
+        prior_hash = "a" * 64
+        updated_hash = "b" * 64
+        for doctor_output in (
+            "not json",
+            json.dumps({"findings": [
+                {"id": "daemon_reachable", "severity": "error", "message": "still incompatible"},
+            ]}),
+            json.dumps({"findings": [
+                {"id": "daemon_reachable", "severity": "warn", "message": "daemon is not running — it starts on demand"},
+            ]}),
+        ):
+            runner = FakeRunner({(str(binary), "doctor", "--json"): (0, doctor_output, "")}, {
+                product.installer[0]: [(1, "Install complete.", "protocol version mismatch")],
+            })
+            with self.subTest(doctor_output=doctor_output), mock.patch.object(fc, "inspect_source", return_value=source()), mock.patch.object(
+                fc, "run_validation", return_value={"status": "passed", "commands": []}
+            ), mock.patch.object(fc, "load_inventory", return_value=fc.load_inventory()), mock.patch.object(
+                fc, "_read_receipt", return_value=None
+            ), mock.patch.object(fc, "_libra_legacy_daemon_owned", return_value=12345), mock.patch.object(
+                fc, "_sha256", side_effect=[prior_hash, updated_hash]
+            ), mock.patch.object(fc, "_libra_install_marker_hash", return_value=updated_hash), mock.patch.object(
+                fc, "inspect_runtime", return_value={}
+            ), mock.patch.object(fc, "_write_receipt") as write_receipt, mock.patch.object(
+                fc, "_reconcile_daemon"
+            ) as reconcile, mock.patch.object(fc, "_process_absent", return_value=False):
+                with self.assertRaisesRegex(fc.ConvergenceError, "did not confirm a clean dormant daemon"):
+                    fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, runner)
+            self.assertEqual(sum(call == product.installer[0] for call, _cwd in runner.calls), 1)
+            write_receipt.assert_not_called()
+            reconcile.assert_not_called()
+
+    def test_libra_installer_failure_without_upgrade_evidence_does_not_retry(self):
+        product = fc.load_inventory().products[0]
+        runner = FakeRunner(sequences={product.installer[0]: [(1, "failed before build", "build error")]})
+        with mock.patch.object(fc, "inspect_source", return_value=source()), mock.patch.object(
+            fc, "run_validation", return_value={"status": "passed", "commands": []}
+        ), mock.patch.object(fc, "load_inventory", return_value=fc.load_inventory()), mock.patch.object(
+            fc, "_read_receipt", return_value=None
+        ), mock.patch.object(fc, "_libra_legacy_daemon_owned", return_value=12345), mock.patch.object(
+            fc, "_sha256", side_effect=["a" * 64, "a" * 64]
+        ), mock.patch.object(fc, "inspect_runtime", return_value={}), mock.patch.object(
+            fc, "_write_receipt"
+        ) as write_receipt:
+            with self.assertRaisesRegex(fc.ConvergenceError, "without the owned legacy-daemon upgrade evidence"):
+                fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, runner)
+        self.assertEqual(sum(call == product.installer[0] for call, _cwd in runner.calls), 1)
+        write_receipt.assert_not_called()
+
+    def test_source_advance_before_libra_retry_aborts_without_receipt_or_reconcile(self):
+        product = fc.load_inventory().products[0]
+        binary = Path.home() / ".cargo/bin/libra-governor"
+        installed_hash = "b" * 64
+        absent_doctor = json.dumps({"findings": [
+            {"id": "daemon_reachable", "severity": "warn", "message": "daemon is not running — it starts on demand in the next prompt"},
+        ]})
+        runner = FakeRunner(sequences={
+            product.installer[0]: [(1, "Install complete.", "protocol version mismatch")],
+            (str(binary), "doctor", "--json"): [(0, absent_doctor, "")],
+        })
+        source_states = iter([source(), fc.SourceState(error="base advanced")])
+
+        def revalidate(_product, _root, _expected, _runner):
+            current = next(source_states)
+            if current.error:
+                raise fc.ConvergenceError("libra: source changed after validation")
+            return current
+
+        with mock.patch.object(fc, "inspect_source", return_value=source()), mock.patch.object(
+            fc, "run_validation", return_value={"status": "passed", "commands": []}
+        ), mock.patch.object(fc, "load_inventory", return_value=fc.load_inventory()), mock.patch.object(
+            fc, "_read_receipt", return_value=None
+        ), mock.patch.object(fc, "_libra_legacy_daemon_owned", return_value=12345), mock.patch.object(
+            fc, "_sha256", side_effect=["a" * 64, installed_hash]
+        ), mock.patch.object(fc, "_libra_install_marker_hash", return_value=installed_hash), mock.patch.object(
+            fc, "inspect_runtime", return_value={}
+        ), mock.patch.object(fc, "_revalidate_source", side_effect=revalidate), mock.patch.object(
+            fc, "_write_receipt"
+        ) as write_receipt, mock.patch.object(fc, "_reconcile_daemon") as reconcile, mock.patch.object(
+            fc, "_process_absent", return_value=True
+        ):
+            with self.assertRaisesRegex(fc.ConvergenceError, "source changed after validation"):
+                fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, runner)
+        self.assertEqual(sum(call == product.installer[0] for call, _cwd in runner.calls), 1)
+        write_receipt.assert_not_called()
+        reconcile.assert_not_called()
+
+    def test_source_advance_after_installer_aborts_before_receipt_or_reconcile(self):
+        product = fc.load_inventory().products[0]
+        sha = "9" * 40
+        runner = FakeRunner()
+        source_states = iter([source(sha), fc.SourceState(error="base advanced")])
+
+        def revalidate(_product, _root, _expected, _runner):
+            current = next(source_states)
+            if current.error:
+                raise fc.ConvergenceError(f"{product.id}: source changed after validation")
+            return current
+
+        with mock.patch.object(fc, "inspect_source", return_value=source(sha)), mock.patch.object(
+            fc, "run_validation", return_value={"status": "passed", "commands": []}
+        ), mock.patch.object(fc, "load_inventory", return_value=fc.load_inventory()), mock.patch.object(
+            fc, "inspect_runtime", return_value={}
+        ), mock.patch.object(fc, "_artifact_measurement", return_value="a" * 64), mock.patch.object(
+            fc, "_write_receipt"
+        ) as write_receipt, mock.patch.object(fc, "_reconcile_daemon") as reconcile, mock.patch.object(
+            fc, "_revalidate_source", side_effect=revalidate
+        ):
+            with self.assertRaisesRegex(fc.ConvergenceError, "source changed after validation"):
+                fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, runner)
+        write_receipt.assert_not_called()
+        reconcile.assert_not_called()
+
+    def test_validation_failure_is_not_rerun(self):
+        product = fc.load_inventory().products[0]
+        sha = "c" * 40
+        validation = {"status": "failed", "commands": [{"exit_code": 1}]}
+        with mock.patch.object(fc, "inspect_source", return_value=source(sha)), mock.patch.object(
+            fc, "run_validation", return_value=validation
+        ) as validate, mock.patch.object(fc, "load_inventory", return_value=fc.load_inventory()), mock.patch.object(
+            fc, "inspect_runtime", return_value={}
+        ):
+            result = fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, FakeRunner())
+        validate.assert_called_once()
+        self.assertIs(result["validation"], validation)
+        self.assertEqual(result["status"], "BASE_HEAD_NOT_DEPLOYABLE")
+
     def test_validation_timeout_is_unverifiable_not_a_traceback(self):
         product = fc.load_inventory().products[0]
 
@@ -338,6 +587,18 @@ class RuntimeEvidenceTest(unittest.TestCase):
             )
             with self.subTest(finding=finding):
                 self.assertFalse(fc._libra_doctor_healthy(result))
+
+    def test_circinus_artifact_measurement_requires_owned_identity_match(self):
+        product = fc.load_inventory().products[1]
+        digest = "d" * 64
+        with mock.patch.object(fc.shutil, "which", return_value="/tools/circinus/bin/circinus"), mock.patch.object(
+            fc, "_circinus_manifest_hash", return_value=digest
+        ), mock.patch.object(fc, "_circinus_installed_hash", return_value="e" * 64):
+            self.assertIsNone(fc._artifact_measurement(product, FakeRunner()))
+        with mock.patch.object(fc.shutil, "which", return_value="/tools/circinus/bin/circinus"), mock.patch.object(
+            fc, "_circinus_manifest_hash", return_value=digest
+        ), mock.patch.object(fc, "_circinus_installed_hash", return_value=digest):
+            self.assertEqual(fc._artifact_measurement(product, FakeRunner()), digest)
 
     def test_circinus_doctor_rejects_malformed_check_rows(self):
         runner = FakeRunner({

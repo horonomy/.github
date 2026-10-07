@@ -35,6 +35,7 @@ LIFECYCLES = frozenset({"libra", "circinus"})
 SAFE_ID = re.compile(r"^[a-z][a-z0-9-]*$")
 SAFE_REPO = re.compile(r"^[A-Za-z0-9._-]+$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
+ARTIFACT_SHA = re.compile(r"^[0-9a-f]{64}$")
 GITHUB_REMOTE = re.compile(r"^(?:https://github\.com/|git@github\.com:)([^/]+)/([^/]+?)(?:\.git)?$")
 
 
@@ -332,6 +333,10 @@ def _read_receipt(product_id: str) -> dict[str, Any] | None:
         if isinstance(data, dict)
         and data.get("schema_version") == RECEIPT_SCHEMA
         and data.get("product") == product_id
+        and isinstance(data.get("source_revision"), str)
+        and SHA.fullmatch(data["source_revision"])
+        and isinstance(data.get("artifact_sha256"), str)
+        and ARTIFACT_SHA.fullmatch(data["artifact_sha256"])
         else None
     )
 
@@ -355,6 +360,16 @@ def _process_alive(pid: object) -> bool:
     except (OSError, OverflowError):
         return False
     return True
+
+
+def _process_absent(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except (OSError, OverflowError):
+        return False
+    return False
 
 
 def _json_object(raw: str) -> dict[str, Any] | None:
@@ -384,6 +399,78 @@ def _libra_doctor_healthy(result: subprocess.CompletedProcess[str] | None) -> bo
         item.get("severity") == "ok" and str(item.get("message", "")).startswith("daemon ")
         for item in valid
     )
+
+
+def _libra_doctor_confirms_daemon_absent(
+    result: subprocess.CompletedProcess[str] | None,
+) -> bool:
+    """Accept only clean doctor output with its known lazy-start warning."""
+    if result is None or result.returncode != 0:
+        return False
+    payload = _json_object(result.stdout)
+    findings = payload.get("findings") if payload else None
+    if not isinstance(findings, list) or not findings:
+        return False
+    absent_warning = False
+    for finding in findings:
+        if not isinstance(finding, dict) or not all(
+            isinstance(finding.get(key), str) for key in ("id", "severity", "message")
+        ):
+            return False
+        if finding["severity"] == "ok":
+            continue
+        if (
+            finding["id"] == "daemon_reachable"
+            and finding["severity"] == "warn"
+            and finding["message"].startswith("daemon is not running — it starts on demand")
+            and not absent_warning
+        ):
+            absent_warning = True
+            continue
+        return False
+    return absent_warning
+
+
+def _libra_install_marker(binary: Path) -> dict[str, Any] | None:
+    """Read Libra's own marker only when it names this installed binary."""
+    marker_path = Path.home().joinpath(*LOCAL_STATE_PARTS, "libra-governor", "install.json")
+    try:
+        payload = _json_object(marker_path.read_text(encoding="utf-8"))
+        marked_path = payload.get("binary_path") if payload else None
+        if (
+            not payload
+            or payload.get("installed_by") != "libra-governor"
+            or not isinstance(marked_path, str)
+            or marked_path != str(binary)
+        ):
+            return None
+    except (OSError, UnicodeError):
+        return None
+    return payload
+
+
+def _libra_install_marker_hash(binary: Path) -> str | None:
+    """Return the measured binary hash only when Libra's own marker owns it."""
+    payload = _libra_install_marker(binary)
+    marked_hash = payload.get("binary_sha256") if payload else None
+    if not isinstance(marked_hash, str) or not ARTIFACT_SHA.fullmatch(marked_hash):
+        return None
+    measured_hash = _sha256(binary)
+    return measured_hash if measured_hash == marked_hash else None
+
+
+def _libra_legacy_daemon_owned(binary: Path) -> int | None:
+    """Identify the supported old-pidfile case without inventing its hash."""
+    if _libra_install_marker(binary) is None:
+        return None
+    pid_path = Path.home().joinpath(*LOCAL_STATE_PARTS, "libra-governor", "daemon.pid")
+    try:
+        pid = _json_object(pid_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError):
+        return None
+    if not pid or "exe_sha256" in pid or pid.get("exe_path") != str(binary) or not isinstance(pid.get("pid"), int) or isinstance(pid.get("pid"), bool):
+        return None
+    return pid["pid"] if _process_alive(pid["pid"]) else None
 
 
 def _libra_runtime(
@@ -430,7 +517,7 @@ def _circinus_manifest_hash() -> str | None:
     except (OSError, UnicodeError):
         return None
     value = payload.get("entrypoint_sha256") if payload else None
-    return value if isinstance(value, str) and SHA.fullmatch(value) else None
+    return value if isinstance(value, str) and ARTIFACT_SHA.fullmatch(value) else None
 
 
 def _circinus_installed_hash(
@@ -451,7 +538,7 @@ def _circinus_installed_hash(
     )
     payload = _json_object(result.stdout) if result.returncode == 0 else None
     value = payload.get("package_tree_sha256") if payload else None
-    return value if isinstance(value, str) and SHA.fullmatch(value) else None
+    return value if isinstance(value, str) and ARTIFACT_SHA.fullmatch(value) else None
 
 
 def _circinus_doctor_state(
@@ -559,6 +646,15 @@ def inspect_product(
         "status": "not_run",
         "commands": [],
     }
+    return _product_report(product, source, runtime, validation)
+
+
+def _product_report(
+    product: Product,
+    source: SourceState,
+    runtime: dict[str, Any],
+    validation: dict[str, Any],
+) -> dict[str, Any]:
     status = derive_status(product, source, runtime, validation)
     return {
         "product": product.id,
@@ -645,18 +741,18 @@ def _artifact_path(product: Product) -> Path:
     return Path(command)
 
 
-def _artifact_measurement(product: Product) -> str | None:
+def _artifact_measurement(
+    product: Product,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> str | None:
     if product.lifecycle == "libra":
-        return _sha256(Path.home().joinpath(*CARGO_BIN_PARTS, "libra-governor"))
+        binary = Path.home().joinpath(*CARGO_BIN_PARTS, "libra-governor")
+        return _libra_install_marker_hash(binary)
     if product.lifecycle == "circinus":
-        try:
-            manifest = json.loads(
-                (Path.home() / ".local/state/circinus/install.json").read_text(encoding="utf-8")
-            )
-        except (OSError, json.JSONDecodeError):
-            return None
-        value = manifest.get("entrypoint_sha256")
-        return value if isinstance(value, str) and value else None
+        command = shutil.which("circinus")
+        manifest_hash = _circinus_manifest_hash()
+        installed_hash = _circinus_installed_hash(command, runner)
+        return installed_hash if manifest_hash and manifest_hash == installed_hash else None
     return None
 
 
@@ -723,23 +819,62 @@ def apply_product(
 
     validation = run_validation(product, refreshed, runner)
     if validation["status"] != "passed":
-        return inspect_product(product, root, runner, validate=True)
+        return _product_report(product, refreshed, inspect_runtime(product, runner), validation)
     # Validation may be long-running. Re-resolve the remote/default/base SHA and
     # checkout fingerprint before invoking an installer so a base advance or a
     # concurrent local edit can never turn a previously valid plan into a stale
     # deployment source.
     preinstall = _revalidate_source(product, root, refreshed, runner)
-    prior_runtime = inspect_runtime(product, runner)
     assert product.installer and preinstall.checkout and preinstall.remote_head
+    libra_binary = Path.home().joinpath(*CARGO_BIN_PARTS, "libra-governor")
+    prior_libra_hash = _sha256(libra_binary) if product.lifecycle == "libra" else None
+    legacy_libra_pid = (
+        _libra_legacy_daemon_owned(libra_binary)
+        if product.lifecycle == "libra" and not receipt_path(product.id).exists()
+        else None
+    )
+    prior_runtime = inspect_runtime(product, runner)
     for command in product.installer:
+        if product.lifecycle != "libra" or command != ("bash", "scripts/install.sh"):
+            runner(command, cwd=preinstall.checkout, timeout=1800, check=True)
+            continue
+        result = runner(command, cwd=preinstall.checkout, timeout=1800, check=False)
+        if result.returncode == 0:
+            continue
+        output = (result.stdout or "") + "\n" + (result.stderr or "")
+        updated_hash = _sha256(libra_binary)
+        retry_is_safe = (
+            legacy_libra_pid is not None
+            and "Install complete." in output
+            and "protocol version mismatch" in output.lower()
+            and updated_hash is not None
+            and ARTIFACT_SHA.fullmatch(updated_hash)
+            and updated_hash != prior_libra_hash
+            and _libra_install_marker_hash(libra_binary) == updated_hash
+        )
+        if not retry_is_safe:
+            raise ConvergenceError(
+                f"{product.id}: installer failed without the owned legacy-daemon upgrade evidence"
+            )
+        doctor = runner([str(libra_binary), "doctor", "--json"], timeout=30)
+        if (
+            not _libra_doctor_confirms_daemon_absent(doctor)
+            or not _process_absent(legacy_libra_pid)
+        ):
+            raise ConvergenceError(
+                f"{product.id}: installer failed and doctor did not confirm a clean dormant daemon"
+            )
+        _revalidate_source(product, root, preinstall, runner)
         runner(command, cwd=preinstall.checkout, timeout=1800, check=True)
-    artifact_hash = _artifact_measurement(product)
-    if not artifact_hash:
-        raise ConvergenceError(f"{product.id}: installed artifact could not be measured")
-    _write_receipt(product, preinstall.remote_head, artifact_hash)
+    final_install_source = _revalidate_source(product, root, preinstall, runner)
+    artifact_hash = _artifact_measurement(product, runner)
+    if not artifact_hash or not ARTIFACT_SHA.fullmatch(artifact_hash):
+        raise ConvergenceError(f"{product.id}: installed artifact could not be measured and verified")
+    _write_receipt(product, final_install_source.remote_head, artifact_hash)
 
-    _reconcile_daemon(product, preinstall.remote_head, prior_runtime, runner)
-    return inspect_product(product, root, runner, validate=True)
+    _reconcile_daemon(product, final_install_source.remote_head, prior_runtime, runner)
+    final_source = _revalidate_source(product, root, final_install_source, runner)
+    return _product_report(product, final_source, inspect_runtime(product, runner), validation)
 
 
 def _print_report(report: dict[str, Any]) -> None:
