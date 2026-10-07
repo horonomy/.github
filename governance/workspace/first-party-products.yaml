@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "products": [
+    {
+      "id": "libra",
+      "workspace_name": "libra",
+      "checkout": "libra-governor",
+      "org": "horonomy",
+      "repo": "libra-governor",
+      "disposition": "managed",
+      "lifecycle": "libra",
+      "validation": [
+        ["cargo", "fmt", "--all", "--", "--check"],
+        ["cargo", "test", "--workspace"],
+        ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]
+      ],
+      "installer": [["bash", "scripts/install.sh"]]
+    },
+    {
+      "id": "circinus",
+      "workspace_name": "circinus",
+      "checkout": "circinus",
+      "org": "horonomy",
+      "repo": "circinus",
+      "disposition": "managed",
+      "lifecycle": "circinus",
+      "validation": [
+        ["uv", "sync", "--locked"],
+        ["uv", "run", "pytest"],
+        ["uv", "run", "ruff", "check", "."],
+        ["uv", "run", "mypy"]
+      ],
+      "installer": [
+        ["uv", "tool", "install", "--editable", ".", "--force"],
+        ["circinus", "install", "claude-code", "--scope", "user"]
+      ]
+    },
+    {
+      "id": "fornax",
+      "workspace_name": "fornax",
+      "checkout": "fornax-core",
+      "org": "horonomy",
+      "repo": "fornax-core",
+      "disposition": "unverifiable",
+      "reason": "No canonical installed/running commit identity contract exists yet."
+    },
+    {
+      "id": "ophiuchus",
+      "workspace_name": "ophiuchus",
+      "checkout": "ophiuchus",
+      "org": "horonomy",
+      "repo": "ophiuchus",
+      "disposition": "unverifiable",
+      "reason": "No canonical installed/running commit identity contract exists yet."
+    },
+    {
+      "id": "horologium",
+      "workspace_name": "horologium",
+      "checkout": "horologium",
+      "org": "horonomy",
+      "repo": "horologium",
+      "disposition": "unverifiable",
+      "reason": "No local deployed runtime or canonical installed/running commit identity is present."
+    },
+    {
+      "id": "octans",
+      "workspace_name": "octans",
+      "checkout": "octans",
+      "org": "horonomy",
+      "repo": "octans",
+      "disposition": "not_present",
+      "reason": "The positively owned product has no managed local checkout."
+    },
+    {
+      "id": "eridanus",
+      "workspace_name": "eridanus",
+      "checkout": "eridanus",
+      "org": "horonomy",
+      "repo": "eridanus",
+      "disposition": "not_present",
+      "reason": "The positively owned product has no managed local checkout."
+    }
+  ],
+  "third_party_exclusions": [
+    {
+      "id": "archify",
+      "owner": "tt-a1i",
+      "repository": "https://github.com/tt-a1i/archify",
+      "policy_owner": "upstream skill release manifest"
+    },
+    {
+      "id": "visual-explainer",
+      "owner": "nicobailon",
+      "repository": "https://github.com/nicobailon/visual-explainer",
+      "policy_owner": "Claude plugin marketplace lifecycle"
+    }
+  ]
+}

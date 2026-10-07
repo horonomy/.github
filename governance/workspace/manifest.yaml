@@ -28,6 +28,10 @@ repos:
     org: horonomy
     repo: internal-docs
     category: company
+  - name: libra
+    org: horonomy
+    repo: libra-governor
+    category: product
   - name: circinus
     org: horonomy
     repo: circinus
