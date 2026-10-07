@@ -120,6 +120,68 @@ class InventoryBoundaryTest(unittest.TestCase):
                 fc.load_inventory(path)
 
 
+class LibraInstallMarkerTest(unittest.TestCase):
+    def test_marker_accepts_only_the_trusted_binary_path_without_probing_input(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            fc.Path, "home", return_value=Path(directory)
+        ):
+            binary = Path(directory) / "bin" / "libra-governor"
+            marker = Path(directory).joinpath(*fc.LOCAL_STATE_PARTS, "libra-governor", "install.json")
+            marker.parent.mkdir(parents=True)
+            for marked_path in (
+                str(binary),
+                str(binary.parent / "other"),
+                "libra-governor",
+                str(binary.parent / ".." / "bin" / "libra-governor"),
+                "\x00",
+                123,
+                None,
+            ):
+                payload = {"installed_by": "libra-governor", "binary_path": marked_path}
+                marker.write_text(json.dumps(payload))
+                with self.subTest(marked_path=marked_path), mock.patch.object(
+                    fc.Path, "resolve", side_effect=AssertionError("marker path probed")
+                ):
+                    self.assertEqual(
+                        fc._libra_install_marker(binary),
+                        payload if marked_path == str(binary) else None,
+                    )
+            marker.write_text(json.dumps({"installed_by": "unknown", "binary_path": str(binary)}))
+            self.assertIsNone(fc._libra_install_marker(binary))
+
+    def test_process_absence_requires_process_lookup_failure(self):
+        for error, expected in (
+            (ProcessLookupError(), True),
+            (PermissionError(), False),
+            (OSError(), False),
+            (OverflowError(), False),
+            (None, False),
+        ):
+            with self.subTest(error=error), mock.patch.object(fc.os, "kill", side_effect=error):
+                self.assertEqual(fc._process_absent(12345), expected)
+
+    def test_marker_hash_must_match_the_measured_trusted_binary(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            fc.Path, "home", return_value=Path(directory)
+        ):
+            binary = Path(directory) / "libra-governor"
+            binary.write_bytes(b"fixture binary")
+            expected = hashlib.sha256(binary.read_bytes()).hexdigest()
+            marker = Path(directory).joinpath(*fc.LOCAL_STATE_PARTS, "libra-governor", "install.json")
+            marker.parent.mkdir(parents=True)
+            for digest in (expected, "b" * 64, "b" * 40, None):
+                marker.write_text(json.dumps({
+                    "installed_by": "libra-governor",
+                    "binary_path": str(binary),
+                    "binary_sha256": digest,
+                }))
+                with self.subTest(digest=digest):
+                    self.assertEqual(
+                        fc._libra_install_marker_hash(binary),
+                        expected if digest == expected else None,
+                    )
+
+
 class RemoteResolutionTest(unittest.TestCase):
     def test_canonical_remote_need_not_be_origin_and_default_branch_comes_from_symref(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -315,7 +377,7 @@ class ApplySafetyTest(unittest.TestCase):
             fc, "run_validation", return_value={"status": "passed", "commands": []}
         ), mock.patch.object(fc, "load_inventory", return_value=fc.load_inventory()), mock.patch.object(
             fc, "_read_receipt", return_value=None
-        ), mock.patch.object(fc, "_libra_legacy_daemon_owned", return_value=True), mock.patch.object(
+        ), mock.patch.object(fc, "_libra_legacy_daemon_owned", return_value=12345), mock.patch.object(
             fc, "_sha256", side_effect=[prior_hash, installed_hash]
         ), mock.patch.object(fc, "_libra_install_marker_hash", return_value=installed_hash), mock.patch.object(
             fc, "inspect_runtime", return_value={"installed_revision": None, "running_revision": None, "running_healthy": False}
@@ -323,8 +385,9 @@ class ApplySafetyTest(unittest.TestCase):
             fc, "_write_receipt"
         ) as write_receipt, mock.patch.object(fc, "_reconcile_daemon") as reconcile, mock.patch.object(
             fc, "_revalidate_source", side_effect=lambda _product, _root, expected, _runner: expected
-        ):
+        ), mock.patch.object(fc, "_process_absent", return_value=True) as absent:
             result = fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, runner)
+        absent.assert_called_once_with(12345)
         self.assertEqual(result["status"], "UNVERIFIABLE")
         self.assertEqual(sum(call == product.installer[0] for call, _cwd in runner.calls), 2)
         write_receipt.assert_called_once_with(product, sha, installed_hash)
@@ -336,9 +399,15 @@ class ApplySafetyTest(unittest.TestCase):
         binary = Path.home() / ".cargo/bin/libra-governor"
         prior_hash = "a" * 64
         updated_hash = "b" * 64
-        for doctor_output in ("not json", json.dumps({"findings": [
-            {"id": "daemon_reachable", "severity": "error", "message": "still incompatible"},
-        ]})):
+        for doctor_output in (
+            "not json",
+            json.dumps({"findings": [
+                {"id": "daemon_reachable", "severity": "error", "message": "still incompatible"},
+            ]}),
+            json.dumps({"findings": [
+                {"id": "daemon_reachable", "severity": "warn", "message": "daemon is not running — it starts on demand"},
+            ]}),
+        ):
             runner = FakeRunner({(str(binary), "doctor", "--json"): (0, doctor_output, "")}, {
                 product.installer[0]: [(1, "Install complete.", "protocol version mismatch")],
             })
@@ -346,13 +415,13 @@ class ApplySafetyTest(unittest.TestCase):
                 fc, "run_validation", return_value={"status": "passed", "commands": []}
             ), mock.patch.object(fc, "load_inventory", return_value=fc.load_inventory()), mock.patch.object(
                 fc, "_read_receipt", return_value=None
-            ), mock.patch.object(fc, "_libra_legacy_daemon_owned", return_value=True), mock.patch.object(
+            ), mock.patch.object(fc, "_libra_legacy_daemon_owned", return_value=12345), mock.patch.object(
                 fc, "_sha256", side_effect=[prior_hash, updated_hash]
             ), mock.patch.object(fc, "_libra_install_marker_hash", return_value=updated_hash), mock.patch.object(
                 fc, "inspect_runtime", return_value={}
             ), mock.patch.object(fc, "_write_receipt") as write_receipt, mock.patch.object(
                 fc, "_reconcile_daemon"
-            ) as reconcile:
+            ) as reconcile, mock.patch.object(fc, "_process_absent", return_value=False):
                 with self.assertRaisesRegex(fc.ConvergenceError, "did not confirm a clean dormant daemon"):
                     fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, runner)
             self.assertEqual(sum(call == product.installer[0] for call, _cwd in runner.calls), 1)
@@ -366,7 +435,7 @@ class ApplySafetyTest(unittest.TestCase):
             fc, "run_validation", return_value={"status": "passed", "commands": []}
         ), mock.patch.object(fc, "load_inventory", return_value=fc.load_inventory()), mock.patch.object(
             fc, "_read_receipt", return_value=None
-        ), mock.patch.object(fc, "_libra_legacy_daemon_owned", return_value=True), mock.patch.object(
+        ), mock.patch.object(fc, "_libra_legacy_daemon_owned", return_value=12345), mock.patch.object(
             fc, "_sha256", side_effect=["a" * 64, "a" * 64]
         ), mock.patch.object(fc, "inspect_runtime", return_value={}), mock.patch.object(
             fc, "_write_receipt"
@@ -399,13 +468,15 @@ class ApplySafetyTest(unittest.TestCase):
             fc, "run_validation", return_value={"status": "passed", "commands": []}
         ), mock.patch.object(fc, "load_inventory", return_value=fc.load_inventory()), mock.patch.object(
             fc, "_read_receipt", return_value=None
-        ), mock.patch.object(fc, "_libra_legacy_daemon_owned", return_value=True), mock.patch.object(
+        ), mock.patch.object(fc, "_libra_legacy_daemon_owned", return_value=12345), mock.patch.object(
             fc, "_sha256", side_effect=["a" * 64, installed_hash]
         ), mock.patch.object(fc, "_libra_install_marker_hash", return_value=installed_hash), mock.patch.object(
             fc, "inspect_runtime", return_value={}
         ), mock.patch.object(fc, "_revalidate_source", side_effect=revalidate), mock.patch.object(
             fc, "_write_receipt"
-        ) as write_receipt, mock.patch.object(fc, "_reconcile_daemon") as reconcile:
+        ) as write_receipt, mock.patch.object(fc, "_reconcile_daemon") as reconcile, mock.patch.object(
+            fc, "_process_absent", return_value=True
+        ):
             with self.assertRaisesRegex(fc.ConvergenceError, "source changed after validation"):
                 fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, runner)
         self.assertEqual(sum(call == product.installer[0] for call, _cwd in runner.calls), 1)

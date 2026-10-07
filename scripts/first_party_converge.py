@@ -362,6 +362,16 @@ def _process_alive(pid: object) -> bool:
     return True
 
 
+def _process_absent(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except (OSError, OverflowError):
+        return False
+    return False
+
+
 def _json_object(raw: str) -> dict[str, Any] | None:
     try:
         value = json.loads(raw)
@@ -427,7 +437,12 @@ def _libra_install_marker(binary: Path) -> dict[str, Any] | None:
     try:
         payload = _json_object(marker_path.read_text(encoding="utf-8"))
         marked_path = payload.get("binary_path") if payload else None
-        if not payload or payload.get("installed_by") != "libra-governor" or not isinstance(marked_path, str) or Path(marked_path).resolve() != binary.resolve():
+        if (
+            not payload
+            or payload.get("installed_by") != "libra-governor"
+            or not isinstance(marked_path, str)
+            or marked_path != str(binary)
+        ):
             return None
     except (OSError, UnicodeError):
         return None
@@ -444,18 +459,18 @@ def _libra_install_marker_hash(binary: Path) -> str | None:
     return measured_hash if measured_hash == marked_hash else None
 
 
-def _libra_legacy_daemon_owned(binary: Path) -> bool:
+def _libra_legacy_daemon_owned(binary: Path) -> int | None:
     """Identify the supported old-pidfile case without inventing its hash."""
     if _libra_install_marker(binary) is None:
-        return False
+        return None
     pid_path = Path.home().joinpath(*LOCAL_STATE_PARTS, "libra-governor", "daemon.pid")
     try:
         pid = _json_object(pid_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError):
-        return False
+        return None
     if not pid or "exe_sha256" in pid or pid.get("exe_path") != str(binary) or not isinstance(pid.get("pid"), int) or isinstance(pid.get("pid"), bool):
-        return False
-    return _process_alive(pid["pid"])
+        return None
+    return pid["pid"] if _process_alive(pid["pid"]) else None
 
 
 def _libra_runtime(
@@ -813,10 +828,10 @@ def apply_product(
     assert product.installer and preinstall.checkout and preinstall.remote_head
     libra_binary = Path.home().joinpath(*CARGO_BIN_PARTS, "libra-governor")
     prior_libra_hash = _sha256(libra_binary) if product.lifecycle == "libra" else None
-    legacy_libra_daemon_owned = (
-        product.lifecycle == "libra"
-        and not receipt_path(product.id).exists()
-        and _libra_legacy_daemon_owned(libra_binary)
+    legacy_libra_pid = (
+        _libra_legacy_daemon_owned(libra_binary)
+        if product.lifecycle == "libra" and not receipt_path(product.id).exists()
+        else None
     )
     prior_runtime = inspect_runtime(product, runner)
     for command in product.installer:
@@ -829,7 +844,7 @@ def apply_product(
         output = (result.stdout or "") + "\n" + (result.stderr or "")
         updated_hash = _sha256(libra_binary)
         retry_is_safe = (
-            legacy_libra_daemon_owned
+            legacy_libra_pid is not None
             and "Install complete." in output
             and "protocol version mismatch" in output.lower()
             and updated_hash is not None
@@ -842,7 +857,10 @@ def apply_product(
                 f"{product.id}: installer failed without the owned legacy-daemon upgrade evidence"
             )
         doctor = runner([str(libra_binary), "doctor", "--json"], timeout=30)
-        if not _libra_doctor_confirms_daemon_absent(doctor):
+        if (
+            not _libra_doctor_confirms_daemon_absent(doctor)
+            or not _process_absent(legacy_libra_pid)
+        ):
             raise ConvergenceError(
                 f"{product.id}: installer failed and doctor did not confirm a clean dormant daemon"
             )
