@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pathlib
 from pathlib import Path
 import subprocess
 import tempfile
@@ -324,11 +325,40 @@ class RuntimeEvidenceTest(unittest.TestCase):
         self.assertFalse(fc._libra_doctor_healthy(malformed))
         self.assertFalse(fc._libra_doctor_healthy(subprocess.CompletedProcess([], 0, "[]", "")))
 
+    def test_libra_doctor_rejects_warning_or_unknown_finding_shapes(self):
+        for finding in (
+            {"severity": "warn", "message": "runtime warning"},
+            {"severity": "mystery", "message": "unknown"},
+            {"other": "missing required fields"},
+        ):
+            result = subprocess.CompletedProcess(
+                [], 0, json.dumps({"findings": [
+                    {"severity": "ok", "message": "daemon 0.0.2 reachable"}, finding,
+                ]}), ""
+            )
+            with self.subTest(finding=finding):
+                self.assertFalse(fc._libra_doctor_healthy(result))
+
     def test_circinus_doctor_rejects_malformed_check_rows(self):
         runner = FakeRunner({
             ("circinus", "doctor", "--json"): (0, json.dumps({"checks": [None]}), "")
         })
         self.assertEqual(fc._circinus_doctor_state("circinus", runner), (False, False))
+        runner = FakeRunner({
+            ("circinus", "doctor", "--json"): (0, json.dumps({"checks": [
+                {"id": "daemon_reachable", "status": "pass"},
+                {"id": "daemon_entrypoint_identity", "status": "pass"},
+                {"unexpected": "malformed"},
+            ]}), "")
+        })
+        self.assertEqual(fc._circinus_doctor_state("circinus", runner), (False, False))
+
+    def test_corrupt_utf8_manifest_is_unverifiable(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, "home", return_value=Path(directory)):
+            path = Path(directory) / ".local" / "state" / "circinus" / "install.json"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"\xff")
+            self.assertIsNone(fc._circinus_manifest_hash())
 
 
 class CommandStatusTest(unittest.TestCase):

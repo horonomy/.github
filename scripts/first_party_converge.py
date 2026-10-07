@@ -372,8 +372,13 @@ def _libra_doctor_healthy(result: subprocess.CompletedProcess[str] | None) -> bo
     findings = payload.get("findings") if payload else None
     if not isinstance(findings, list) or not findings:
         return False
-    valid = [item for item in findings if isinstance(item, dict)]
-    if len(valid) != len(findings) or any(item.get("severity") == "error" for item in valid):
+    valid = [
+        item for item in findings
+        if isinstance(item, dict)
+        and item.get("severity") == "ok"
+        and isinstance(item.get("message"), str)
+    ]
+    if len(valid) != len(findings):
         return False
     return any(
         item.get("severity") == "ok" and str(item.get("message", "")).startswith("daemon ")
@@ -396,7 +401,7 @@ def _libra_runtime(
     try:
         pid_value = json.loads(pid_path.read_text(encoding="utf-8"))
         pid = pid_value if isinstance(pid_value, dict) else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         pid = {}
     recorded_hash = pid.get("exe_sha256")
     doctor = runner([str(binary), "doctor", "--json"], timeout=30) if binary.exists() else None
@@ -422,7 +427,7 @@ def _circinus_manifest_hash() -> str | None:
     path = Path.home().joinpath(*LOCAL_STATE_PARTS, "circinus", "install.json")
     try:
         payload = _json_object(path.read_text(encoding="utf-8"))
-    except OSError:
+    except (OSError, UnicodeError):
         return None
     value = payload.get("entrypoint_sha256") if payload else None
     return value if isinstance(value, str) and SHA.fullmatch(value) else None
@@ -458,9 +463,14 @@ def _circinus_doctor_state(
     result = runner([command, "doctor", "--json"], timeout=30)
     payload = _json_object(result.stdout) if result.returncode == 0 else None
     raw = payload.get("checks") if payload else None
-    if not isinstance(raw, list) or not all(isinstance(item, dict) for item in raw):
+    if not isinstance(raw, list) or not all(
+        isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and item.get("status") in {"pass", "warn", "fail", "unsupported"}
+        for item in raw
+    ):
         return False, False
-    checks = {item.get("id"): item for item in raw if isinstance(item.get("id"), str)}
+    checks = {item["id"]: item for item in raw}
     return (
         checks.get("daemon_reachable", {}).get("status") == "pass",
         checks.get("daemon_entrypoint_identity", {}).get("status") == "pass",
