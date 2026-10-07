@@ -125,6 +125,17 @@ class RemoteResolutionTest(unittest.TestCase):
             self.assertEqual(state.base_branch, "trunk")
             self.assertEqual(state.remote_head, sha)
 
+    def test_symlinked_git_metadata_is_not_a_managed_checkout(self):
+        product = fc.load_inventory().products[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            outside = root / "outside-git"
+            outside.mkdir()
+            checkout = root / product.checkout
+            checkout.mkdir()
+            (checkout / ".git").symlink_to(outside, target_is_directory=True)
+            self.assertIsNone(fc._checkout_path(root, product))
+
     def test_remote_failure_is_unverifiable_not_current(self):
         product = fc.load_inventory().products[0]
         state = fc.SourceState(error="remote_head_unresolved")
@@ -258,6 +269,15 @@ class ApplySafetyTest(unittest.TestCase):
         calls = [call for call, _cwd in runner.calls]
         indices = [calls.index(command) for command in product.installer or ()]
         self.assertEqual(indices, sorted(indices))
+
+    def test_validation_timeout_is_unverifiable_not_a_traceback(self):
+        product = fc.load_inventory().products[0]
+
+        def timeout(*_args, **_kwargs):
+            raise subprocess.TimeoutExpired("cargo", 600)
+
+        result = fc.run_validation(product, source("7" * 40), timeout)
+        self.assertEqual(result["status"], "unverifiable")
 
     def test_apply_never_accepts_a_feature_branch_as_target(self):
         product = fc.load_inventory().products[0]

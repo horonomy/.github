@@ -220,7 +220,8 @@ def _checkout_path(root: Path, product: Product) -> Path | None:
             candidate.relative_to(root)
         except ValueError:
             continue
-        if candidate.is_dir() and (candidate / ".git").exists():
+        git_dir = candidate / ".git"
+        if candidate.is_dir() and git_dir.is_dir() and not git_dir.is_symlink():
             return candidate
     return None
 
@@ -459,7 +460,11 @@ def run_validation(product: Product, source: SourceState, runner: Callable[..., 
         return {"status": "not_run", "commands": []}
     outcomes = []
     for command in product.validation:
-        result = runner(command, cwd=source.checkout, timeout=600)
+        try:
+            result = runner(command, cwd=source.checkout, timeout=600)
+        except (subprocess.TimeoutExpired, OSError):
+            outcomes.append({"argv": list(command), "exit_code": None, "reason": "unverifiable"})
+            return {"status": "unverifiable", "commands": outcomes}
         outcomes.append({"argv": list(command), "exit_code": result.returncode})
         if result.returncode:
             return {"status": "failed", "commands": outcomes}
