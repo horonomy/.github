@@ -50,7 +50,7 @@ class Product:
     disposition: str
     lifecycle: str | None
     validation: tuple[tuple[str, ...], ...]
-    installer: tuple[str, ...] | None
+    installer: tuple[tuple[str, ...], ...] | None
     reason: str | None
 
 
@@ -166,7 +166,9 @@ def load_inventory(path: Path = INVENTORY_PATH) -> Inventory:
             if not isinstance(validation_raw, list) or not validation_raw:
                 raise ConvergenceError(f"{where}: managed product needs validation commands")
             validation = tuple(_command(command, f"{where}.validation") for command in validation_raw)
-            installer = _command(installer_raw, f"{where}.installer")
+            if not isinstance(installer_raw, list) or not installer_raw:
+                raise ConvergenceError(f"{where}.installer: expected one or more argv arrays")
+            installer = tuple(_command(command, f"{where}.installer") for command in installer_raw)
         else:
             if any(key in item for key in ("lifecycle", "validation", "installer")):
                 raise ConvergenceError(f"{where}: non-managed product may not carry executable lifecycle fields")
@@ -562,7 +564,8 @@ def apply_product(
     if validation["status"] != "passed":
         return inspect_product(product, root, runner, validate=True)
     assert product.installer and refreshed.checkout and refreshed.remote_head
-    runner(product.installer, cwd=refreshed.checkout, timeout=1800, check=True)
+    for command in product.installer:
+        runner(command, cwd=refreshed.checkout, timeout=1800, check=True)
     artifact_hash = _artifact_measurement(product)
     if not artifact_hash:
         raise ConvergenceError(f"{product.id}: installed artifact could not be measured")

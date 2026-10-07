@@ -182,7 +182,8 @@ class ApplySafetyTest(unittest.TestCase):
             result = fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, runner)
         self.assertEqual(result["status"], "BASE_HEAD_NOT_DEPLOYABLE")
         flat = [call for call, _cwd in runner.calls]
-        self.assertNotIn(product.installer, flat)
+        for installer_command in product.installer or ():
+            self.assertNotIn(installer_command, flat)
         self.assertFalse(any("stop" in call for call in flat))
 
     def test_apply_never_accepts_a_feature_branch_as_target(self):
