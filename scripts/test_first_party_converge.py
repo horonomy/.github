@@ -70,6 +70,22 @@ class InventoryBoundaryTest(unittest.TestCase):
                 )
         self.assertEqual(runner.calls, [])
 
+    def test_malformed_valid_json_receipt_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            fc, "receipt_root", return_value=Path(directory)
+        ):
+            (Path(directory) / "libra.json").write_text("[]")
+            self.assertIsNone(fc._read_receipt("libra"))
+
+    def test_inventory_rejects_checkout_escape(self):
+        raw = json.loads(fc.INVENTORY_PATH.read_text())
+        raw["products"][0]["checkout"] = "../../outside"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "inventory.json"
+            path.write_text(json.dumps(raw))
+            with self.assertRaisesRegex(fc.ConvergenceError, "unsafe checkout"):
+                fc.load_inventory(path)
+
     def test_nonmanaged_product_cannot_smuggle_commands(self):
         raw = json.loads(fc.INVENTORY_PATH.read_text())
         raw["products"][2]["installer"] = ["evil"]
@@ -159,6 +175,17 @@ class StatusDerivationTest(unittest.TestCase):
             "DRIFTED",
         )
 
+    def test_unhealthy_matching_revisions_are_not_current(self):
+        runtime = {
+            "installed_revision": self.sha,
+            "running_revision": self.sha,
+            "running_healthy": False,
+        }
+        self.assertEqual(
+            fc.derive_status(self.product, source(self.sha), runtime, {"status": "passed"}),
+            "UNVERIFIABLE",
+        )
+
     def test_red_base_head_is_explicitly_not_deployable(self):
         status = fc.derive_status(
             self.product,
@@ -186,6 +213,52 @@ class ApplySafetyTest(unittest.TestCase):
             self.assertNotIn(installer_command, flat)
         self.assertFalse(any("stop" in call for call in flat))
 
+    def test_remote_advance_after_validation_aborts_before_installer(self):
+        product = fc.load_inventory().products[0]
+        old = source("3" * 40)
+        new = source("4" * 40)
+        states = iter([old, old, new])
+        runner = FakeRunner()
+        with mock.patch.object(fc, "inspect_source", side_effect=lambda *_: next(states)), mock.patch.object(
+            fc, "run_validation", return_value={"status": "passed", "commands": []}
+        ), mock.patch.object(fc, "load_inventory", return_value=fc.load_inventory()):
+            with self.assertRaisesRegex(fc.ConvergenceError, "source changed after validation"):
+                fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, runner)
+        flat = [call for call, _cwd in runner.calls]
+        for command in product.installer or ():
+            self.assertNotIn(command, flat)
+
+    def test_unknown_prior_running_revision_never_stops_a_daemon(self):
+        product = fc.load_inventory().products[0]
+        sha = "5" * 40
+        runner = FakeRunner()
+        with mock.patch.object(fc, "inspect_source", return_value=source(sha)), mock.patch.object(
+            fc, "run_validation", return_value={"status": "passed", "commands": []}
+        ), mock.patch.object(fc, "load_inventory", return_value=fc.load_inventory()), mock.patch.object(
+            fc, "inspect_runtime", return_value={"installed_revision": None, "running_revision": None, "running_healthy": True}
+        ), mock.patch.object(fc, "_artifact_measurement", return_value="a" * 64), mock.patch.object(
+            fc, "_write_receipt"
+        ), mock.patch.object(fc, "inspect_product", return_value={"status": "UNVERIFIABLE"}):
+            fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, runner)
+        self.assertFalse(any("stop" in call for call, _cwd in runner.calls))
+
+    def test_multistep_installer_runs_in_declared_order(self):
+        product = fc.load_inventory().products[1]
+        sha = "6" * 40
+        runner = FakeRunner()
+        runtime = {"installed_revision": sha, "running_revision": sha, "running_healthy": True}
+        with mock.patch.object(fc, "inspect_source", return_value=source(sha)), mock.patch.object(
+            fc, "run_validation", return_value={"status": "passed", "commands": []}
+        ), mock.patch.object(fc, "load_inventory", return_value=fc.load_inventory()), mock.patch.object(
+            fc, "inspect_runtime", return_value=runtime
+        ), mock.patch.object(fc, "_artifact_measurement", return_value="b" * 64), mock.patch.object(
+            fc, "_write_receipt"
+        ), mock.patch.object(fc, "inspect_product", return_value={"status": "CURRENT"}):
+            fc.apply_product(product, Path("/tmp"), fc.load_inventory().digest, runner)
+        calls = [call for call, _cwd in runner.calls]
+        indices = [calls.index(command) for command in product.installer or ()]
+        self.assertEqual(indices, sorted(indices))
+
     def test_apply_never_accepts_a_feature_branch_as_target(self):
         product = fc.load_inventory().products[0]
         bad = source("2" * 40)
@@ -203,6 +276,19 @@ class ApplySafetyTest(unittest.TestCase):
         self.assertNotIn("pkill", source_text)
         self.assertNotIn("cp ", source_text)
         self.assertNotIn("shell=True", source_text)
+
+
+class CommandStatusTest(unittest.TestCase):
+    def test_plan_fails_for_unverifiable_managed_product(self):
+        report = {
+            "first_party_products": [{"disposition": "managed", "status": "UNVERIFIABLE"}],
+            "third_party_tools": [],
+        }
+        args = type("Args", (), {"root": "/tmp", "product": None, "json": True})()
+        with mock.patch.object(fc, "load_inventory", return_value=fc.load_inventory()), mock.patch.object(
+            fc, "inspect_inventory", return_value=report
+        ), mock.patch("builtins.print"):
+            self.assertEqual(fc._cmd_plan(args), 1)
 
 
 if __name__ == "__main__":

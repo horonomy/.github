@@ -124,6 +124,8 @@ def load_inventory(path: Path = INVENTORY_PATH) -> Inventory:
         data = json.loads(raw)
     except (OSError, json.JSONDecodeError) as exc:
         raise ConvergenceError(f"could not read inventory {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ConvergenceError("first-party inventory: root must be an object")
     if data.get("schema_version") != 1:
         raise ConvergenceError("first-party inventory: unsupported schema_version")
     products_raw = data.get("products")
@@ -144,6 +146,10 @@ def load_inventory(path: Path = INVENTORY_PATH) -> Inventory:
         product_id = item["id"]
         if not SAFE_ID.fullmatch(product_id) or product_id in ids:
             raise ConvergenceError(f"{where}: unsafe or duplicate id {product_id!r}")
+        if not SAFE_ID.fullmatch(item["workspace_name"]):
+            raise ConvergenceError(f"{where}: unsafe workspace_name")
+        if not SAFE_REPO.fullmatch(item["checkout"]) or item["checkout"] in {".", ".."}:
+            raise ConvergenceError(f"{where}: unsafe checkout")
         ids.add(product_id)
         if item["org"] != "horonomy" or not SAFE_REPO.fullmatch(item["repo"]):
             raise ConvergenceError(f"{where}: only explicit horonomy repositories are first-party")
@@ -205,13 +211,17 @@ def load_inventory(path: Path = INVENTORY_PATH) -> Inventory:
 
 def _checkout_path(root: Path, product: Product) -> Path | None:
     root = root.expanduser().resolve()
-    direct = root / product.checkout
-    workspace = root / "products" / product.workspace_name
-    for candidate in (direct, workspace):
-        if candidate.is_symlink():
-            return None
+    for relative in (Path(product.checkout), Path("products") / product.workspace_name):
+        unresolved = root / relative
+        if unresolved.is_symlink():
+            continue
+        candidate = unresolved.resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
         if candidate.is_dir() and (candidate / ".git").exists():
-            return candidate.resolve()
+            return candidate
     return None
 
 
@@ -295,7 +305,13 @@ def _read_receipt(product_id: str) -> dict[str, Any] | None:
         data = json.loads(receipt_path(product_id).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    return data if data.get("schema_version") == RECEIPT_SCHEMA and data.get("product") == product_id else None
+    return (
+        data
+        if isinstance(data, dict)
+        and data.get("schema_version") == RECEIPT_SCHEMA
+        and data.get("product") == product_id
+        else None
+    )
 
 
 def _sha256(path: Path) -> str | None:
@@ -309,7 +325,20 @@ def _sha256(path: Path) -> str | None:
         return None
 
 
-def _libra_runtime(receipt: dict[str, Any] | None) -> dict[str, Any]:
+def _process_alive(pid: object) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except (OSError, OverflowError):
+        return False
+    return True
+
+
+def _libra_runtime(
+    receipt: dict[str, Any] | None,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> dict[str, Any]:
     binary = Path.home() / ".cargo" / "bin" / "libra-governor"
     artifact_hash = _sha256(binary)
     installed = None
@@ -319,12 +348,30 @@ def _libra_runtime(receipt: dict[str, Any] | None) -> dict[str, Any]:
         installed = receipt.get("source_revision")
     pid_path = Path.home() / ".local" / "state" / "libra-governor" / "daemon.pid"
     try:
-        pid = json.loads(pid_path.read_text(encoding="utf-8"))
+        pid_value = json.loads(pid_path.read_text(encoding="utf-8"))
+        pid = pid_value if isinstance(pid_value, dict) else {}
     except (OSError, json.JSONDecodeError):
         pid = {}
     recorded_hash = pid.get("exe_sha256")
-    healthy = bool(pid.get("pid") and (Path.home() / ".local/state/libra-governor/daemon.sock").exists())
-    if installed and recorded_hash and recorded_hash == artifact_hash:
+    doctor = runner([str(binary), "doctor", "--json"], timeout=30) if binary.exists() else None
+    doctor_reachable = False
+    if doctor and doctor.returncode == 0:
+        try:
+            payload = json.loads(doctor.stdout)
+            doctor_reachable = any(
+                item.get("severity") == "ok" and str(item.get("message", "")).startswith("daemon ")
+                for item in payload.get("findings", [])
+            )
+        except json.JSONDecodeError:
+            pass
+    healthy = bool(
+        _process_alive(pid.get("pid"))
+        and recorded_hash
+        and recorded_hash == artifact_hash
+        and pid.get("exe_path") == str(binary)
+        and doctor_reachable
+    )
+    if installed and healthy:
         running = installed
     return {
         "installed_revision": installed,
@@ -337,16 +384,41 @@ def _libra_runtime(receipt: dict[str, Any] | None) -> dict[str, Any]:
 def _circinus_runtime(receipt: dict[str, Any] | None, runner: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
     command = shutil.which("circinus")
     manifest_path = Path.home() / ".local" / "state" / "circinus" / "install.json"
-    artifact_hash = None
     manifest_hash = None
+    installed_hash = None
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_value = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = manifest_value if isinstance(manifest_value, dict) else {}
         manifest_hash = manifest.get("entrypoint_sha256")
     except (OSError, json.JSONDecodeError):
-        manifest = {}
+        pass
+    if command:
+        tool_root = Path(command).resolve().parent
+        python = tool_root / "python"
+        identity = runner(
+            [
+                str(python),
+                "-c",
+                "from circinus.daemon.identity import compute_entrypoint_identity; "
+                "import json; print(json.dumps(compute_entrypoint_identity().to_json()))",
+            ],
+            timeout=30,
+        )
+        if identity.returncode == 0:
+            try:
+                identity_payload = json.loads(identity.stdout)
+                if isinstance(identity_payload, dict):
+                    installed_hash = identity_payload.get("package_tree_sha256")
+            except json.JSONDecodeError:
+                pass
     installed = None
-    if receipt and receipt.get("artifact_sha256") == manifest_hash:
-        artifact_hash = manifest_hash
+    if (
+        isinstance(manifest_hash, str)
+        and SHA.fullmatch(manifest_hash)
+        and manifest_hash == installed_hash
+        and receipt
+        and receipt.get("artifact_sha256") == installed_hash
+    ):
         installed = receipt.get("source_revision")
     status = runner([command, "doctor", "--json"], timeout=30) if command else None
     healthy = False
@@ -354,7 +426,12 @@ def _circinus_runtime(receipt: dict[str, Any] | None, runner: Callable[..., subp
     if status and status.returncode == 0:
         try:
             payload = json.loads(status.stdout)
-            checks = {item.get("id"): item for item in payload.get("checks", [])}
+            raw_checks = payload.get("checks", []) if isinstance(payload, dict) else []
+            checks = {
+                item.get("id"): item
+                for item in raw_checks
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            }
             healthy = checks.get("daemon_reachable", {}).get("status") == "pass"
             identity_matches = checks.get("daemon_entrypoint_identity", {}).get("status") == "pass"
         except json.JSONDecodeError:
@@ -364,14 +441,14 @@ def _circinus_runtime(receipt: dict[str, Any] | None, runner: Callable[..., subp
         "installed_revision": installed,
         "running_revision": running,
         "running_healthy": healthy,
-        "artifact_sha256": artifact_hash,
+        "artifact_sha256": installed_hash,
     }
 
 
 def inspect_runtime(product: Product, runner: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
     receipt = _read_receipt(product.id)
     if product.lifecycle == "libra":
-        return _libra_runtime(receipt)
+        return _libra_runtime(receipt, runner)
     if product.lifecycle == "circinus":
         return _circinus_runtime(receipt, runner)
     return {"installed_revision": None, "running_revision": None, "running_healthy": None}
@@ -405,7 +482,7 @@ def derive_status(
         return "UNVERIFIABLE"
     installed = runtime.get("installed_revision")
     running = runtime.get("running_revision")
-    if installed is None or running is None:
+    if installed is None or running is None or runtime.get("running_healthy") is not True:
         return "UNVERIFIABLE"
     if installed != source.remote_head or running != source.remote_head:
         return "DRIFTED"
@@ -563,18 +640,35 @@ def apply_product(
     validation = run_validation(product, refreshed, runner)
     if validation["status"] != "passed":
         return inspect_product(product, root, runner, validate=True)
-    assert product.installer and refreshed.checkout and refreshed.remote_head
+    # Validation may be long-running. Re-resolve the remote/default/base SHA and
+    # checkout fingerprint before invoking an installer so a base advance or a
+    # concurrent local edit can never turn a previously valid plan into a stale
+    # deployment source.
+    preinstall = inspect_source(product, root, runner)
+    if (
+        preinstall.error
+        or preinstall.remote != refreshed.remote
+        or preinstall.base_branch != refreshed.base_branch
+        or preinstall.remote_head != refreshed.remote_head
+        or preinstall.local_head != refreshed.local_head
+    ):
+        raise ConvergenceError(f"{product.id}: source changed after validation")
+    prior_runtime = inspect_runtime(product, runner)
+    assert product.installer and preinstall.checkout and preinstall.remote_head
     for command in product.installer:
-        runner(command, cwd=refreshed.checkout, timeout=1800, check=True)
+        runner(command, cwd=preinstall.checkout, timeout=1800, check=True)
     artifact_hash = _artifact_measurement(product)
     if not artifact_hash:
         raise ConvergenceError(f"{product.id}: installed artifact could not be measured")
-    _write_receipt(product, refreshed.remote_head, artifact_hash)
+    _write_receipt(product, preinstall.remote_head, artifact_hash)
 
-    # Installation can make an existing daemon stale. Product-owned commands
-    # are the only permitted lifecycle boundary; never infer or broad-kill.
-    runtime = inspect_runtime(product, runner)
-    if runtime.get("running_revision") != refreshed.remote_head:
+    # Installation can make an existing daemon stale. Restart only when the
+    # pre-install running revision was positively known and different; missing
+    # identity is UNVERIFIABLE, not permission to terminate a process.
+    if (
+        prior_runtime.get("running_revision") is not None
+        and prior_runtime.get("running_revision") != preinstall.remote_head
+    ):
         if product.lifecycle == "libra":
             runner([str(_artifact_path(product)), "daemon", "stop"], timeout=30, check=True)
             # Libra intentionally starts on the next real UserPromptSubmit hook.
@@ -632,7 +726,7 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     if not args.json:
         _print_report(report)
         print("\nRead-only plan: no source, installer, process, or receipt state was changed.")
-    return 0 if all(row["status"] != "BASE_HEAD_NOT_DEPLOYABLE" for row in report["first_party_products"]) else 1
+    return 0 if all(row["status"] == "CURRENT" for row in report["first_party_products"] if row["disposition"] == "managed") else 1
 
 
 def _cmd_apply(args: argparse.Namespace) -> int:
