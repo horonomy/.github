@@ -2136,6 +2136,7 @@ def _reading(
     depth: render.InformationDepth = render.InformationDepth.DETAIL,
     *,
     on_line: bool = True,
+    provider_scope: str | None = None,
 ) -> dict:
     """One segment, as the line shows it and as the words behind its tokens.
 
@@ -2146,19 +2147,31 @@ def _reading(
     first is true. Freshness likewise appears only where the provider dated its
     reading.
 
-    `rendered` is produced by the renderer at the same mode *and depth* as the
-    line, so the fragment quoted back to the reader is the fragment they are
-    looking at rather than a description of it. The decode around it is always
-    full, though: explain is the rung past `detail`, and a reader whose line is at
-    `clear` came here precisely because the line did not say why. So a field
-    absent from `rendered` may still be reported below it -- and `on_your_line`
-    marks a reading the current depth leaves out altogether, because otherwise
-    that reader would hunt their line for a fragment that is not on it.
+    `rendered` is produced by the renderer at the same mode *and depth*, and
+    with the same `provider_scope`, as the line -- so the fragment quoted
+    back to the reader is the fragment they are looking at rather than a
+    description of it. Omitting `provider_scope` here would decode a line
+    that never actually rendered: `render_segment` only folds a segment's
+    own scope marker into `rendered` when it is told what the group's scope
+    is, exactly like the one real caller on the line path does. The decode
+    around it is always full, though: explain is the rung past `detail`, and
+    a reader whose line is at `clear` came here precisely because the line
+    did not say why. So a field absent from `rendered` may still be reported
+    below it -- and `on_your_line` marks a reading the current depth leaves
+    out altogether, because otherwise that reader would hunt their line for
+    a fragment that is not on it.
+
+    `scope`/`scope_token`/`scope_means` (HORO-1602) are reported only when
+    this segment's own declared scope differs from `provider_scope` -- the
+    same "genuinely narrower, never a restatement" rule the contract
+    enforces at construction. A segment that did not narrow the group's
+    scope has nothing scope-specific to explain beyond what the provider's
+    own `scope`/`scope_means` in `_explain_provider` already says.
     """
     state = _wire_value(segment.state) or render.UNKNOWN_STATE
     reading = {
         "key": segment.key,
-        "rendered": render.render_segment(segment, mode, depth),
+        "rendered": render.render_segment(segment, mode, depth, provider_scope=provider_scope),
         "on_your_line": on_line,
         "state": state,
         "state_token": render.state_marker(state, mode),
@@ -2188,6 +2201,13 @@ def _reading(
         reading["freshness"] = render.format_age(segment.age_seconds, mode)
     if segment.explain_key:
         reading["explain_key"] = segment.explain_key
+    segment_scope = _wire_value(getattr(segment, "scope", None))
+    if segment_scope is not None and segment_scope != provider_scope:
+        reading["scope"] = segment_scope
+        reading["scope_token"] = render.scope_marker(segment_scope, mode)
+        reading["scope_means"] = render.SCOPE_MEANINGS.get(
+            segment_scope, "a scope this version does not know"
+        )
     return reading
 
 
@@ -2281,7 +2301,13 @@ def _explain_provider(
         "availability": _wire_value(status.availability),
         "rendered": render.render_provider(status, mode, depth),
         "readings": [
-            _reading(segment, mode, depth, on_line=any(shown is segment for shown in on_line))
+            _reading(
+                segment,
+                mode,
+                depth,
+                on_line=any(shown is segment for shown in on_line),
+                provider_scope=scope,
+            )
             for segment in contract.order_segments(status)
         ],
     }
