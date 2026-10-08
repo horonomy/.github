@@ -271,6 +271,54 @@ backfill a guessed `provider_session_id`/`agent_id` onto an old record to
 make it look newer than it is — a mixed table of pre-contract and
 post-contract rows is the expected, permanent shape, not a migration target.
 
+## Operator migration guidance (HORO-1603)
+
+For an operator looking at a running product rather than its source, not
+every question [Backward compatibility](#backward-compatibility) answers for
+a *reader* is obvious from the outside. This section exists for that
+audience.
+
+**Rollback expectations.** Rolling a capturer back to a version that
+predates this contract (or predates a later `envelope_version`) is safe in
+one direction only: the older code simply stops writing the newer fields it
+doesn't know about, and every row it reads is a row some other envelope
+schema already made optional-field-tolerant (see
+[Version evolution](#version-evolution)'s table). A rollback never needs to
+delete, migrate, or rewrite existing rows — it only ever changes what gets
+written going forward. The one thing rollback cannot undo: rows written
+under the *newer* code remain in their newer shape; an older reader that
+encounters an `envelope_version` it does not recognize refuses that row
+rather than guessing at it (same table), so a rollback across a version
+bump is expected to show a visible seam in the data at the rollback point,
+not silently reinterpreted history.
+
+**The same host value across sessions: intentional or suspicious?** A
+product correctly declares `Scope.HOST` for data that genuinely is shared
+across every session on that machine (see
+[Scope](#scope)) — seeing the identical value for two different
+`provider_session_id`s is the *expected*, healthy shape for that data, not
+a sign that attribution broke. It is suspicious only when a field the
+product has *already adopted* per-session attribution for (one it
+populates `provider_session_id` for in its own envelope) still shows the
+same value across two sessions that have genuinely different
+`provider_session_id`s — that combination is the one failure mode this
+contract exists to catch. Concretely: check what scope the *specific
+segment* in question declares before judging repetition by eye. A
+`doctor`/`explain` surface that reports a segment's declared scope
+alongside its value (see each product's own diagnostics, e.g. Circinus's
+`execution_identity_capture` check, HORO-1603 AC2) is how an operator makes
+this call without reading source — this document explains what the scope
+value means once that surface reports it; building that reporting surface
+for a given product is that product's own, separately tracked work.
+
+**No guessed backfill, restated for an upgrade, not just a cold read.**
+Upgrading a running product to a newer `envelope_version` does not trigger
+any retroactive rewrite of rows already on disk — see
+[Backward compatibility](#backward-compatibility). An operator should not
+expect, request, or script a "backfill old rows with the new fields" step;
+there is no such step, by design, because there is no truthful value to put
+in it.
+
 ## Version evolution
 
 `envelope_version` is a single integer for the envelope shape, with the same
