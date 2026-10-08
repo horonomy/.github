@@ -21,10 +21,11 @@ boundary:
 current_hosts:
   text: "Currently supports coding agents (Claude Code, Codex, opencode)"
   hosts: ["Claude Code", "Codex", "opencode"]
+  host_class: ["coding agent"]
   source: {repo: "horonomy/fornax-core", path: "README.md"}
 
 wedge:
-  text: "A coding agent narrates what it did; Fornax checks that narration against the observable evidence of what actually ran."
+  text: "A coding agent narrates what it did"
   source: {repo: "horonomy/fornax-website", path: "src/pages/Home.tsx"}
 
 maturity_ref: "release-evidence/fornax.yaml#claimed_lifecycle"
@@ -38,7 +39,7 @@ hero_promise: "What should you believe about what your AI agent just told you?"
 value_statement: "Fornax watches an agent session in real time, captures immutable evidence, and checks the agent's own claims against that evidence."
 
 forbidden_shorthand:
-  - phrase: "Evidence-first agent integrity for coding agents"
+  - phrase: "Evidence-first agent-integrity system for coding agents"
     reason: "Collapses identity into the current adapter surface — the HORO-1735 regression example"
 
 verified_at: "2026-10-08"
