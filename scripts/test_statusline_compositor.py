@@ -888,6 +888,254 @@ class TestRunProvider(FixtureCase):
         self.assertIn("malformed_output", self.reasons(status))
 
 
+class TestExtractProviderSessionId(unittest.TestCase):
+    """HORO-1602: the one field the host is permitted to read out of its own
+    stdin, for the sole purpose of building a provider's identity stdin.
+    """
+
+    def test_a_well_formed_payload_yields_its_session_id(self):
+        payload = json.dumps({"session_id": "claude-sess-7e21", "cwd": "/private"}).encode()
+        self.assertEqual(compositor.extract_provider_session_id(payload), "claude-sess-7e21")
+
+    def test_a_missing_field_yields_none(self):
+        payload = json.dumps({"cwd": "/private"}).encode()
+        self.assertIsNone(compositor.extract_provider_session_id(payload))
+
+    def test_malformed_json_yields_none_not_a_raise(self):
+        self.assertIsNone(compositor.extract_provider_session_id(b"not json"))
+
+    def test_a_json_array_yields_none(self):
+        self.assertIsNone(compositor.extract_provider_session_id(b"[1, 2, 3]"))
+
+    def test_a_non_string_session_id_yields_none(self):
+        payload = json.dumps({"session_id": 12345}).encode()
+        self.assertIsNone(compositor.extract_provider_session_id(payload))
+
+    def test_empty_bytes_yields_none(self):
+        self.assertIsNone(compositor.extract_provider_session_id(b""))
+
+
+class TestBuildIdentityStdin(unittest.TestCase):
+    def test_none_yields_empty_bytes_byte_identical_to_pre_HORO_1602(self):
+        self.assertEqual(compositor.build_identity_stdin(None), b"")
+
+    def test_a_session_id_yields_a_minimal_allowlisted_document(self):
+        produced = json.loads(compositor.build_identity_stdin("claude-sess-7e21"))
+        self.assertEqual(
+            produced, {"identity_stdin_version": 1, "provider_session_id": "claude-sess-7e21"}
+        )
+
+
+class TestIdentityPassthrough(FixtureCase):
+    """HORO-1602: end-to-end -- a provider receives only the minimal
+    allowlisted identity document, never the host's raw payload, and a
+    cache entry answered under one identity is never served under another.
+    """
+
+    def capturing(self, name: str) -> tuple[str, pathlib.Path]:
+        """A fixture that dumps its own stdin to a file, then answers."""
+        captured = self.home / f"{name}.stdin"
+        path = self.script(
+            name,
+            f"cat > '{captured}'\ncat <<'HORONOM_EOF'\n" + json.dumps(wire()) + "\nHORONOM_EOF\n",
+        )
+        return path, captured
+
+    def entry(self, provider: str, command: str, **overrides):
+        return compositor.ProviderEntry(
+            provider=provider,
+            argv=(command,),
+            scope=overrides.get("scope", contract.Scope.PROJECT),
+            timeout_ms=overrides.get("timeout_ms", GENEROUS_MS),
+        )
+
+    def test_provider_receives_only_the_minimal_identity_document(self):
+        path, captured = self.capturing("captures_stdin")
+        compositor.run_provider(
+            self.entry("fornax", path), GENEROUS_MS, self.home, provider_session_id="claude-sess-7e21"
+        )
+        received = json.loads(captured.read_text())
+        self.assertEqual(
+            received, {"identity_stdin_version": 1, "provider_session_id": "claude-sess-7e21"}
+        )
+
+    def test_provider_receives_empty_stdin_when_no_session_id_is_known(self):
+        path, captured = self.capturing("captures_stdin_none")
+        compositor.run_provider(self.entry("fornax", path), GENEROUS_MS, self.home)
+        self.assertEqual(captured.read_bytes(), b"")
+
+    def test_host_payload_never_reaches_a_provider(self):
+        """The raw Claude Code payload -- cwd, model, anything beyond
+        session_id -- must never appear in what a provider receives, even
+        when a real session_id is being forwarded.
+        """
+        path, captured = self.capturing("captures_stdin_isolation")
+        host_payload = json.dumps(
+            {"session_id": "claude-sess-7e21", "cwd": "/Users/someone/secret-repo", "model": "x"}
+        ).encode()
+        session_id = compositor.extract_provider_session_id(host_payload)
+        compositor.run_provider(
+            self.entry("fornax", path), GENEROUS_MS, self.home, provider_session_id=session_id
+        )
+        received_text = captured.read_text()
+        self.assertNotIn("secret-repo", received_text)
+        self.assertNotIn("cwd", received_text)
+        self.assertNotIn("model", received_text)
+        self.assertIn("claude-sess-7e21", received_text)
+
+    def test_two_known_sessions_never_cross_read_session_scoped_cache(self):
+        """`Scope.SESSION` is the provider's own declaration that this answer
+        is session-local behavioral state. Two different known sessions must
+        never see each other's.
+        """
+        counter = self.home / "calls"
+        path = self.script(
+            "counted_by_session",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(scope="session", cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path)
+        counter.write_text("")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        self.assertEqual(counter.read_text(), "x", "same session reuses its own session-scoped cache")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-b")
+        self.assertEqual(
+            counter.read_text(), "xx", "a different known session must not reuse sess-a's session-scoped cache"
+        )
+
+    def test_unknown_session_identity_cannot_borrow_session_scoped_cache(self):
+        """An unresolved identity must never silently borrow session-local
+        state, in either direction: a known session must not see an
+        unidentified render's entry, an unidentified render must not see a
+        known session's entry, and two different unidentified renders must
+        not see each other's -- fail closed on every leg, never fabricate
+        isolation it cannot prove.
+        """
+        counter = self.home / "calls"
+        path = self.script(
+            "counted_by_identity_presence",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(scope="session", cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path)
+        counter.write_text("")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home)  # render 1, no identity known
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        self.assertEqual(
+            counter.read_text(), "xx", "a known session must not reuse an unidentified render's session-scoped cache"
+        )
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home)  # render 3, no identity known again
+        self.assertEqual(
+            counter.read_text(),
+            "xxx",
+            "an unidentified render must not reuse sess-a's session-scoped cache either",
+        )
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home)  # render 4, still no identity known
+        self.assertEqual(
+            counter.read_text(),
+            "xxxx",
+            "two different unidentified renders must not share a session-scoped cache slot with each other",
+        )
+
+    def test_host_scoped_cache_is_reusable_across_different_identities(self):
+        """`Scope.HOST` state is not session-local by the provider's own
+        declaration, so switching sessions -- or having no session id at
+        all -- must not defeat its caching.
+        """
+        counter = self.home / "calls"
+        path = self.script(
+            "counted_host_scope",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(scope="host", cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path, scope=contract.Scope.HOST)
+        counter.write_text("")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-b")
+        compositor.run_provider(entry, GENEROUS_MS, self.home)  # no identity known
+        self.assertEqual(
+            counter.read_text(), "x", "host-scoped state is reusable regardless of which identity asks for it"
+        )
+
+    def test_project_scoped_cache_is_reusable_across_different_identities(self):
+        """`Scope.PROJECT` is the other non-session-local scope; it must get
+        the same cache reusability as `Scope.HOST`.
+        """
+        counter = self.home / "calls"
+        path = self.script(
+            "counted_project_scope",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(scope="project", cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path)
+        counter.write_text("")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-b")
+        compositor.run_provider(entry, GENEROUS_MS, self.home)  # no identity known
+        self.assertEqual(
+            counter.read_text(), "x", "project-scoped state is reusable regardless of which identity asks for it"
+        )
+
+    def test_legacy_provider_ignoring_identity_keeps_prior_cache_behavior(self):
+        """A provider written before HORO-1602 never reads stdin and always
+        answers the same way -- its caching must be unaffected by this
+        feature existing at all. Uses the default `wire()` scope
+        (`"project"`); `HOST` takes the identical code path, already
+        covered by `test_host_scoped_cache_is_reusable_across_different_identities`.
+        """
+        counter = self.home / "calls"
+        path = self.script(
+            "legacy_ignores_stdin",
+            f"cat /dev/null > /dev/null\nprintf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path)
+        counter.write_text("")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home)
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-b")
+        self.assertEqual(
+            counter.read_text(), "x", "a legacy, identity-blind, project-scoped provider caches exactly as before"
+        )
+
+    def test_session_scope_with_unknown_identity_reprobes_rather_than_fabricating(self):
+        """When identity is unknown and scope is session, the cache must
+        force a genuine fresh probe -- never serve a fabricated or
+        best-guess answer in its place. Asserting the provider's own script
+        actually ran (not just that some non-cached value appeared) is what
+        distinguishes a real reprobe from a silently invented one.
+        """
+        counter = self.home / "calls"
+        path = self.script(
+            "reprobes_not_fabricates",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(scope="session", cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path)
+        counter.write_text("")
+
+        first = compositor.run_provider(entry, GENEROUS_MS, self.home)
+        second = compositor.run_provider(entry, GENEROUS_MS, self.home)
+        self.assertEqual(counter.read_text(), "xx", "each unidentified render must genuinely re-invoke the provider")
+        self.assertEqual(first.availability, contract.Availability.AVAILABLE)
+        self.assertEqual(second.availability, contract.Availability.AVAILABLE)
+
+
 class TestCollect(FixtureCase):
     def registry(self, providers, **overrides):
         payload = {"registry_version": 1, "providers": providers}
