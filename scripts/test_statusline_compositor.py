@@ -983,12 +983,16 @@ class TestIdentityPassthrough(FixtureCase):
         self.assertNotIn("model", received_text)
         self.assertIn("claude-sess-7e21", received_text)
 
-    def test_a_cache_entry_from_one_session_is_not_served_to_another(self):
+    def test_two_known_sessions_never_cross_read_session_scoped_cache(self):
+        """`Scope.SESSION` is the provider's own declaration that this answer
+        is session-local behavioral state. Two different known sessions must
+        never see each other's.
+        """
         counter = self.home / "calls"
         path = self.script(
             "counted_by_session",
             f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
-            + json.dumps(wire(cache_ttl_seconds=30))
+            + json.dumps(wire(scope="session", cache_ttl_seconds=30))
             + "\nHORONOM_EOF\n",
         )
         entry = self.entry("fornax", path)
@@ -996,54 +1000,138 @@ class TestIdentityPassthrough(FixtureCase):
 
         compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
         compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
-        self.assertEqual(counter.read_text(), "x", "same session reuses the cache")
+        self.assertEqual(counter.read_text(), "x", "same session reuses its own session-scoped cache")
 
         compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-b")
-        self.assertEqual(counter.read_text(), "xx", "a different session must not reuse sess-a's cache")
+        self.assertEqual(
+            counter.read_text(), "xx", "a different known session must not reuse sess-a's session-scoped cache"
+        )
 
-    def test_a_cache_entry_with_no_known_identity_is_not_served_once_one_is_known(self):
+    def test_unknown_session_identity_cannot_borrow_session_scoped_cache(self):
+        """An unresolved identity must never silently borrow session-local
+        state, in either direction: a known session must not see an
+        unidentified render's entry, an unidentified render must not see a
+        known session's entry, and two different unidentified renders must
+        not see each other's -- fail closed on every leg, never fabricate
+        isolation it cannot prove.
+        """
         counter = self.home / "calls"
         path = self.script(
             "counted_by_identity_presence",
             f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
-            + json.dumps(wire(cache_ttl_seconds=30))
-            + "\nHORONOM_EOF\n",
-        )
-        entry = self.entry("fornax", path)
-        counter.write_text("")
-
-        compositor.run_provider(entry, GENEROUS_MS, self.home)  # no identity known
-        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
-        self.assertEqual(
-            counter.read_text(), "xx", "a cache entry written with no identity must not be served once one is known"
-        )
-
-    def test_two_renders_with_no_known_identity_share_a_cache_slot_by_documented_design(self):
-        """Known residual gap (adversarial review, HORO-1602), accepted and
-        documented on `read_cache`: two renders that both fail to resolve a
-        session id match each other's cache entry (`None == None`), same as
-        pre-HORO-1602 behavior for this case. This test pins that documented
-        choice so a future change to it is deliberate, not accidental --
-        fixing it unconditionally would defeat caching for every install
-        with no session id to give at all.
-        """
-        counter = self.home / "calls"
-        path = self.script(
-            "counted_with_unknown_identity",
-            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
-            + json.dumps(wire(cache_ttl_seconds=30))
+            + json.dumps(wire(scope="session", cache_ttl_seconds=30))
             + "\nHORONOM_EOF\n",
         )
         entry = self.entry("fornax", path)
         counter.write_text("")
 
         compositor.run_provider(entry, GENEROUS_MS, self.home)  # render 1, no identity known
-        compositor.run_provider(entry, GENEROUS_MS, self.home)  # render 2, also no identity known
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        self.assertEqual(
+            counter.read_text(), "xx", "a known session must not reuse an unidentified render's session-scoped cache"
+        )
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home)  # render 3, no identity known again
         self.assertEqual(
             counter.read_text(),
-            "x",
-            "an unknown identity reuses a cache entry also written under no identity -- documented, not a regression",
+            "xxx",
+            "an unidentified render must not reuse sess-a's session-scoped cache either",
         )
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home)  # render 4, still no identity known
+        self.assertEqual(
+            counter.read_text(),
+            "xxxx",
+            "two different unidentified renders must not share a session-scoped cache slot with each other",
+        )
+
+    def test_host_scoped_cache_is_reusable_across_different_identities(self):
+        """`Scope.HOST` state is not session-local by the provider's own
+        declaration, so switching sessions -- or having no session id at
+        all -- must not defeat its caching.
+        """
+        counter = self.home / "calls"
+        path = self.script(
+            "counted_host_scope",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(scope="host", cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path, scope=contract.Scope.HOST)
+        counter.write_text("")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-b")
+        compositor.run_provider(entry, GENEROUS_MS, self.home)  # no identity known
+        self.assertEqual(
+            counter.read_text(), "x", "host-scoped state is reusable regardless of which identity asks for it"
+        )
+
+    def test_project_scoped_cache_is_reusable_across_different_identities(self):
+        """`Scope.PROJECT` is the other non-session-local scope; it must get
+        the same cache reusability as `Scope.HOST`.
+        """
+        counter = self.home / "calls"
+        path = self.script(
+            "counted_project_scope",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(scope="project", cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path)
+        counter.write_text("")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-b")
+        compositor.run_provider(entry, GENEROUS_MS, self.home)  # no identity known
+        self.assertEqual(
+            counter.read_text(), "x", "project-scoped state is reusable regardless of which identity asks for it"
+        )
+
+    def test_legacy_provider_ignoring_identity_keeps_prior_cache_behavior(self):
+        """A provider written before HORO-1602 never reads stdin and always
+        answers the same way -- its caching must be unaffected by this
+        feature existing at all, for either of the non-session scopes.
+        """
+        counter = self.home / "calls"
+        path = self.script(
+            "legacy_ignores_stdin",
+            f"cat /dev/null > /dev/null\nprintf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path)
+        counter.write_text("")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home)
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-b")
+        self.assertEqual(
+            counter.read_text(), "x", "a legacy, identity-blind, project-scoped provider caches exactly as before"
+        )
+
+    def test_session_scope_with_unknown_identity_reprobes_rather_than_fabricating(self):
+        """When identity is unknown and scope is session, the cache must
+        force a genuine fresh probe -- never serve a fabricated or
+        best-guess answer in its place. Asserting the provider's own script
+        actually ran (not just that some non-cached value appeared) is what
+        distinguishes a real reprobe from a silently invented one.
+        """
+        counter = self.home / "calls"
+        path = self.script(
+            "reprobes_not_fabricates",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(scope="session", cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path)
+        counter.write_text("")
+
+        first = compositor.run_provider(entry, GENEROUS_MS, self.home)
+        second = compositor.run_provider(entry, GENEROUS_MS, self.home)
+        self.assertEqual(counter.read_text(), "xx", "each unidentified render must genuinely re-invoke the provider")
+        self.assertEqual(first.availability, contract.Availability.AVAILABLE)
+        self.assertEqual(second.availability, contract.Availability.AVAILABLE)
 
 
 class TestCollect(FixtureCase):

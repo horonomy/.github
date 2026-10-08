@@ -114,24 +114,27 @@ the whole thing.
   section did not exist. A provider must never receive a fabricated or
   default session id.
 - The provider cache (`cache_version: 1` cache entries) now additionally
-  records the identity a provider answered under, and refuses to serve that
-  entry to a render carrying a different identity — including the
-  transition from "no identity known" to "an identity is now known." A
-  provider that ignores the identity stdin and answers identically either
-  way pays at most one extra probe per session change, never a wrong
-  answer served across sessions.
-- **Known residual gap, accepted deliberately:** two different, concurrent
-  renders that *both* fail to resolve any session id still match each
-  other's cache entry (both record `identity: null`). This is not a
-  regression — pre-HORO-1602 caching had no identity concept at all, so an
-  unknown identity behaves exactly as every identity used to. Making an
-  unknown identity always bypass the cache was considered and rejected: it
-  would defeat caching entirely for every install with no session id to
-  give at all (the common case for a bare terminal statusline), to close a
-  theoretical collision that requires a provider which both emits
-  per-session data *and* is queried by two genuinely different unidentified
-  sessions inside the same cache TTL — true of no provider registered
-  today.
+  records the identity a provider answered under. **Identity gates the
+  cache only for `Scope.SESSION`** — the one scope a provider's own wire
+  answer can declare that means "this is my own session-local behavioral
+  state." For that scope, an entry is refused to any render carrying a
+  different identity, including the transition from "no identity known" to
+  "an identity is now known" in either direction — and a render whose own
+  identity is unknown never matches *any* session-scoped entry, including
+  one also written under no identity, because an unresolved identity cannot
+  prove isolation and must fail closed rather than guess. `Scope.HOST` and
+  `Scope.PROJECT` answers are untouched by any of this: they are not
+  session-local by the provider's own declaration, so they remain reusable
+  across different identities and across "no identity known at all" exactly
+  as caching behaved before this section existed. A provider that ignores
+  the identity stdin and declares `HOST`/`PROJECT` is unaffected either way;
+  one that declares `SESSION` and ignores the stdin pays at most one extra
+  probe per render with no resolvable identity, never a wrong answer served
+  across sessions. (An earlier draft of this amendment gated every scope on
+  identity; it was reverted after review because it defeated ordinary
+  host/project caching for every install with no session id to give at
+  all, to guard a leak that only session-scoped data can actually suffer —
+  no provider registered today declares `Scope.SESSION`.)
 - This document's own identity-passthrough logic uses no new experiment,
   capture mechanism, or provider-native acquisition path — `session_id` is a
   field Claude Code's statusline invocation already includes in the payload

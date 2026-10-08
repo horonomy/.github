@@ -694,29 +694,32 @@ def read_cache(
     the contract's not-available states exist to prevent.
 
     `identity` (HORO-1602) is the current render's `provider_session_id`, the
-    same value `collect` is about to pass as this provider's stdin. An entry
-    written under a different identity -- including one written when no
-    identity was known at all -- is treated as a miss, never served: a cache
-    keyed only on provider id would let a provider that starts emitting real
-    per-session data in a future render hand session A's cached answer to
-    session B's render a moment later. Most providers ignore the identity
-    stdin entirely and answer identically regardless, so this costs them one
-    extra probe at most once per session change, never a wrong answer.
+    same value `collect` is about to pass as this provider's stdin.
 
-    Known residual gap (adversarial review, HORO-1602): two different,
-    concurrent renders that *both* fail to resolve any session id (`identity`
-    is `None` on both sides -- an older host payload shape, or statusline run
-    outside any coding-agent session at all) still match each other, because
-    `None == None`. This is not a regression: pre-HORO-1602 caching had no
-    identity concept at all, so this is the same behavior the cache always
-    had for that case, not a new leak. Closing it fully would mean an unknown
-    identity always bypasses the cache -- rejected here because it would
-    defeat caching entirely for every install that has no session id to give
-    (the common case for a bare terminal statusline), a real regression for a
-    theoretical, same-host-only collision that only matters for a provider
-    that (a) actually emits per-session data and (b) is queried by two
-    genuinely different unidentified sessions inside the same ~60s TTL
-    window -- not true of any provider registered today.
+    Identity gates the cache only for `Scope.SESSION` -- the one scope the
+    provider itself declares means "this answer is this session's own
+    behavioral state." For that scope, an entry written under a different
+    identity, or under no identity at all, is a miss; a *current* identity
+    of `None` is itself always a miss, even against an entry also written
+    under `None` -- two different, concurrent unidentified renders must
+    never be able to borrow each other's session-scoped answer, so an
+    unresolved identity fails closed and forces a fresh probe rather than
+    silently fabricating isolation it cannot prove (adversarial review,
+    HORO-1602; reassessed after an initial global fix broke unrelated
+    caching -- see below).
+
+    `Scope.HOST` and `Scope.PROJECT` answers are not session-local by the
+    provider's own declaration, so identity never gates them: a host- or
+    project-scoped entry written under one session's render is reusable by
+    the next render regardless of what identity it carries, exactly as
+    caching behaved before HORO-1602 existed. This is deliberate, not an
+    oversight -- gating every scope on identity was tried and reverted
+    because it defeats ordinary host-wide caching for every install that
+    has no session id to give at all, to guard against a leak that only
+    `Scope.SESSION` data can actually suffer. A provider that never reads
+    the identity stdin and always answers identically regardless of session
+    is unaffected either way (no provider registered today declares
+    `Scope.SESSION`).
     """
     path = cache_dir(home) / f"{entry.provider}.json"
     try:
@@ -729,12 +732,14 @@ def read_cache(
         return None
     if payload.get("source") != source_fingerprint(entry.argv):
         return None
-    if payload.get("identity") != identity:
-        return None
     try:
-        return contract.provider_status_from_wire(payload.get("wire"))
+        status = contract.provider_status_from_wire(payload.get("wire"))
     except contract.ContractViolation:
         return None
+    if status.scope is contract.Scope.SESSION:
+        if identity is None or payload.get("identity") != identity:
+            return None
+    return status
 
 
 def write_cache(
