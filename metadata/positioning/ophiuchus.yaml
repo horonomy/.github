@@ -19,8 +19,9 @@ boundary:
   source: {repo: "horonomy/ophiuchus", path: "website/src/pages/sign-in.tsx"}
 
 current_hosts:
-  text: "Today, that means handing off a coding-agent session — Claude Code to Codex — across machines."
+  text: "Today, that means handing off a coding-agent session — Claude Code to Codex — across machines"
   hosts: ["Claude Code", "Codex"]
+  host_class: ["coding-agent"]
   source: {repo: "horonomy/ophiuchus", path: "README.md"}
 
 wedge:

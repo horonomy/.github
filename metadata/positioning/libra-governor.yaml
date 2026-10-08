@@ -21,10 +21,11 @@ boundary:
 current_hosts:
   text: "currently integrated with agentic coding tools — Claude Code, Codex, etc."
   hosts: ["Claude Code", "Codex"]
+  host_class: ["agentic coding tool", "agentic coding tools"]
   source: {repo: "horonomy/libra-governor", path: "PRODUCT.md"}
 
 wedge:
-  text: "v0.0.2 Developer Preview: the validated MVP 3 local flow (Policy presets, runtime replanning, Completion Reserve)"
+  text: "the validated MVP 3 local flow — HORO-1137 Policy presets, HORO-1139 runtime replanning, HORO-1141 Completion Reserve"
   source: {repo: "horonomy/libra-governor", path: "README.md"}
 
 maturity_ref: "release-evidence/libra-governor.yaml#claimed_lifecycle"

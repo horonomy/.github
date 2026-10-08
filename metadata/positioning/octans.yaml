@@ -17,6 +17,7 @@ boundary:
   non_goals:
     - "Not an AI-agent product — this is a deliberate, intrinsic software-change-safety domain boundary. Do not generalize Octans into agent-general language for portfolio symmetry (explicit HORO-1732 non-goal)."
   source: {repo: "jira:HORO-1732", path: "founder decision, 2026-10-07"}
+  intrinsic: {reason: "Octans's domain is software compatibility/change-safety, which is not intrinsically AI-agent-related — it has zero current_hosts by design, not by omission"}
 
 current_hosts:
   text: "In development, no public surface yet (status page only, noindex)"

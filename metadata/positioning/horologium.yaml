@@ -20,7 +20,8 @@ boundary:
 
 current_hosts:
   text: "exposes it consistently to humans (Web dashboard) and coding agents (MCP)"
-  hosts: ["Web dashboard", "MCP (coding agents)"]
+  hosts: ["Web dashboard"]
+  host_class: ["coding agent"]
   source: {repo: "horonomy/horologium", path: "README.md"}
 
 wedge:
@@ -38,6 +39,12 @@ hero_promise: "Which one is the product?"
 value_statement: "Horologium maintains one canonical, reconciled truth about a software product and exposes it consistently to every consumer."
 
 forbidden_shorthand: []
+
+identity_scope_terms:
+  - term: "coding agent"
+    reason: "Named consumer/access channel (MCP), not the product boundary — Horologium's identity is about software-product truth generally"
+  - term: "Web dashboard"
+    reason: "Named consumer/access channel, not the product boundary"
 
 verified_at: "2026-10-08"
 verified_against: {repo: "horonomy/horologium", sha: "228a6322e72374df5d999fc423cc40d207b3b743"}
