@@ -1852,6 +1852,10 @@ BOOKKEEPING = status(
             # shown, so asserting it absent is a real constraint: the host may
             # colour by it but must never print it.
             semantic_state=contract.SemanticState.CAUTION,
+            # Differs from the document's own PROJECT scope, which is the
+            # only value the contract accepts here (HORO-1602) -- exercises
+            # the segment-level scope marker's own disclosure boundary.
+            scope=contract.Scope.SESSION,
         ),
         segment(
             key="remaining_work",
@@ -1900,6 +1904,12 @@ def allowlisted(snapshot: contract.ProviderStatus, mode, depth) -> tuple[str, ..
     }
     allowed.update(render.state_marker(state.value, mode) for state in contract.SegmentState)
     for part in snapshot.segments:
+        # HORO-1602: a segment's own scope marker, folded into its reading
+        # whenever the segment narrows the group's scope -- a second,
+        # intentional addition to the reviewed vocabulary, same reason the
+        # group-level scope marker is in `allowed` above.
+        if part.scope is not None and part.scope != snapshot.scope:
+            allowed.add(render.scope_marker(part.scope.value, mode))
         allowed.add(part.label)
         allowed.add(render.format_reason(part.reason_code, part.reason_label))
         if part.count is not None and part.count_label:
