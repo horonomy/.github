@@ -1,0 +1,48 @@
+schema_version: 1
+product: "horologium"
+
+category:
+  text: "Product truth & integrity"
+  source: {repo: "horonomy/official-website", path: "src/data/productRegistry.ts"}
+
+identity:
+  text: "Self-hosted Product Truth & Integrity platform. Horologium maintains one canonical, reconciled truth about a software product — its shape, cross-source integrity conflicts, deployment reality, and temporal history — and exposes it consistently to humans (Web dashboard) and coding agents (MCP)."
+  source: {repo: "horonomy/horologium", path: "README.md"}
+
+north_star:
+  text: "Which one is the product?"
+  source: {repo: "horonomy/horologium", path: "site/public/index.html"}
+
+boundary:
+  non_goals:
+    - "Not GA, not production-proven (Public Alpha)"
+  source: {repo: "horonomy/horologium", path: "README.md"}
+
+current_hosts:
+  text: "exposes it consistently to humans (Web dashboard) and coding agents (MCP)"
+  hosts: ["Web dashboard", "MCP (coding agents)"]
+  source: {repo: "horonomy/horologium", path: "README.md"}
+
+wedge:
+  text: "Let a coding agent query Product Truth directly — read-only, one tool per API endpoint."
+  source: {repo: "horonomy/horologium", path: "site/public/index.html"}
+
+maturity_ref: "release-evidence/horologium.yaml#claimed_lifecycle"
+limitations_ref: {repo: "horonomy/horologium", path: "docs-site/docs/public-alpha.md"}
+
+icp:
+  today: "Teams who need one reconciled truth about a software product's shape, deployment reality and cross-source integrity conflicts"
+  future: "Same — this identity is already host/consumer-agnostic; MCP is a named access channel, not a boundary"
+
+hero_promise: "Which one is the product?"
+value_statement: "Horologium maintains one canonical, reconciled truth about a software product and exposes it consistently to every consumer."
+
+forbidden_shorthand: []
+
+verified_at: "2026-10-08"
+verified_against: {repo: "horonomy/horologium", sha: "228a6322e72374df5d999fc423cc40d207b3b743"}
+
+# No remediation ticket — audited under HORO-1734 and found already
+# compliant. "coding agents (MCP)" names a consumer/access channel, not the
+# product boundary, per the founder's "preserve, don't collapse into
+# coding-agent observability" instruction.

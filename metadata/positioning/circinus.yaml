@@ -1,0 +1,51 @@
+schema_version: 1
+product: "circinus"
+
+category:
+  text: "Provenance & authority"
+  source: {repo: "horonomy/official-website", path: "src/data/productRegistry.ts"}
+
+identity:
+  text: "A local-first Agent Trust Runtime. Trust nothing implicitly. Analyze ahead. Never lose provenance. Enforce at the boundary."
+  source: {repo: "horonomy/circinus", path: "README.md"}
+
+north_star:
+  text: "Authority has a radius."
+  source: {repo: "horonomy/circinus", path: "README.md"}
+
+boundary:
+  non_goals:
+    - "Not a SaaS product or a hosted control plane"
+    - "Not an identity system — no SSO, no SCIM, no RBAC"
+    - "Not a SIEM or a log-shipping pipeline"
+    - "Not a Kubernetes-deployed service"
+    - "Not a runtime for every agent framework — Claude Code only, today"
+  source: {repo: "horonomy/circinus", path: "site/docs/limitations.md"}
+
+current_hosts:
+  text: "Today's MVP runs on Claude Code only."
+  hosts: ["Claude Code"]
+  source: {repo: "horonomy/circinus", path: "site/src/pages/index.js"}
+
+wedge:
+  text: "Circinus watches what an AI agent reads (a web page, a file, a command's output) and what it's about to do, and keeps a record of which pieces of content actually influenced which action."
+  source: {repo: "horonomy/circinus", path: "site/docs/start-here.md"}
+
+maturity_ref: "release-evidence/circinus.yaml#claimed_lifecycle"
+limitations_ref: {repo: "horonomy/circinus", path: "site/docs/limitations.md"}
+
+icp:
+  today: "Developers running an AI coding agent who want visibility into what an agent session would do with untrusted content before it acts"
+  future: "Operators of any agent framework that needs provenance/authority tracking across untrusted-content transformations"
+
+hero_promise: "A local-first Agent Trust Runtime for AI agents."
+value_statement: "Circinus tracks provenance and authority across agent transformations and enforces at the point of action."
+
+forbidden_shorthand:
+  - phrase: "A local-first Agent Trust Runtime for Claude Code"
+    reason: "Makes the current MVP host look like the product boundary — the HORO-1732 confirmed example"
+  - phrase: "Developers running Claude Code"
+    reason: "States the ICP in host-exclusive terms instead of AI-agent-general terms with Claude Code as current availability"
+
+verified_at: "2026-10-08"
+verified_against: {repo: "horonomy/circinus", sha: "a7e3cde4edf143f9999d1c00d0269ceb725b0792"}

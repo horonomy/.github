@@ -1,0 +1,45 @@
+schema_version: 1
+product: "fornax"
+
+category:
+  text: "Agent integrity"
+  source: {repo: "horonomy/official-website", path: "src/data/productRegistry.ts"}
+
+identity:
+  text: "Evidence-first execution-truth infrastructure for AI agents: it checks what an agent claims it did against the observable evidence of what actually ran."
+  source: {repo: "horonomy/fornax-core", path: "README.md"}
+
+north_star:
+  text: "What should I believe about what this agent is telling me, given the evidence currently available?"
+  source: {repo: "horonomy/fornax-core", path: "README.md"}
+
+boundary:
+  non_goals:
+    - "Not a trust score — surfaces VERIFIED / UNVERIFIED / CONTRADICTED / REVIEW / UNAVAILABLE, never a made-up score"
+  source: {repo: "horonomy/fornax-core", path: "README.md"}
+
+current_hosts:
+  text: "Currently supports coding agents (Claude Code, Codex, opencode)"
+  hosts: ["Claude Code", "Codex", "opencode"]
+  source: {repo: "horonomy/fornax-core", path: "README.md"}
+
+wedge:
+  text: "A coding agent narrates what it did; Fornax checks that narration against the observable evidence of what actually ran."
+  source: {repo: "horonomy/fornax-website", path: "src/pages/Home.tsx"}
+
+maturity_ref: "release-evidence/fornax.yaml#claimed_lifecycle"
+limitations_ref: {repo: "horonomy/fornax-core", path: "README.md"}
+
+icp:
+  today: "Developers running Claude Code, Codex or opencode who need to verify an agent's own claims against observable evidence"
+  future: "Operators of any AI agent that can narrate actions a human did not directly observe"
+
+hero_promise: "What should you believe about what your AI agent just told you?"
+value_statement: "Fornax watches an agent session in real time, captures immutable evidence, and checks the agent's own claims against that evidence."
+
+forbidden_shorthand:
+  - phrase: "Evidence-first agent integrity for coding agents"
+    reason: "Collapses identity into the current adapter surface — the HORO-1735 regression example"
+
+verified_at: "2026-10-08"
+verified_against: {repo: "horonomy/fornax-core", sha: "b8317800403b35e4faa78289e190ef2707ef1e17"}
