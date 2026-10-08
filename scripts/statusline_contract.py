@@ -773,6 +773,16 @@ class Segment:
     # documented derivation rather than with `SAFE`: an undeclared reading is
     # not a reassuring one.
     semantic_state: SemanticState | None = None
+    # A narrower breadth than the document's own `scope` (HORO-1602), for the
+    # one real case this exists to serve: a provider whose document is
+    # genuinely host-wide in most of its segments but has exactly one that is
+    # this session's own behavioral state. `None` means "this segment shares
+    # the document's scope" -- the common case, and the only value that keeps
+    # a minimal provider's wire payload unchanged. `ProviderStatus` validates
+    # the cross-field rule (must differ from the document scope, and must
+    # specifically be `SESSION`) because a lone `Segment` has no document to
+    # compare itself against; see `ProviderStatus._validate_segments`.
+    scope: Scope | None = None
 
     @property
     def is_stale(self) -> bool:
@@ -813,6 +823,8 @@ class Segment:
             self.semantic_state, SemanticState
         ):
             raise ContractViolation("segment.semantic_state must be a SemanticState")
+        if self.scope is not None and not isinstance(self.scope, Scope):
+            raise ContractViolation("segment.scope must be a Scope")
         self._validate_freshness()
 
     def _validate_freshness(self) -> None:
@@ -1012,6 +1024,38 @@ class ProviderStatus:
         if len(keys) != len(set(keys)):
             raise ContractViolation("segment keys must be unique within a provider")
         self._validate_non_collapse()
+        self._validate_segment_scopes()
+
+    def _validate_segment_scopes(self) -> None:
+        """A segment's own `scope`, if declared, must genuinely narrow the
+        document's -- restating it is meaningless and only `SESSION` is a
+        validated narrowing today (HORO-1602).
+
+        `Segment` cannot check either rule itself: it has no document to
+        compare against. Narrowing is one-directional on purpose, matching
+        the one real case driving this (a document that is mostly host-wide
+        with one session-local segment, e.g. Circinus's `latest_decision`
+        beside `install`/`mode`). A document already scoped `SESSION`
+        carrying a segment that is actually `HOST` is a different, equally
+        real shape -- but no provider needs it yet, and validating a second
+        direction with no concrete use case to test against is exactly the
+        kind of unvalidated surface this contract exists to refuse.
+        """
+        for segment in self.segments:
+            if segment.scope is None:
+                continue
+            if segment.scope == self.scope:
+                raise ContractViolation(
+                    f"segment {segment.key!r}.scope restates the document's own "
+                    f"scope ({self.scope.value!r}); leave segment.scope unset "
+                    "when it does not narrow the document"
+                )
+            if segment.scope is not Scope.SESSION:
+                raise ContractViolation(
+                    f"segment {segment.key!r}.scope ({segment.scope.value!r}) "
+                    "narrows the document's scope to something other than "
+                    "'session'; no other narrowing is a validated use case"
+                )
 
     def _validate_non_collapse(self) -> None:
         """Forbid the ways a non-answer gets rendered as a good answer.
@@ -1244,6 +1288,8 @@ def _segment_to_wire(segment: Segment) -> dict:
         payload["clear_role"] = segment.clear_role.value
     if segment.semantic_state is not None:
         payload["semantic_state"] = segment.semantic_state.value
+    if segment.scope is not None:
+        payload["scope"] = segment.scope.value
     return payload
 
 
@@ -1400,6 +1446,15 @@ def _segment_from_wire(payload: object, index: int) -> Segment:
         if confidence is not None
         else None
     )
+    scope_raw = payload.get("scope")
+    # Strict, not lenient, matching the document-level `scope` parse: an
+    # unrecognised value here must refuse the whole payload, never degrade to
+    # a guessed member -- the exact failure mode `_parse_enum_strict`'s own
+    # docstring names for this field. The cross-field rule (must differ from
+    # the document scope, must be `SESSION`) is checked once the full
+    # `ProviderStatus` exists; a lone `Segment` has nothing to compare
+    # against yet.
+    scope = _parse_enum_strict(Scope, scope_raw, f"{field}.scope") if scope_raw is not None else None
     return Segment(
         key=payload.get("key"),
         state=_parse_enum_lenient(
@@ -1422,6 +1477,7 @@ def _segment_from_wire(payload: object, index: int) -> Segment:
         clear_role=_parse_clear_role(payload.get("clear_role")),
         fresh_for_seconds=payload.get("fresh_for_seconds"),
         semantic_state=_parse_semantic_state(payload.get("semantic_state")),
+        scope=scope,
     )
 
 
