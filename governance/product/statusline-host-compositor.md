@@ -71,6 +71,71 @@ These are not negotiable and each has a test that fails if it is broken.
    counts as *already recursing* — the failure being prevented is unbounded
    recursion, so the ambiguous case must fail towards stopping.
 
+## Provider identity context (HORO-1602)
+
+The upstream invariant above (#2: the host's full payload is forwarded to the
+user's *own* command as opaque, unparsed bytes) is unchanged. A registered
+**provider**, which is Horonom-owned code rather than the user's own script,
+is a different trust boundary and had received nothing at all — every
+provider was invoked with empty stdin, specifically so it could never log,
+render or grow a dependency on anything the host's payload carried (paths,
+model identifiers, prompts, tool content).
+
+That remains true for everything except one field. The host reads exactly
+`session_id` out of its own received payload — nothing else — and builds a
+minimal document from it:
+
+```json
+{"identity_stdin_version": 1, "provider_session_id": "<verbatim session_id>"}
+```
+
+This, and only this, is what a provider's stdin may now contain. The
+distinction from invariant #2 is deliberate: the user's own command is
+trusted with the full payload because it is the user's; a provider is
+Horonom's own code running with the user's data, so it gets the smallest
+slice that lets HORO-1597/1602's per-session attribution exist at all, never
+the whole thing.
+
+**What this does not change:**
+
+- A provider that does not read stdin observes **byte-identical** behavior
+  to before this section existed — no version bump, no opt-in required, no
+  registry schema change. `identity_stdin_version` lets a provider that does
+  read it detect a future, incompatible reshaping of this document without
+  having to guess from field presence alone.
+- No other field of the host's payload — cwd, model, transcript path, tool
+  content, anything else Claude Code's own schema carries — ever reaches a
+  provider. This is enforced by construction (the host reads one named key
+  and discards the rest of the parsed structure immediately), not by a
+  downstream filter a future change could accidentally widen.
+- `session_id` extraction is best-effort and silent on failure: a payload
+  that does not parse, is not an object, or lacks the field, yields no
+  identity context and every provider's stdin is `b""`, exactly as if this
+  section did not exist. A provider must never receive a fabricated or
+  default session id.
+- The provider cache (`cache_version: 1` cache entries) now additionally
+  records the identity a provider answered under, and refuses to serve that
+  entry to a render carrying a different identity — including the
+  transition from "no identity known" to "an identity is now known." A
+  provider that ignores the identity stdin and answers identically either
+  way pays at most one extra probe per session change, never a wrong
+  answer served across sessions.
+- This document's own identity-passthrough logic uses no new experiment,
+  capture mechanism, or provider-native acquisition path — `session_id` is a
+  field Claude Code's statusline invocation already includes in the payload
+  every registered statusline host receives today. This is orthogonal to,
+  and does not touch, HORO-1599's native-capture restrictions.
+
+**What a provider must still never do** with the identity context, once it
+opts in to reading it: forward it anywhere outside the product's own local
+state, log it in a form a user would not already see rendered, or treat its
+mere presence as proof the product's own capture/storage layer actually
+attaches it to anything (see
+[`execution-identity-contract.md`](./execution-identity-contract.md)'s
+"Partial adoption is expected" — knowing the current session's id and
+*attributing stored data* to it are two different, separately-earned
+capabilities).
+
 ## Hot-path containment
 
 This command runs every few seconds for the life of a session. Rendering it must
