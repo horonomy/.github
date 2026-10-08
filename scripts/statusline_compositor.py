@@ -664,6 +664,18 @@ def build_identity_stdin(provider_session_id: str | None) -> bytes:
         {
             "identity_stdin_version": _IDENTITY_STDIN_VERSION,
             "provider_session_id": provider_session_id,
+            # Additive (HORO-1602): a provider deciding whether it is safe
+            # to declare a session-scoped segment needs to know the *host*
+            # understands segment-level `scope`, not just that this host
+            # happens to be new enough to send an identity at all -- those
+            # are different versions that could ship independently. Never
+            # consulted for whether to send `provider_session_id` itself;
+            # only for whether a provider should act on it by emitting
+            # `Segment.scope`. `identity_stdin_version` stays `1`: this is a
+            # new optional field within the existing document shape, not a
+            # reason to bump a version every strict `== 1` reader already
+            # checks.
+            "host_capabilities": ["segment_scope"],
         }
     ).encode("utf-8")
 
@@ -716,10 +728,16 @@ def read_cache(
     oversight -- gating every scope on identity was tried and reverted
     because it defeats ordinary host-wide caching for every install that
     has no session id to give at all, to guard against a leak that only
-    `Scope.SESSION` data can actually suffer. A provider that never reads
-    the identity stdin and always answers identically regardless of session
-    is unaffected either way (no provider registered today declares
-    `Scope.SESSION`).
+    session-local data can actually suffer.
+
+    A document whose own `scope` is `HOST`/`PROJECT` but which carries one
+    or more segments declaring `Scope.SESSION` (HORO-1602's segment-level
+    scope amendment) gates identically to a document-scoped `SESSION`
+    answer: the whole cached entry is the unit of reuse here (there is no
+    per-segment cache slot), so *any* session-local content anywhere in the
+    document means the entry as a whole can only be safely reused under a
+    matching, known identity. A provider with no `Scope.SESSION` anywhere
+    in it -- document or segment -- is unaffected either way.
     """
     path = cache_dir(home) / f"{entry.provider}.json"
     try:
@@ -736,7 +754,10 @@ def read_cache(
         status = contract.provider_status_from_wire(payload.get("wire"))
     except contract.ContractViolation:
         return None
-    if status.scope is contract.Scope.SESSION:
+    has_session_scope = status.scope is contract.Scope.SESSION or any(
+        segment.scope is contract.Scope.SESSION for segment in status.segments
+    )
+    if has_session_scope:
         if identity is None or payload.get("identity") != identity:
             return None
     return status
