@@ -1,0 +1,49 @@
+schema_version: 1
+product: "octans"
+
+category:
+  text: "Change safety"
+  source: {repo: "horonomy/official-website", path: "src/data/productRegistry.ts"}
+
+identity:
+  text: "Octans — navigate every change safely. Change course without breaking the fleet."
+  source: {repo: "horonomy/octans", path: "README.md"}
+
+north_star:
+  text: "Verifies a change is safe to ship before it reaches production, across distributed services."
+  source: {repo: "horonomy/official-website", path: "src/data/productRegistry.ts"}
+
+boundary:
+  non_goals:
+    - "Not an AI-agent product — this is a deliberate, intrinsic software-change-safety domain boundary. Do not generalize Octans into agent-general language for portfolio symmetry (explicit HORO-1732 non-goal)."
+  source: {repo: "jira:HORO-1732", path: "founder decision, 2026-10-07"}
+
+current_hosts:
+  text: "In development, no public surface yet (status page only, noindex)"
+  hosts: []
+  source: {repo: "horonomy/official-website", path: "atlas/destinations.mjs"}
+
+wedge:
+  text: "interface diff, relationship identity, dependency evidence, compatibility state"
+  source: {repo: "horonomy/octans", path: "README.md"}
+
+maturity_ref: "release-evidence/octans.yaml#claimed_lifecycle"
+limitations_ref: {repo: "horonomy/octans", path: "README.md"}
+
+icp:
+  today: "Teams shipping changes across distributed services who need pre-production compatibility verification"
+  future: "Same — this is intrinsically a software domain, not an agent-host-dependent one"
+
+hero_promise: "Navigate every change safely."
+value_statement: "Octans verifies a change is safe to ship before it reaches production, across distributed services."
+
+forbidden_shorthand:
+  - phrase: "AI-powered change safety for agents"
+    reason: "Octans's domain is software compatibility, not AI agents — forcing agent-general language here would be an unwarranted generalization for portfolio symmetry"
+
+verified_at: "2026-10-08"
+verified_against: {repo: "horonomy/octans", sha: "d59ea90dd18e07032847db1fe16c4853da7cd143"}
+
+# No remediation ticket — audited under HORO-1734 and found correctly
+# narrow. Octans is not an AI-agent product at all; its domain boundary is
+# intrinsic to software change-safety and must not be broadened.

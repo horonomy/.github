@@ -1,0 +1,50 @@
+schema_version: 1
+product: "libra-governor"
+
+category:
+  text: "Resource & economic governance for agentic work"
+  source: {repo: "horonomy/libra-governor", path: "PRODUCT.md"}
+
+identity:
+  text: "Libra is a local Governor — a data-plane daemon that sits between agentic work and the LLM provider it talks to (currently integrated with agentic coding tools — Claude Code, Codex, etc.). It estimates the cost and time-to-complete of a task before admitting it, tracks spend against that estimate as the task runs, and makes replanning a deliberate, auditable decision rather than an implicit one."
+  source: {repo: "horonomy/libra-governor", path: "PRODUCT.md", heading: "What Libra is"}
+
+north_star:
+  text: "Never start work you are unlikely to afford to finish."
+  source: {repo: "horonomy/libra-governor", path: "PRODUCT.md"}
+
+boundary:
+  non_goals:
+    - "Not a permanent coding-agent-only budget helper — the current coding-task vertical is the first complete implementation of a general agentic-work model, not the product's ceiling"
+  source: {repo: "horonomy/libra-governor", path: "PRODUCT.md"}
+
+current_hosts:
+  text: "currently integrated with agentic coding tools — Claude Code, Codex, etc."
+  hosts: ["Claude Code", "Codex"]
+  source: {repo: "horonomy/libra-governor", path: "PRODUCT.md"}
+
+wedge:
+  text: "v0.0.2 Developer Preview: the validated MVP 3 local flow (Policy presets, runtime replanning, Completion Reserve)"
+  source: {repo: "horonomy/libra-governor", path: "README.md"}
+
+maturity_ref: "release-evidence/libra-governor.yaml#claimed_lifecycle"
+limitations_ref: {repo: "horonomy/libra-governor", path: "README.md"}
+
+icp:
+  today: "Developers running coding-agent tasks (Claude Code, Codex) who need pre-task cost/time estimation and spend tracking"
+  future: "Operators of any agentic work who need estimate-before-admit, track-against-estimate, and disciplined replanning"
+
+hero_promise: "Never start work you are unlikely to afford to finish."
+value_statement: "Libra estimates the cost and time-to-complete of a task before admitting it, tracks spend against that estimate, and makes replanning a deliberate, auditable decision."
+
+forbidden_shorthand:
+  - phrase: "a data-plane daemon that sits between an agentic coding tool and the LLM provider"
+    reason: "States the North Star's identity sentence in coding-tool-exclusive terms — the HORO-1737 drift; 'agentic work' with the host named as current integration is the corrected pattern"
+
+verified_at: "2026-10-08"
+verified_against: {repo: "horonomy/libra-governor", sha: "f36bbc8ae047d76477f09ac4e8907f10f83c140a"}
+
+# Known gap (HORO-1737, not covered by this record): statusline/UI text and
+# reusable core-code domain/model names have not yet been reviewed for
+# accidental coding-only lock-in. This record reflects the docs-only fix
+# landed so far, not full AC closure.

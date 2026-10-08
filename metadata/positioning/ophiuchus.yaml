@@ -1,0 +1,45 @@
+schema_version: 1
+product: "ophiuchus"
+
+category:
+  text: "Context continuity"
+  source: {repo: "horonomy/official-website", path: "src/data/productRegistry.ts"}
+
+identity:
+  text: "Ophiuchus is a Context Fabric: it moves the useful part of AI-assisted work across machine, tool and organizational boundaries, so the person or agent picking it up does not have to rediscover what was already known."
+  source: {repo: "horonomy/ophiuchus", path: "README.md"}
+
+north_star:
+  text: "Stop rebuilding context every time work crosses a developer, agent, machine or organizational boundary."
+  source: {repo: "horonomy/ophiuchus", path: "README.md"}
+
+boundary:
+  non_goals:
+    - "No hosted application yet"
+  source: {repo: "horonomy/ophiuchus", path: "website/src/pages/sign-in.tsx"}
+
+current_hosts:
+  text: "Today, that means handing off a coding-agent session — Claude Code to Codex — across machines."
+  hosts: ["Claude Code", "Codex"]
+  source: {repo: "horonomy/ophiuchus", path: "README.md"}
+
+wedge:
+  text: "Hand off AI-assisted work without rebuilding the context"
+  source: {repo: "horonomy/ophiuchus", path: "website/src/pages/index.tsx"}
+
+maturity_ref: "release-evidence/ophiuchus.yaml#claimed_lifecycle"
+limitations_ref: {repo: "horonomy/ophiuchus", path: "README.md"}
+
+icp:
+  today: "Developers handing a coding-agent session off between machines or tools (Claude Code, Codex)"
+  future: "Anyone whose AI-assisted work crosses a developer, agent, machine or organizational boundary"
+
+hero_promise: "Hand off AI-assisted work without rebuilding the context"
+value_statement: "Ophiuchus moves the useful part of a session across boundaries so the next person or agent doesn't have to rediscover what was already known."
+
+forbidden_shorthand:
+  - phrase: "AI-assisted engineering session across machines and across coding-agent tools"
+    reason: "Narrows the identity paragraph to engineering/coding-agent sessions when the durable boundary is AI-assisted work generally — the HORO-1738 drift"
+
+verified_at: "2026-10-08"
+verified_against: {repo: "horonomy/ophiuchus", sha: "9f16b4fbfb1478d42f9137064c38013b6f842e7a"}
