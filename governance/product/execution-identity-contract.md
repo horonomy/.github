@@ -391,6 +391,57 @@ later, never by backfilling a guess now. This is the same principle as
 [Backward compatibility](#backward-compatibility) applied to a product's
 *current* records rather than its historical ones.
 
+## Provider capability separation and unsupported hosts (HORO-1603)
+
+[Partial adoption](#partial-adoption-is-expected-not-a-defect) is about a
+*product's* consumer-side gap. This section is the provider-side mirror of
+it: what a *coding-agent tool* itself exposes, which is a capability ceiling
+no capturer can code around, not a capturer bug to fix.
+
+**Claude Code** exposes a stable `provider_session_id` to hooks, and a
+Task-tool subagent invocation is attributable to its parent — the full
+`SESSION` → `AGENT` → `TURN_TASK` lineage chain in [Scope](#scope) is
+reachable (see [the subagent example](#claude-code-a-subagent-with-proven-lineage)).
+
+**Codex**, as of this writing, exposes a stable session identifier and
+nothing below it — no subagent/turn/lineage concept at all (see
+[the Codex example](#codex-session-identity-only-no-lineage-support-yet),
+which already states this correctly as `lineage_status: unknown` without
+claiming to know whether the gap is permanent). Whether that absence is a
+durable provider ceiling or a capability Codex has simply not shipped yet
+is not something this document can verify from here, and it doesn't need
+to be resolved to state the rule: a capturer must never synthesize
+`agent_id`/`turn_id`/`parent_agent_id` for Codex to make its envelope shape
+resemble Claude Code's (see [Implementing a capturer](#implementing-a-capturer),
+rule 2) — doing so would misrepresent whichever of the two is actually true
+as captured data. If a later Codex version adds subagent/turn exposure,
+that is a new fact a capturer can then start reporting; it is never
+retroactively true of past envelopes.
+
+**A host/tool this contract has never seen** (an unrecognised
+`tool_provider` string, or a provider with *no* session-identity exposure at
+all) is not an error state. Per [Version evolution](#version-evolution)'s
+table, an unrecognised `tool_provider` value is accepted as-is — the field
+is intentionally open-ended, and a reader needs no advance knowledge of a
+provider to store and query its envelope. `provider_session_id` is itself
+optional (see [Provider identity](#provider-identity-provider-native-opaque-verbatim)) —
+a provider that cannot supply it still emits a perfectly conforming
+envelope, just one with every provider-identity field absent, which reads
+back as `Scope.UNKNOWN` (see [Context](#context-not-an-identity-dimension)'s
+closing example). That absence is a statement about the provider's current
+exposure, never a reason to fabricate a placeholder session id to satisfy
+the shape.
+
+The one rule that ties all three cases together: **never let one provider's
+capability infer another's, and never let a provider's silence about a
+field be read as "this host doesn't support that scope" rather than "this
+particular provider doesn't expose that dimension."** Those are different
+facts with different remedies — the former is permanent and provider-level;
+the latter may change the moment the provider ships more exposure, or might
+never apply at all to a provider that genuinely has no such concept (Codex
+has no subagents to expose; that is not the same as Claude Code's subagents
+being unexposed by a lagging capturer).
+
 ## Concrete examples
 
 ### Claude Code, a subagent with proven lineage
