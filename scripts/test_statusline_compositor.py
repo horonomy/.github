@@ -888,6 +888,137 @@ class TestRunProvider(FixtureCase):
         self.assertIn("malformed_output", self.reasons(status))
 
 
+class TestExtractProviderSessionId(unittest.TestCase):
+    """HORO-1602: the one field the host is permitted to read out of its own
+    stdin, for the sole purpose of building a provider's identity stdin.
+    """
+
+    def test_a_well_formed_payload_yields_its_session_id(self):
+        payload = json.dumps({"session_id": "claude-sess-7e21", "cwd": "/private"}).encode()
+        self.assertEqual(compositor.extract_provider_session_id(payload), "claude-sess-7e21")
+
+    def test_a_missing_field_yields_none(self):
+        payload = json.dumps({"cwd": "/private"}).encode()
+        self.assertIsNone(compositor.extract_provider_session_id(payload))
+
+    def test_malformed_json_yields_none_not_a_raise(self):
+        self.assertIsNone(compositor.extract_provider_session_id(b"not json"))
+
+    def test_a_json_array_yields_none(self):
+        self.assertIsNone(compositor.extract_provider_session_id(b"[1, 2, 3]"))
+
+    def test_a_non_string_session_id_yields_none(self):
+        payload = json.dumps({"session_id": 12345}).encode()
+        self.assertIsNone(compositor.extract_provider_session_id(payload))
+
+    def test_empty_bytes_yields_none(self):
+        self.assertIsNone(compositor.extract_provider_session_id(b""))
+
+
+class TestBuildIdentityStdin(unittest.TestCase):
+    def test_none_yields_empty_bytes_byte_identical_to_pre_HORO_1602(self):
+        self.assertEqual(compositor.build_identity_stdin(None), b"")
+
+    def test_a_session_id_yields_a_minimal_allowlisted_document(self):
+        produced = json.loads(compositor.build_identity_stdin("claude-sess-7e21"))
+        self.assertEqual(
+            produced, {"identity_stdin_version": 1, "provider_session_id": "claude-sess-7e21"}
+        )
+
+
+class TestIdentityPassthrough(FixtureCase):
+    """HORO-1602: end-to-end -- a provider receives only the minimal
+    allowlisted identity document, never the host's raw payload, and a
+    cache entry answered under one identity is never served under another.
+    """
+
+    def capturing(self, name: str) -> tuple[str, pathlib.Path]:
+        """A fixture that dumps its own stdin to a file, then answers."""
+        captured = self.home / f"{name}.stdin"
+        path = self.script(
+            name,
+            f"cat > '{captured}'\ncat <<'HORONOM_EOF'\n" + json.dumps(wire()) + "\nHORONOM_EOF\n",
+        )
+        return path, captured
+
+    def entry(self, provider: str, command: str, **overrides):
+        return compositor.ProviderEntry(
+            provider=provider,
+            argv=(command,),
+            scope=overrides.get("scope", contract.Scope.PROJECT),
+            timeout_ms=overrides.get("timeout_ms", GENEROUS_MS),
+        )
+
+    def test_provider_receives_only_the_minimal_identity_document(self):
+        path, captured = self.capturing("captures_stdin")
+        compositor.run_provider(
+            self.entry("fornax", path), GENEROUS_MS, self.home, provider_session_id="claude-sess-7e21"
+        )
+        received = json.loads(captured.read_text())
+        self.assertEqual(
+            received, {"identity_stdin_version": 1, "provider_session_id": "claude-sess-7e21"}
+        )
+
+    def test_provider_receives_empty_stdin_when_no_session_id_is_known(self):
+        path, captured = self.capturing("captures_stdin_none")
+        compositor.run_provider(self.entry("fornax", path), GENEROUS_MS, self.home)
+        self.assertEqual(captured.read_bytes(), b"")
+
+    def test_host_payload_never_reaches_a_provider(self):
+        """The raw Claude Code payload -- cwd, model, anything beyond
+        session_id -- must never appear in what a provider receives, even
+        when a real session_id is being forwarded.
+        """
+        path, captured = self.capturing("captures_stdin_isolation")
+        host_payload = json.dumps(
+            {"session_id": "claude-sess-7e21", "cwd": "/Users/someone/secret-repo", "model": "x"}
+        ).encode()
+        session_id = compositor.extract_provider_session_id(host_payload)
+        compositor.run_provider(
+            self.entry("fornax", path), GENEROUS_MS, self.home, provider_session_id=session_id
+        )
+        received_text = captured.read_text()
+        self.assertNotIn("secret-repo", received_text)
+        self.assertNotIn("cwd", received_text)
+        self.assertNotIn("model", received_text)
+        self.assertIn("claude-sess-7e21", received_text)
+
+    def test_a_cache_entry_from_one_session_is_not_served_to_another(self):
+        counter = self.home / "calls"
+        path = self.script(
+            "counted_by_session",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path)
+        counter.write_text("")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        self.assertEqual(counter.read_text(), "x", "same session reuses the cache")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-b")
+        self.assertEqual(counter.read_text(), "xx", "a different session must not reuse sess-a's cache")
+
+    def test_a_cache_entry_with_no_known_identity_is_not_served_once_one_is_known(self):
+        counter = self.home / "calls"
+        path = self.script(
+            "counted_by_identity_presence",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path)
+        counter.write_text("")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home)  # no identity known
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        self.assertEqual(
+            counter.read_text(), "xx", "a cache entry written with no identity must not be served once one is known"
+        )
+
+
 class TestCollect(FixtureCase):
     def registry(self, providers, **overrides):
         payload = {"registry_version": 1, "providers": providers}
