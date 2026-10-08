@@ -608,6 +608,66 @@ def _host_not_available(
     )
 
 
+#: Version of the identity-context document the compositor builds and sends
+#: to providers as their stdin (HORO-1602). Independent of `cache_version`
+#: and of the provider-contract's own `contract_version` -- this is a third,
+#: narrower surface: what the host tells a provider about the invocation,
+#: not what a provider tells the host about its status.
+_IDENTITY_STDIN_VERSION = 1
+
+
+def extract_provider_session_id(host_payload: bytes) -> str | None:
+    """Best-effort, narrow extraction of Claude Code's own `session_id` from
+    the host's raw stdin bytes -- the ONE field this function is permitted to
+    read out of that payload (HORO-1602).
+
+    This is the single, deliberate, allowlisted exception to `run_provider`'s
+    own invariant that a provider never receives the host's payload: the host
+    may read exactly this one field from it, for the sole purpose of building
+    a minimal identity document (see `build_identity_stdin`) -- never prompts,
+    paths, model identifiers, tool content, or any other key the payload may
+    carry. Every other key in `host_payload` remains exactly as opaque to
+    this module as it was before this function existed.
+
+    Never raises. A malformed, non-JSON, non-object, or missing-field payload
+    all return `None` -- the same "not known" outcome as a working Claude Code
+    session that simply did not include the field in some payload shape this
+    module has not been told about. `None` here must never be upgraded into
+    a fabricated placeholder downstream; see `build_identity_stdin`.
+    """
+    try:
+        document = json.loads(host_payload)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    session_id = document.get("session_id")
+    return session_id if isinstance(session_id, str) and session_id else None
+
+
+def build_identity_stdin(provider_session_id: str | None) -> bytes:
+    """The minimal, allowlisted document a provider receives as its own
+    stdin (HORO-1602) -- never the host's raw payload, never more than this
+    one field.
+
+    Returns `b""`, byte-identical to every provider invocation before this
+    feature existed, when `provider_session_id` is `None` -- a provider that
+    reads nothing from stdin, or that checks for this field and finds it
+    absent, observes exactly the same behavior as before this feature
+    shipped. This is what keeps the change additive rather than a breaking
+    bump: no existing provider's behavior changes unless it opts in to
+    reading the new field.
+    """
+    if provider_session_id is None:
+        return b""
+    return json.dumps(
+        {
+            "identity_stdin_version": _IDENTITY_STDIN_VERSION,
+            "provider_session_id": provider_session_id,
+        }
+    ).encode("utf-8")
+
+
 def source_fingerprint(argv: tuple[str, ...]) -> str:
     """Identify *which command* produced a cached answer.
 
@@ -623,13 +683,25 @@ def source_fingerprint(argv: tuple[str, ...]) -> str:
     return hashlib.sha256(joined).hexdigest()
 
 
-def read_cache(entry: ProviderEntry, home: pathlib.Path | None = None) -> contract.ProviderStatus | None:
+def read_cache(
+    entry: ProviderEntry, home: pathlib.Path | None = None, *, identity: str | None = None
+) -> contract.ProviderStatus | None:
     """A provider's last answer, if it is still inside its own stated TTL.
 
     Only ever returns an *unexpired* entry. A stale cache is not served as a
     substitute for a failed probe: the two mean different things, and rendering
     last minute's healthy reading while the daemon is down is precisely the lie
     the contract's not-available states exist to prevent.
+
+    `identity` (HORO-1602) is the current render's `provider_session_id`, the
+    same value `collect` is about to pass as this provider's stdin. An entry
+    written under a different identity -- including one written when no
+    identity was known at all -- is treated as a miss, never served: a cache
+    keyed only on provider id would let a provider that starts emitting real
+    per-session data in a future render hand session A's cached answer to
+    session B's render a moment later. Most providers ignore the identity
+    stdin entirely and answer identically regardless, so this costs them one
+    extra probe at most once per session change, never a wrong answer.
     """
     path = cache_dir(home) / f"{entry.provider}.json"
     try:
@@ -642,6 +714,8 @@ def read_cache(entry: ProviderEntry, home: pathlib.Path | None = None) -> contra
         return None
     if payload.get("source") != source_fingerprint(entry.argv):
         return None
+    if payload.get("identity") != identity:
+        return None
     try:
         return contract.provider_status_from_wire(payload.get("wire"))
     except contract.ContractViolation:
@@ -649,7 +723,11 @@ def read_cache(entry: ProviderEntry, home: pathlib.Path | None = None) -> contra
 
 
 def write_cache(
-    entry: ProviderEntry, status: contract.ProviderStatus, home: pathlib.Path | None = None
+    entry: ProviderEntry,
+    status: contract.ProviderStatus,
+    home: pathlib.Path | None = None,
+    *,
+    identity: str | None = None,
 ) -> None:
     """Persist a fresh answer for up to its own TTL. Best effort, never fatal.
 
@@ -658,6 +736,11 @@ def write_cache(
     half-written one. The cache is Horonom-owned state, so the directory is
     0700 and the file 0600: it is not secret by contract, but it is not the
     user's to have to reason about either.
+
+    `identity` (HORO-1602) is recorded alongside the answer so a later
+    `read_cache` call can tell whether this entry was produced under the
+    same provider-session identity as the render asking for it -- see
+    `read_cache`'s own docstring.
     """
     ttl = min(status.cache_ttl_seconds, contract.MAX_CACHE_TTL_SECONDS)
     if ttl <= 0:
@@ -669,6 +752,7 @@ def write_cache(
             "cache_version": 1,
             "expires_at": time.time() + ttl,
             "source": source_fingerprint(entry.argv),
+            "identity": identity,
             "wire": status.to_wire(),
         }
         handle, temporary = tempfile.mkstemp(dir=directory, prefix=f".{status.provider}-")
@@ -687,7 +771,11 @@ def write_cache(
 
 
 def run_provider(
-    entry: ProviderEntry, timeout_ms: int, home: pathlib.Path | None = None
+    entry: ProviderEntry,
+    timeout_ms: int,
+    home: pathlib.Path | None = None,
+    *,
+    provider_session_id: str | None = None,
 ) -> contract.ProviderStatus:
     """Get one provider's status, from cache if fresh, else by asking it.
 
@@ -698,8 +786,13 @@ def run_provider(
     Reasons are fixed codes and short fixed prose, never the exception text. A
     subprocess error message routinely contains a path, a command line or an
     environment value, and this string is rendered into the user's terminal.
+
+    `provider_session_id` (HORO-1602) is forwarded to both the cache lookup
+    (`read_cache`/`write_cache`'s `identity`) and the provider's own stdin
+    (`build_identity_stdin`) -- the same value, so a cache entry answered
+    under one identity is never served under another.
     """
-    cached = read_cache(entry, home)
+    cached = read_cache(entry, home, identity=provider_session_id)
     if cached is not None:
         return cached
     if timeout_ms <= 0:
@@ -707,12 +800,19 @@ def run_provider(
             entry, contract.Availability.UNKNOWN, "deadline_exhausted", "No time left to ask"
         )
     try:
-        # Empty stdin, not the host's payload. Providers are deliberately denied
-        # it: it is the one thing here that carries the user's session — paths,
-        # model, context — and a provider that cannot receive it cannot render
-        # it, log it, or grow a dependency on it. Only the user's own command,
-        # which the host was already feeding before we took the slot, gets it.
-        returncode, produced = _run_bounded(entry.argv, b"", timeout_ms, shell=False)
+        # Never the host's raw payload -- providers remain denied that, same
+        # as before HORO-1602: it is the one thing here that could carry
+        # prompts, paths, model identifiers or tool content, and a provider
+        # that cannot receive it cannot render it, log it, or grow a
+        # dependency on it. `build_identity_stdin` is the one narrow,
+        # allowlisted exception -- a provider_session_id and nothing else,
+        # `b""` when none is known, byte-identical to pre-HORO-1602
+        # behavior in that case. Only the user's own command, which the
+        # host was already feeding before we took the slot, gets the real
+        # payload.
+        returncode, produced = _run_bounded(
+            entry.argv, build_identity_stdin(provider_session_id), timeout_ms, shell=False
+        )
     except FileNotFoundError:
         return _host_not_available(
             entry, contract.Availability.UNSUPPORTED, "not_installed", "Not installed"
@@ -747,7 +847,7 @@ def run_provider(
         return _host_not_available(
             entry, contract.Availability.ERROR, "identity_mismatch", "Answered as another provider"
         )
-    write_cache(entry, status, home)
+    write_cache(entry, status, home, identity=provider_session_id)
     return status
 
 
@@ -765,8 +865,14 @@ def collect(
     overall deadline, so the deadline is a real bound and not an aspiration. The
     upstream command has its own, more generous budget and is not subject to the
     provider deadline: preserving the user's line outranks our own promptness.
+
+    `payload` is read exactly once here, via `extract_provider_session_id`
+    (HORO-1602), for the sole purpose of building the identity stdin every
+    provider submission below receives -- see that function's docstring for
+    the narrow, allowlisted scope of what it is permitted to read out of it.
     """
     started = time.monotonic()
+    provider_session_id = extract_provider_session_id(payload)
     workers = max(1, len(registry.providers) + (1 if registry.upstream_command else 0))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         upstream_future = (
@@ -787,6 +893,7 @@ def collect(
                         max(0, registry.deadline_ms - int((time.monotonic() - started) * 1000)),
                     ),
                     home,
+                    provider_session_id=provider_session_id,
                 ),
             )
             for entry in registry.providers
