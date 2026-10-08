@@ -268,6 +268,48 @@ host may render scope as a glyph, but the semantic value is always the enum,
 and the deterministic text fallback (`[host]`, `[session]`, `[project]`) is
 always available.
 
+### Segment-level scope (HORO-1602)
+
+A single provider's document may be mostly host-wide and still have exactly
+one segment that is genuinely this session's own behavioral state — Circinus
+is the motivating case: `install` and `mode` are facts about the daemon, but
+`latest_decision` can be the answer for *this* session specifically.
+Collapsing the whole document to `Scope.SESSION` to make room for that one
+segment would mislabel `install`/`mode` as session-local, which is exactly
+the false-attribution failure `scope` exists to prevent in the first place;
+leaving the document at `Scope.HOST` to protect those two fields would make
+`latest_decision` lie the other way.
+
+A `Segment` may therefore declare its own `scope`, narrower than the
+document's. The rule is deliberately narrow in both directions:
+
+- **It must actually narrow, never restate.** A segment whose `scope` equals
+  the document's own `scope` is a `ContractViolation` on construction — the
+  field exists to carry a genuine exception, and a provider that sets it to
+  the same value has not declared one. Leave it unset (`None`) when a
+  segment shares the document's scope, which keeps a minimal provider's wire
+  payload unchanged.
+- **The only validated narrowing is to `SESSION`.** A document already at
+  `Scope.HOST` with a segment at `Scope.SESSION` is the real, tested case.
+  A document at some other scope with a segment at some other, differing
+  scope is refused — not because it is necessarily wrong, but because no
+  provider needs it yet and this contract does not validate shapes nothing
+  exercises.
+
+On the rendered line, a segment whose scope differs from its group's gets
+its own scope marker folded into that one reading, immediately before it —
+`circinus [host] Observing… · [session] Would block`, not a second,
+separately-positioned marker. The explain surface decodes the same
+distinction: a reading whose segment-level scope differs from the
+provider's own reports its own `scope`/`scope_token`/`scope_means`,
+alongside — never instead of — the provider-level ones `explain` already
+reported before this amendment.
+
+A provider that does not set `Segment.scope` is unaffected by any of this:
+the field is optional, defaults to `None`, and a document with no
+segment-level scope renders and explains exactly as it did before this
+section existed.
+
 ## Privacy allowlist
 
 Provider output is allowlisted, not filtered. A label must be short prose:

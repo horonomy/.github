@@ -757,6 +757,85 @@ class ProviderStatusTest(unittest.TestCase):
         self.assertEqual(len(_status(segments=many).segments), sc.MAX_SEGMENTS_PER_PROVIDER)
 
 
+class SegmentScopeTest(unittest.TestCase):
+    """HORO-1602: a segment may narrow the document's own scope to SESSION."""
+
+    def test_a_segment_scope_that_genuinely_narrows_the_document_is_valid(self) -> None:
+        status = _status(scope=sc.Scope.HOST, segments=(_segment(scope=sc.Scope.SESSION),))
+        self.assertIs(status.segments[0].scope, sc.Scope.SESSION)
+
+    def test_a_segment_scope_equal_to_the_document_scope_is_refused(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            _status(scope=sc.Scope.HOST, segments=(_segment(scope=sc.Scope.HOST),))
+
+    def test_a_segment_scope_narrowing_to_project_is_refused(self) -> None:
+        # Differs from the document, but not to SESSION -- the only
+        # validated narrowing today.
+        with self.assertRaises(sc.ContractViolation):
+            _status(scope=sc.Scope.HOST, segments=(_segment(scope=sc.Scope.PROJECT),))
+
+    def test_a_segment_with_no_scope_declared_is_unaffected(self) -> None:
+        status = _status(scope=sc.Scope.HOST, segments=(_segment(),))
+        self.assertIsNone(status.segments[0].scope)
+
+    def test_a_non_scope_value_on_a_segment_is_refused_at_construction(self) -> None:
+        with self.assertRaises(sc.ContractViolation):
+            _segment(scope="session")  # type: ignore[arg-type]
+
+    def test_multiple_segments_may_each_independently_narrow_or_not(self) -> None:
+        status = _status(
+            scope=sc.Scope.HOST,
+            segments=(
+                _segment(key="install", scope=None),
+                _segment(key="latest_decision", scope=sc.Scope.SESSION),
+            ),
+        )
+        self.assertIsNone(status.segments[0].scope)
+        self.assertIs(status.segments[1].scope, sc.Scope.SESSION)
+
+
+class SegmentScopeWireTest(unittest.TestCase):
+    """The wire shape of segment-level scope: optional, strict, round-tripping."""
+
+    def test_segment_scope_survives_the_wire_round_trip(self) -> None:
+        payload = _payload(
+            scope="host",
+            order_hint=500,
+            segments=[{"key": "latest_decision", "state": "ok", "label": "Would allow", "scope": "session"}],
+        )
+        status = sc.provider_status_from_wire(payload)
+        self.assertIs(status.segments[0].scope, sc.Scope.SESSION)
+        self.assertEqual(status.to_wire(), payload)
+
+    def test_an_absent_segment_scope_parses_to_none_and_is_omitted_on_the_wire(self) -> None:
+        payload = _payload(
+            scope="host",
+            segments=[{"key": "install", "state": "ok", "label": "Running"}],
+        )
+        status = sc.provider_status_from_wire(payload)
+        self.assertIsNone(status.segments[0].scope)
+        self.assertNotIn("scope", status.to_wire()["segments"][0])
+
+    def test_an_unrecognised_segment_scope_refuses_the_whole_payload(self) -> None:
+        # Mirrors the document-level rule exactly: a scope this host does
+        # not recognise must never be guessed at, including by falling back
+        # to "the segment must not have narrowed anything."
+        payload = _payload(
+            scope="host",
+            segments=[{"key": "x", "state": "ok", "label": "y", "scope": "galaxy"}],
+        )
+        with self.assertRaises(sc.ContractViolation):
+            sc.provider_status_from_wire(payload)
+
+    def test_a_segment_scope_equal_to_the_document_scope_is_refused_on_parse(self) -> None:
+        payload = _payload(
+            scope="host",
+            segments=[{"key": "x", "state": "ok", "label": "y", "scope": "host"}],
+        )
+        with self.assertRaises(sc.ContractViolation):
+            sc.provider_status_from_wire(payload)
+
+
 class NonCollapseTest(unittest.TestCase):
     """The rules that stop a non-answer being rendered as a good answer."""
 
@@ -988,6 +1067,7 @@ class WireParsingTest(unittest.TestCase):
                     "clear_role": "posture",
                     "fresh_for_seconds": 86400,
                     "semantic_state": "caution",
+                    "scope": "session",
                 }
             ],
         )

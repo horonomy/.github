@@ -898,6 +898,88 @@ class TestRenderSegment(unittest.TestCase):
                         self.assertRegex(text, r"[A-Za-z]{3,}")
 
 
+class TestRenderSegmentScope(unittest.TestCase):
+    """HORO-1602: a segment's own scope marker, folded into its reading."""
+
+    def test_a_differing_segment_scope_gets_its_own_marker(self):
+        narrowed = segment(scope=contract.Scope.SESSION)
+        text = render.render_segment(
+            narrowed, render.PresentationMode.BALANCED, provider_scope="host"
+        )
+        self.assertIn(
+            render.scope_marker("session", render.PresentationMode.BALANCED), text
+        )
+
+    def test_a_segment_scope_matching_the_group_gets_no_marker(self):
+        # Construction itself refuses an equal scope (SegmentScopeTest in
+        # test_statusline_contract.py), so the only way to observe "no
+        # marker" at the render layer is the common case: no scope declared
+        # at all.
+        same = segment(scope=None)
+        text = render.render_segment(
+            same, render.PresentationMode.BALANCED, provider_scope="host"
+        )
+        self.assertNotIn(render.scope_marker("session", render.PresentationMode.BALANCED), text)
+
+    def test_a_segment_declaring_no_scope_renders_identically_regardless_of_provider_scope(self):
+        # The backward-compatible case: a segment that never set `.scope`
+        # (every fixture and every caller that predates HORO-1602) renders
+        # byte-identical whether or not a caller now passes `provider_scope`
+        # -- there is nothing to compare, so nothing changes.
+        plain = segment(scope=None)
+        for mode in MODES:
+            self.assertEqual(
+                render.render_segment(plain, mode),
+                render.render_segment(plain, mode, provider_scope="host"),
+            )
+
+    def test_an_unspecified_provider_scope_still_surfaces_a_declared_segment_scope(self):
+        # A caller that does not say what the group's scope is cannot be
+        # told the segment's declared scope matches it -- the safe default
+        # is to show the narrower claim rather than silently swallow it.
+        narrowed = segment(scope=contract.Scope.SESSION)
+        text = render.render_segment(narrowed, render.PresentationMode.BALANCED)
+        self.assertIn(
+            render.scope_marker("session", render.PresentationMode.BALANCED), text
+        )
+
+    def test_the_marker_is_welded_before_the_label_inside_the_one_painted_span(self):
+        # Same invariant as the hypothetical marker: one reading, one quote-
+        # matched span -- the scope marker must be part of `head`, not a
+        # separate trailing detail a colour boundary could split from it.
+        narrowed = segment(scope=contract.Scope.SESSION, label="Would allow")
+        text = render.render_segment(
+            narrowed,
+            render.PresentationMode.BALANCED,
+            provider_scope="host",
+            color=render.ColorCapability.ANSI256,
+        )
+        # A single escape-colour run wraps the whole reading; the scope
+        # marker appears before the label inside that one run, not after a
+        # second reset/re-colour sequence.
+        self.assertIn(render.scope_marker("session", render.PresentationMode.BALANCED), text)
+        marker_pos = text.index(render.scope_marker("session", render.PresentationMode.BALANCED))
+        label_pos = text.index("Would allow")
+        self.assertLess(marker_pos, label_pos)
+        # One paint() call wraps the whole reading: exactly one opening
+        # colour escape, immediately at the start, and exactly one reset,
+        # at the very end -- the signature of a single span, as opposed to
+        # two nested or sequential paint() calls (which would leave a
+        # reset-then-reopen in the middle, between the marker and the
+        # label).
+        self.assertTrue(text.startswith("\x1b["), text)
+        self.assertEqual(text.count("\x1b[0m"), 1, f"more than one reset in {text!r}")
+        self.assertTrue(text.endswith("\x1b[0m"), text)
+
+    def test_plain_text_fallback_preserves_the_scope_meaning(self):
+        narrowed = segment(scope=contract.Scope.SESSION)
+        text = render.render_segment(
+            narrowed, render.PresentationMode.PLAIN, provider_scope="host"
+        )
+        self.assertIn(render.SCOPE_TEXT["session"], text)
+        self.assertTrue(text.isascii())
+
+
 ROLES = tuple(contract.ClearRole)
 
 # The live host as read from the three installed providers on 2026-09-30. Kept

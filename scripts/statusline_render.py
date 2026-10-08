@@ -864,6 +864,7 @@ def render_segment(
     *,
     color: ColorCapability = ColorCapability.NONE,
     live: bool = True,
+    provider_scope: str | None = None,
 ) -> str:
     """Render one provider segment as a single readable phrase.
 
@@ -905,9 +906,21 @@ def render_segment(
     provider with no live readings cannot claim a reassuring state — so a caller
     that does not know lands on "colour by what the reading says", not on
     "colour a dead provider green".
+
+    `provider_scope` (HORO-1602) is the group's own scope, passed in so this
+    leaf can tell whether `segment.scope` genuinely narrows it. A segment
+    whose declared scope differs from the group's gets its own scope marker
+    folded into `head`, before tone is painted — the same reason the
+    hypothetical marker is welded to the label rather than appended as a
+    separate detail: one reading, one quote-matched span, no second place
+    for `explain` and the rendered line to disagree about where a scope
+    claim narrower than the group's actually belongs.
     """
     state = _enum_value(segment.state)
     head = f"{state_marker(state, mode)} {segment.label}".strip()
+    segment_scope = _enum_value(getattr(segment, "scope", None))
+    if segment_scope is not None and segment_scope != provider_scope:
+        head = f"{scope_marker(segment_scope, mode)} {head}"
     if getattr(segment, "hypothetical", False):
         head = f"{head} [{HYPOTHETICAL_TEXT}]"
 
@@ -1365,9 +1378,12 @@ def provider_parts(
     if segments and not depth.shows_supporting_detail:
         segments = clear_readings(status)
     live = _has_live_readings(status)
+    provider_scope = _enum_value(status.scope)
     if segments:
         readings = tuple(
-            render_segment(segment, mode, depth, color=color, live=live)
+            render_segment(
+                segment, mode, depth, color=color, live=live, provider_scope=provider_scope
+            )
             for segment in segments
         )
     else:

@@ -922,7 +922,15 @@ class TestBuildIdentityStdin(unittest.TestCase):
     def test_a_session_id_yields_a_minimal_allowlisted_document(self):
         produced = json.loads(compositor.build_identity_stdin("claude-sess-7e21"))
         self.assertEqual(
-            produced, {"identity_stdin_version": 1, "provider_session_id": "claude-sess-7e21"}
+            produced,
+            {
+                "identity_stdin_version": 1,
+                "provider_session_id": "claude-sess-7e21",
+                # HORO-1602: additive, not a version bump -- see
+                # test_none_yields_empty_bytes_byte_identical_to_pre_HORO_1602
+                # for the no-identity case this field is irrelevant to.
+                "host_capabilities": ["segment_scope"],
+            },
         )
 
 
@@ -956,7 +964,12 @@ class TestIdentityPassthrough(FixtureCase):
         )
         received = json.loads(captured.read_text())
         self.assertEqual(
-            received, {"identity_stdin_version": 1, "provider_session_id": "claude-sess-7e21"}
+            received,
+            {
+                "identity_stdin_version": 1,
+                "provider_session_id": "claude-sess-7e21",
+                "host_capabilities": ["segment_scope"],
+            },
         )
 
     def test_provider_receives_empty_stdin_when_no_session_id_is_known(self):
@@ -1005,6 +1018,82 @@ class TestIdentityPassthrough(FixtureCase):
         compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-b")
         self.assertEqual(
             counter.read_text(), "xx", "a different known session must not reuse sess-a's session-scoped cache"
+        )
+
+    def test_a_segment_level_session_scope_gates_the_cache_like_a_document_level_one(self):
+        """HORO-1602: a document declared `host` overall, with exactly one
+        segment declaring `session`, must gate the whole cached entry on
+        identity exactly as a document-level `session` scope would -- there
+        is one cache slot per provider, not one per segment, so any
+        session-local content anywhere in the answer makes the entry as a
+        whole unsafe to reuse across identities.
+        """
+        counter = self.home / "calls"
+        path = self.script(
+            "counted_by_segment_scope",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(
+                wire(
+                    scope="host",
+                    cache_ttl_seconds=30,
+                    segments=[
+                        {"key": "install", "state": "ok", "label": "Running"},
+                        {
+                            "key": "latest_decision",
+                            "state": "ok",
+                            "label": "Would allow",
+                            "scope": "session",
+                        },
+                    ],
+                )
+            )
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path)
+        counter.write_text("")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        self.assertEqual(counter.read_text(), "x", "same session reuses the cache")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-b")
+        self.assertEqual(
+            counter.read_text(),
+            "xx",
+            "a different session must not reuse an entry with a session-scoped segment",
+        )
+
+    def test_a_document_with_no_session_scoped_segment_caches_normally(self):
+        """The negative control for the test above: a HOST document whose
+        segments are all unscoped (sharing the document's own HOST scope)
+        must keep ordinary cross-identity cache reuse -- the segment-level
+        amendment must not accidentally widen identity-gating to documents
+        that never declared any session-local content at all.
+        """
+        counter = self.home / "calls"
+        path = self.script(
+            "counted_by_no_segment_scope",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(
+                wire(
+                    scope="host",
+                    cache_ttl_seconds=30,
+                    segments=[
+                        {"key": "install", "state": "ok", "label": "Running"},
+                        {"key": "mode", "state": "ok", "label": "Shadow"},
+                    ],
+                )
+            )
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path)
+        counter.write_text("")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-a")
+        compositor.run_provider(entry, GENEROUS_MS, self.home, provider_session_id="sess-b")
+        compositor.run_provider(entry, GENEROUS_MS, self.home)  # no identity known
+        self.assertEqual(
+            counter.read_text(), "x", "no session-scoped content anywhere -> reusable across identities"
         )
 
     def test_unknown_session_identity_cannot_borrow_session_scoped_cache(self):

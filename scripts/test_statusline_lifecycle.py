@@ -2134,6 +2134,53 @@ class ExplainDecodeTest(ExplainCase):
             compositor.main(stdin=io.BytesIO(b"{}"), stdout=stream)
         self.assertIn(reading["rendered"], stream.getvalue())
 
+    def test_a_session_scoped_segment_decodes_its_own_scope_and_quotes_the_marker(
+        self,
+    ) -> None:
+        # HORO-1602: the same quote-matching tie as the test above, now for a
+        # segment whose own scope narrows the HOST-scoped document -- the
+        # `rendered` fragment must include the segment's own scope marker,
+        # because the real line does (provider_parts/render_provider thread
+        # provider_scope through), and the decode must say why.
+        self.register(
+            self.status(
+                scope="host",
+                segments=(
+                    segment(
+                        "latest_decision", "ok", "Would allow", scope=contract.Scope.SESSION
+                    ),
+                ),
+            )
+        )
+
+        reading = self.explain()["providers"][0]["readings"][0]
+
+        self.assertEqual(reading["scope"], "session")
+        self.assertTrue(reading["scope_token"])
+        self.assertIn("session", reading["scope_means"].lower())
+        self.assertIn(reading["scope_token"], reading["rendered"])
+
+        stream = io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {compositor.STATE_HOME_ENV: str(self.home)}):
+            compositor.main(stdin=io.BytesIO(b"{}"), stdout=stream)
+        self.assertIn(reading["rendered"], stream.getvalue())
+
+    def test_a_segment_sharing_the_documents_scope_reports_no_segment_scope_fields(
+        self,
+    ) -> None:
+        self.register(
+            self.status(
+                scope="host",
+                segments=(segment("install", "ok", "Running"),),
+            )
+        )
+
+        reading = self.explain()["providers"][0]["readings"][0]
+
+        self.assertNotIn("scope", reading)
+        self.assertNotIn("scope_token", reading)
+        self.assertNotIn("scope_means", reading)
+
     def test_an_unknown_reading_carries_its_reason_and_its_freshness(self) -> None:
         # Fornax's UNVERIFIED case, which is the one the readability pass was
         # filed about: the state alone left a reader with no idea why.
