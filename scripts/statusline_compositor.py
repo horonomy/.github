@@ -702,6 +702,21 @@ def read_cache(
     session B's render a moment later. Most providers ignore the identity
     stdin entirely and answer identically regardless, so this costs them one
     extra probe at most once per session change, never a wrong answer.
+
+    Known residual gap (adversarial review, HORO-1602): two different,
+    concurrent renders that *both* fail to resolve any session id (`identity`
+    is `None` on both sides -- an older host payload shape, or statusline run
+    outside any coding-agent session at all) still match each other, because
+    `None == None`. This is not a regression: pre-HORO-1602 caching had no
+    identity concept at all, so this is the same behavior the cache always
+    had for that case, not a new leak. Closing it fully would mean an unknown
+    identity always bypasses the cache -- rejected here because it would
+    defeat caching entirely for every install that has no session id to give
+    (the common case for a bare terminal statusline), a real regression for a
+    theoretical, same-host-only collision that only matters for a provider
+    that (a) actually emits per-session data and (b) is queried by two
+    genuinely different unidentified sessions inside the same ~60s TTL
+    window -- not true of any provider registered today.
     """
     path = cache_dir(home) / f"{entry.provider}.json"
     try:

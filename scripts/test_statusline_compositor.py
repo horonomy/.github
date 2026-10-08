@@ -1018,6 +1018,33 @@ class TestIdentityPassthrough(FixtureCase):
             counter.read_text(), "xx", "a cache entry written with no identity must not be served once one is known"
         )
 
+    def test_two_renders_with_no_known_identity_share_a_cache_slot_by_documented_design(self):
+        """Known residual gap (adversarial review, HORO-1602), accepted and
+        documented on `read_cache`: two renders that both fail to resolve a
+        session id match each other's cache entry (`None == None`), same as
+        pre-HORO-1602 behavior for this case. This test pins that documented
+        choice so a future change to it is deliberate, not accidental --
+        fixing it unconditionally would defeat caching for every install
+        with no session id to give at all.
+        """
+        counter = self.home / "calls"
+        path = self.script(
+            "counted_with_unknown_identity",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        entry = self.entry("fornax", path)
+        counter.write_text("")
+
+        compositor.run_provider(entry, GENEROUS_MS, self.home)  # render 1, no identity known
+        compositor.run_provider(entry, GENEROUS_MS, self.home)  # render 2, also no identity known
+        self.assertEqual(
+            counter.read_text(),
+            "x",
+            "an unknown identity reuses a cache entry also written under no identity -- documented, not a regression",
+        )
+
 
 class TestCollect(FixtureCase):
     def registry(self, providers, **overrides):

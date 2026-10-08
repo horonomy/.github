@@ -120,6 +120,18 @@ the whole thing.
   provider that ignores the identity stdin and answers identically either
   way pays at most one extra probe per session change, never a wrong
   answer served across sessions.
+- **Known residual gap, accepted deliberately:** two different, concurrent
+  renders that *both* fail to resolve any session id still match each
+  other's cache entry (both record `identity: null`). This is not a
+  regression — pre-HORO-1602 caching had no identity concept at all, so an
+  unknown identity behaves exactly as every identity used to. Making an
+  unknown identity always bypass the cache was considered and rejected: it
+  would defeat caching entirely for every install with no session id to
+  give at all (the common case for a bare terminal statusline), to close a
+  theoretical collision that requires a provider which both emits
+  per-session data *and* is queried by two genuinely different unidentified
+  sessions inside the same cache TTL — true of no provider registered
+  today.
 - This document's own identity-passthrough logic uses no new experiment,
   capture mechanism, or provider-native acquisition path — `session_id` is a
   field Claude Code's statusline invocation already includes in the payload
