@@ -271,6 +271,68 @@ backfill a guessed `provider_session_id`/`agent_id` onto an old record to
 make it look newer than it is — a mixed table of pre-contract and
 post-contract rows is the expected, permanent shape, not a migration target.
 
+## Operator migration guidance (HORO-1603)
+
+For an operator looking at a running product rather than its source, not
+every question [Backward compatibility](#backward-compatibility) answers for
+a *reader* is obvious from the outside. This section exists for that
+audience.
+
+**Rollback expectations.** Rolling a capturer back across an
+`envelope_version` bump is **not** unconditionally safe both ways — it
+depends on what changed in that bump. Per
+[Version evolution](#version-evolution)'s table, an unrecognised field is
+ignored (safe either direction) but an unrecognised `Scope`/`lineage_status`
+*value* or an unrecognised `envelope_version` itself is **refused**, not
+silently accepted. So: the older code never needs to delete, migrate, or
+rewrite existing rows, and it keeps reading everything it already knew how
+to read — but rows written by the *newer* code, under a version bump that
+added a new enum value or a new required field, are refused by the older
+reader rather than guessed at. A rollback across such a bump is expected to
+show a visible seam — rows the rolled-back reader cannot parse — at the
+rollback point, not silently reinterpreted history. Whether a given
+rollback is "safe" or "visibly seamed" is exactly the distinction that
+table draws; check it for the specific version pair involved rather than
+assuming either outcome.
+
+**The same host value across sessions: intentional or suspicious? (Only
+once the scope declaration itself is trusted.)** This guidance tells an
+operator how to read a `Scope.HOST` value *once a segment's scope
+declaration is already known to be correct* — it is not, by itself, a way
+to catch a product that mis-declares scope in the first place. A product
+mis-declaring `Scope.HOST` for data that should be session-scoped is
+exactly the anti-pattern [Scope cannot silently narrow](#scope-cannot-silently-narrow)
+exists to prevent, and no amount of looking at the *value* can distinguish
+that bug from genuine host-wide state — both look identical across
+sessions. Catching a wrong declaration requires independent evidence
+outside this document (the product's own tests against real, provider-
+documented behavior; see [Implementing a capturer](#implementing-a-capturer)).
+With that caveat, the common case this guidance *does* help with: a
+product correctly declaring `Scope.HOST` for data genuinely shared across
+every session on that machine — seeing the identical value for two
+different `provider_session_id`s there is the *expected*, healthy shape,
+not a sign attribution broke. It is worth a second look when a field the
+product has *already adopted* per-session attribution for (one it
+populates `provider_session_id` for in its own envelope) still shows the
+same value across two sessions with genuinely different
+`provider_session_id`s. Making this check without reading source requires
+a `doctor`/`explain` surface that reports a segment's declared scope
+alongside its value; no product has built that cross-cutting surface yet.
+What exists today is narrower: Circinus's own `execution_identity_capture`
+check (HORO-1603 AC2, `src/circinus/diagnostics/checks.py`) reports which
+dimensions its write path captures at all — a static capability report,
+not a live per-segment scope-plus-value display. Building the latter, for
+any product, is separately tracked work, not something this document
+claims already exists.
+
+**No guessed backfill, restated for an upgrade, not just a cold read.**
+Upgrading a running product to a newer `envelope_version` does not trigger
+any retroactive rewrite of rows already on disk — see
+[Backward compatibility](#backward-compatibility). An operator should not
+expect, request, or script a "backfill old rows with the new fields" step;
+there is no such step, by design, because there is no truthful value to put
+in it.
+
 ## Version evolution
 
 `envelope_version` is a single integer for the envelope shape, with the same
