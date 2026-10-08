@@ -1091,7 +1091,9 @@ class TestIdentityPassthrough(FixtureCase):
     def test_legacy_provider_ignoring_identity_keeps_prior_cache_behavior(self):
         """A provider written before HORO-1602 never reads stdin and always
         answers the same way -- its caching must be unaffected by this
-        feature existing at all, for either of the non-session scopes.
+        feature existing at all. Uses the default `wire()` scope
+        (`"project"`); `HOST` takes the identical code path, already
+        covered by `test_host_scoped_cache_is_reusable_across_different_identities`.
         """
         counter = self.home / "calls"
         path = self.script(
