@@ -278,38 +278,52 @@ every question [Backward compatibility](#backward-compatibility) answers for
 a *reader* is obvious from the outside. This section exists for that
 audience.
 
-**Rollback expectations.** Rolling a capturer back to a version that
-predates this contract (or predates a later `envelope_version`) is safe in
-one direction only: the older code simply stops writing the newer fields it
-doesn't know about, and every row it reads is a row some other envelope
-schema already made optional-field-tolerant (see
-[Version evolution](#version-evolution)'s table). A rollback never needs to
-delete, migrate, or rewrite existing rows — it only ever changes what gets
-written going forward. The one thing rollback cannot undo: rows written
-under the *newer* code remain in their newer shape; an older reader that
-encounters an `envelope_version` it does not recognize refuses that row
-rather than guessing at it (same table), so a rollback across a version
-bump is expected to show a visible seam in the data at the rollback point,
-not silently reinterpreted history.
+**Rollback expectations.** Rolling a capturer back across an
+`envelope_version` bump is **not** unconditionally safe both ways — it
+depends on what changed in that bump. Per
+[Version evolution](#version-evolution)'s table, an unrecognised field is
+ignored (safe either direction) but an unrecognised `Scope`/`lineage_status`
+*value* or an unrecognised `envelope_version` itself is **refused**, not
+silently accepted. So: the older code never needs to delete, migrate, or
+rewrite existing rows, and it keeps reading everything it already knew how
+to read — but rows written by the *newer* code, under a version bump that
+added a new enum value or a new required field, are refused by the older
+reader rather than guessed at. A rollback across such a bump is expected to
+show a visible seam — rows the rolled-back reader cannot parse — at the
+rollback point, not silently reinterpreted history. Whether a given
+rollback is "safe" or "visibly seamed" is exactly the distinction that
+table draws; check it for the specific version pair involved rather than
+assuming either outcome.
 
-**The same host value across sessions: intentional or suspicious?** A
-product correctly declares `Scope.HOST` for data that genuinely is shared
-across every session on that machine (see
-[Scope](#scope)) — seeing the identical value for two different
-`provider_session_id`s is the *expected*, healthy shape for that data, not
-a sign that attribution broke. It is suspicious only when a field the
+**The same host value across sessions: intentional or suspicious? (Only
+once the scope declaration itself is trusted.)** This guidance tells an
+operator how to read a `Scope.HOST` value *once a segment's scope
+declaration is already known to be correct* — it is not, by itself, a way
+to catch a product that mis-declares scope in the first place. A product
+mis-declaring `Scope.HOST` for data that should be session-scoped is
+exactly the anti-pattern [Scope cannot silently narrow](#scope-cannot-silently-narrow)
+exists to prevent, and no amount of looking at the *value* can distinguish
+that bug from genuine host-wide state — both look identical across
+sessions. Catching a wrong declaration requires independent evidence
+outside this document (the product's own tests against real, provider-
+documented behavior; see [Implementing a capturer](#implementing-a-capturer)).
+With that caveat, the common case this guidance *does* help with: a
+product correctly declaring `Scope.HOST` for data genuinely shared across
+every session on that machine — seeing the identical value for two
+different `provider_session_id`s there is the *expected*, healthy shape,
+not a sign attribution broke. It is worth a second look when a field the
 product has *already adopted* per-session attribution for (one it
 populates `provider_session_id` for in its own envelope) still shows the
-same value across two sessions that have genuinely different
-`provider_session_id`s — that combination is the one failure mode this
-contract exists to catch. Concretely: check what scope the *specific
-segment* in question declares before judging repetition by eye. A
-`doctor`/`explain` surface that reports a segment's declared scope
-alongside its value (see each product's own diagnostics, e.g. Circinus's
-`execution_identity_capture` check, HORO-1603 AC2) is how an operator makes
-this call without reading source — this document explains what the scope
-value means once that surface reports it; building that reporting surface
-for a given product is that product's own, separately tracked work.
+same value across two sessions with genuinely different
+`provider_session_id`s. Making this check without reading source requires
+a `doctor`/`explain` surface that reports a segment's declared scope
+alongside its value; no product has built that cross-cutting surface yet.
+What exists today is narrower: Circinus's own `execution_identity_capture`
+check (HORO-1603 AC2, `src/circinus/diagnostics/checks.py`) reports which
+dimensions its write path captures at all — a static capability report,
+not a live per-segment scope-plus-value display. Building the latter, for
+any product, is separately tracked work, not something this document
+claims already exists.
 
 **No guessed backfill, restated for an upgrade, not just a cold read.**
 Upgrading a running product to a newer `envelope_version` does not trigger
