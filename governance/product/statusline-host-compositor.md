@@ -115,26 +115,30 @@ the whole thing.
   default session id.
 - The provider cache (`cache_version: 1` cache entries) now additionally
   records the identity a provider answered under. **Identity gates the
-  cache only for `Scope.SESSION`** — the one scope a provider's own wire
-  answer can declare that means "this is my own session-local behavioral
-  state." For that scope, an entry is refused to any render carrying a
-  different identity, including the transition from "no identity known" to
-  "an identity is now known" in either direction — and a render whose own
-  identity is unknown never matches *any* session-scoped entry, including
-  one also written under no identity, because an unresolved identity cannot
-  prove isolation and must fail closed rather than guess. `Scope.HOST` and
-  `Scope.PROJECT` answers are untouched by any of this: they are not
-  session-local by the provider's own declaration, so they remain reusable
-  across different identities and across "no identity known at all" exactly
-  as caching behaved before this section existed. A provider that ignores
-  the identity stdin and declares `HOST`/`PROJECT` is unaffected either way;
-  one that declares `SESSION` and ignores the stdin pays at most one extra
+  cache only when `Scope.SESSION` appears anywhere in the answer** — either
+  as the document's own `scope`, or (see the segment-level amendment below)
+  on one of its segments — the one scope a provider can declare that means
+  "this is my own session-local behavioral state." When it does, the whole
+  cached entry is refused to any render carrying a different identity,
+  including the transition from "no identity known" to "an identity is now
+  known" in either direction — and a render whose own identity is unknown
+  never matches *any* session-scoped entry, including one also written
+  under no identity, because an unresolved identity cannot prove isolation
+  and must fail closed rather than guess. A document whose `scope`, and
+  every one of whose segments' `scope`, is `HOST`/`PROJECT` is untouched by
+  any of this: none of it is session-local by the provider's own
+  declaration, so it remains reusable across different identities and
+  across "no identity known at all" exactly as caching behaved before this
+  section existed. A provider that ignores the identity stdin and declares
+  only `HOST`/`PROJECT` is unaffected either way; one with any
+  `Scope.SESSION` content that ignores the stdin pays at most one extra
   probe per render with no resolvable identity, never a wrong answer served
   across sessions. (An earlier draft of this amendment gated every scope on
   identity; it was reverted after review because it defeated ordinary
   host/project caching for every install with no session id to give at
-  all, to guard a leak that only session-scoped data can actually suffer —
-  no provider registered today declares `Scope.SESSION`.)
+  all, to guard a leak that only session-scoped data can actually suffer.
+  Fornax now declares document-level `Scope.SESSION` when its daemon
+  confirms it, HORO-1601/1602.)
 - This document's own identity-passthrough logic uses no new experiment,
   capture mechanism, or provider-native acquisition path — `session_id` is a
   field Claude Code's statusline invocation already includes in the payload
