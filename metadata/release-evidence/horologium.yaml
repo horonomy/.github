@@ -6,11 +6,28 @@
 # "evaluate Horologium as a released MVP" case: it has one real GitHub tag
 # but makes no public/GA claim, so the contract's checks should reflect an
 # internal validation-slice product, not a public release.
+# HORO-1700 reconciliation (2026-10-09): populated website/docs/
+# hosted_service below from live, verified URLs — marketing+docs at
+# horologium.horonom.com (docs nested at /docs/*), and a real runtime app
+# at horologium.horo.run/app (a live demo the marketing site itself
+# publicly links to; previously missing from this config entirely).
+#
+# NOT resolved here, left as a genuine open escalation: this check will
+# still report `company_registry: FAILED` — metadata/company.yaml pins
+# this product's lifecycle to "coming_soon" under an explicit founder
+# disposition comment (HORO-598, 2026-09-06, "dormant incubating
+# initiative... not actively funded or currently executing"). That
+# directly conflicts with what's observed live here: an actively
+# developed, publicly reachable Public Alpha product (a real privacy
+# defect was found and fixed, merged, and redeployed to this exact host
+# under HORO-1700 on this same date). Whether HORO-598's disposition is
+# itself stale, or this is a different initiative sharing the same
+# product name, is a founder-level question this file does not decide.
 product: horologium
 claimed_lifecycle: experimental
 github:
   org: horonomy
   repo: horologium
-website: null
-docs: null
-hosted_service: null
+website: https://horologium.horonom.com
+docs: https://horologium.horonom.com/docs
+hosted_service: https://horologium.horo.run/app

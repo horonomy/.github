@@ -13,11 +13,17 @@
 # releases exist yet, so `beta`/`release_candidate`/`available` would be
 # claim-widening (`tags_releases` FAILED) — experimental is the only
 # accurate claim.
+# HORO-1700 reconciliation (2026-10-09): populated website/docs/
+# hosted_service below from live, verified URLs. The comment above
+# (written against the pre-HORO-566/569 host circinus.horo.run) is now
+# stale on the hostname but the maturity reasoning still holds — leaving
+# it for history rather than rewriting, see the live canonical host used
+# below instead.
 product: circinus
 claimed_lifecycle: experimental
 github:
   org: horonomy
   repo: circinus
-website: null
-docs: null
-hosted_service: null
+website: https://circinus.horonom.com
+docs: https://circinus.horonom.com/docs
+hosted_service: https://api.circinus.horo.run/health

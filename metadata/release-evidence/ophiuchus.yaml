@@ -10,11 +10,14 @@
 # visibility governs code, not product, discoverability. No releases exist
 # yet, so `beta`/`release_candidate`/`available` would be claim-widening —
 # experimental is the only accurate claim.
+# HORO-1700 reconciliation (2026-10-09): populated website/docs below from
+# live, verified URLs (comment above was written against the pre-migration
+# host ophiuchus.horo.run — stale on the hostname only).
 product: ophiuchus
 claimed_lifecycle: experimental
 github:
   org: horonomy
   repo: ophiuchus
-website: null
-docs: null
+website: https://ophiuchus.horonom.com
+docs: https://ophiuchus.horonom.com/docs
 hosted_service: null

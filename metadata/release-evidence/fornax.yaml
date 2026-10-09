@@ -22,11 +22,18 @@
 # correct, non-silent record of an open promotion decision (per
 # governance/releases/public-surfaces.md "Never publish to make a gate
 # green"), not a defect to paper over by relabeling the claim `beta`.
+# HORO-1700 reconciliation (2026-10-09): the comment above is now stale —
+# fornax.horonom.com is live with real content (not a placeholder),
+# docs.fornax.horonom.com is live, and fornax.horo.run was deliberately
+# repurposed under FORNX-241 (2026-09-19, founder-approved) as the real
+# live Fornax SaaS/dashboard frontend, superseding the earlier HORO-572
+# redirect-to-marketing design this comment originally described. All
+# three are populated below from live-verified URLs.
 product: fornax
 claimed_lifecycle: experimental
 github:
   org: horonomy
   repo: fornax-core
-website: null
-docs: null
-hosted_service: null
+website: https://fornax.horonom.com
+docs: https://docs.fornax.horonom.com
+hosted_service: https://fornax.horo.run

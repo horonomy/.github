@@ -68,6 +68,13 @@ security_policy:
 #
 # `lifecycle` vocabulary, in maturity order:
 #   coming_soon        — in design/estimation, nothing shipped
+#   experimental       — shipped and publishable, pre-beta (matches
+#                        ProductMaturity/`claimed_lifecycle`'s "experimental"
+#                        tier — scripts/public_release_reconcile.py's
+#                        check_company_registry does an exact string match
+#                        against this field, so it must say "experimental"
+#                        verbatim for an experimental product, not
+#                        "coming_soon")
 #   beta               — shipped, still taking breaking changes
 #   release_candidate  — a tagged `-rc` build, feature-frozen, awaiting GA
 #   available          — generally available
@@ -88,22 +95,37 @@ products:
     name: "Octans"
     website: "https://octans.horonom.com"
     github_org: null
-    lifecycle: "coming_soon"
+    # Live, publicly reachable Experimental MVP (HORO-1700 reconciliation,
+    # 2026-10-09) — "coming_soon" was stale; the site has real content, not
+    # a placeholder, and the product's own repo description/registry entry
+    # already say "experimental".
+    lifecycle: "experimental"
   - id: "circinus"
     name: "Circinus"
     website: "https://circinus.horonom.com"
     github_org: null
-    lifecycle: "coming_soon"
+    # Live, publicly reachable Experimental MVP (HORO-1700 reconciliation,
+    # 2026-10-09) — "coming_soon" was stale; matches the product's own
+    # README ("Experimental MVP (v0.0.0)") and registry entry.
+    lifecycle: "experimental"
   - id: "ophiuchus"
     name: "Ophiuchus"
     website: "https://ophiuchus.horonom.com"
     github_org: null
-    lifecycle: "coming_soon"
+    # Live, publicly reachable Experimental MVP (HORO-1700 reconciliation,
+    # 2026-10-09) — "coming_soon" was stale; matches the product's own
+    # README/repo description and registry entry.
+    lifecycle: "experimental"
   - id: "fornax"
     name: "Fornax"
     website: "https://fornax.horonom.com"
     github_org: null
-    lifecycle: "coming_soon"
+    # Live, publicly reachable Experimental product (HORO-1700
+    # reconciliation, 2026-10-09) — "coming_soon" was stale; the marketing
+    # site, docs site (docs.fornax.horonom.com), and the FORNX-241-approved
+    # live SaaS app (fornax.horo.run) are all real and live. Matches the
+    # registry entry's `maturity: 'experimental'`.
+    lifecycle: "experimental"
   - id: "horologium"
     name: "Horologium"
     website: "https://horologium.horonom.com"
