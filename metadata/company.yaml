@@ -147,6 +147,28 @@ products:
     name: "Horologium"
     website: "https://horologium.horonom.com"
     github_org: null
+    # Live, publicly reachable Public Alpha product (HORO-1700/1706
+    # reconciliation, 2026-10-09; HORO-1695 campaign fixed and redeployed a
+    # real privacy defect to this exact host the same week). `lifecycle`
+    # stays "coming_soon" for the same structural reason as circinus/
+    # fornax/ophiuchus/octans above: this schema has no "experimental"
+    # tier (see the vocabulary note at the top of this file), not because
+    # of any dormant/unfunded disposition.
+    #
+    # CORRECTION (2026-10-09): a prior session misattributed the
+    # ArcheWeave/Harbinger "dormant incubating initiative" DISPOSITION
+    # comment (HORO-598) to this entry, because it was placed directly
+    # below Horologium's `lifecycle` line rather than under ArcheWeave's
+    # own entry where it actually belongs (see HORO-1700's escalation
+    # comment and its retraction). Re-verified: no HORO-598 disposition,
+    # or any other founder decision, applies to Horologium. It is the
+    # same single, live, actively-developed product referenced throughout
+    # HORO-1695/1700/1701/1706 — not a separate dormant initiative.
+    lifecycle: "coming_soon"
+  - id: "archeweave"
+    name: "ArcheWeave"
+    website: null
+    github_org: null
     lifecycle: "coming_soon"
     # DISPOSITION (HORO-598, founder decision 2026-09-06): dormant incubating
     # initiative — real product intent (AW-1/AW-2 epics, both still To Do
@@ -157,8 +179,11 @@ products:
     # explicit instruction is to record the disposition here rather than
     # invent a schema field. Absence of current execution is not grounds to
     # remove a genuine, still-intended initiative from the catalog.
-  - id: "archeweave"
-    name: "ArcheWeave"
+    # (Moved here from a misplaced position under Horologium's entry,
+    # 2026-10-09 — see the correction note on that entry above. Content
+    # unchanged from the original HORO-598 PR #33.)
+  - id: "harbinger"
+    name: "Harbinger"
     website: null
     github_org: null
     lifecycle: "coming_soon"
@@ -167,8 +192,3 @@ products:
     # ticket has ever existed for Harbinger (unlike ArcheWeave's AW-1/AW-2),
     # but the founder's decision is to keep both listed rather than treat
     # that asymmetry as grounds for retiring only this one.
-  - id: "harbinger"
-    name: "Harbinger"
-    website: null
-    github_org: null
-    lifecycle: "coming_soon"
