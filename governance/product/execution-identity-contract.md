@@ -535,6 +535,27 @@ table above for why the two cases are handled differently).
    redaction assertions in your own language against your own real values —
    reference this document and the property names by URL; do not copy its
    prose into your repo.
+6. Key your own cache/query layer off [`cache_key(scope)`](#cache-keys-never-widen-on-their-own),
+   not off whatever fields happen to be convenient. The table there is
+   normative for *every* product consuming this contract, not just the
+   reference implementation: a `SESSION`-scoped lookup keys on
+   `(host_id, tool_provider, provider_session_id)` and fails closed —
+   returns empty/unknown, never a broader scope's cached or queried value —
+   when `provider_session_id` is absent on the current envelope. This is
+   true even if your storage layer makes it *easier* to key on `host_id`
+   alone (a single per-host row, a host-keyed in-memory dict); convenience
+   of storage is not a reason to serve one session's cached state to
+   another. If your product's query surface lets an operator ask "what's
+   the latest X for this session," that query must use the same
+   scope-to-key mapping — it must not silently fall back to "latest for
+   this host" when the session dimension is missing, per
+   [Scope cannot silently narrow](#scope-cannot-silently-narrow).
+7. If your product adds a *new* scope-like grouping this contract does not
+   name (e.g. a per-workspace or per-team rollup), do not overload an
+   existing `Scope` value to mean it — name the new dimension explicitly in
+   your own product's docs and give it its own cache-key rule following the
+   same fail-closed shape as step 6, rather than stretching `HOST` or
+   `PROJECT_WORKTREE` to cover a grouping this contract never defined.
 
 A reader validates every envelope it parses, so a capturer bug becomes that
 record reading as `Scope.UNKNOWN` rather than contaminating another
