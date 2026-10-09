@@ -9,11 +9,13 @@
 # comment); no releases exist yet, so `beta`/`release_candidate`/
 # `available` would be claim-widening — experimental is the only accurate
 # claim, and is a legitimately publishable tier at this maturity.
+# HORO-1700 reconciliation (2026-10-09): populated website/docs below from
+# live, verified URLs (the comment above predates this check ever being run).
 product: octans
 claimed_lifecycle: experimental
 github:
   org: horonomy
   repo: octans
-website: null
-docs: null
+website: https://octans.horonom.com
+docs: https://octans.horonom.com/docs
 hosted_service: null
