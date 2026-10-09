@@ -613,7 +613,17 @@ def _host_not_available(
 #: and of the provider-contract's own `contract_version` -- this is a third,
 #: narrower surface: what the host tells a provider about the invocation,
 #: not what a provider tells the host about its status.
-_IDENTITY_STDIN_VERSION = 1
+#:
+#: Public (HORO-1603): `statusline_lifecycle`'s session-scope doctor check
+#: needs to assert the exact bytes it is comparing probes against, not a
+#: private re-implementation of this module's own literal.
+IDENTITY_STDIN_VERSION = 1
+
+#: The capabilities this host declares in every identity-stdin document
+#: (HORO-1602). Public for the same reason as `IDENTITY_STDIN_VERSION`:
+#: `statusline_lifecycle`'s doctor probe needs to assert against the real
+#: value, not a second copy of it.
+HOST_CAPABILITIES = ("segment_scope",)
 
 
 def extract_provider_session_id(host_payload: bytes) -> str | None:
@@ -662,7 +672,7 @@ def build_identity_stdin(provider_session_id: str | None) -> bytes:
         return b""
     return json.dumps(
         {
-            "identity_stdin_version": _IDENTITY_STDIN_VERSION,
+            "identity_stdin_version": IDENTITY_STDIN_VERSION,
             "provider_session_id": provider_session_id,
             # Additive (HORO-1602): a provider deciding whether it is safe
             # to declare a session-scoped segment needs to know the *host*
@@ -675,7 +685,7 @@ def build_identity_stdin(provider_session_id: str | None) -> bytes:
             # new optional field within the existing document shape, not a
             # reason to bump a version every strict `== 1` reader already
             # checks.
-            "host_capabilities": ["segment_scope"],
+            "host_capabilities": list(HOST_CAPABILITIES),
         }
     ).encode("utf-8")
 
@@ -817,6 +827,7 @@ def run_provider(
     home: pathlib.Path | None = None,
     *,
     provider_session_id: str | None = None,
+    cache: bool = True,
 ) -> contract.ProviderStatus:
     """Get one provider's status, from cache if fresh, else by asking it.
 
@@ -832,10 +843,18 @@ def run_provider(
     (`read_cache`/`write_cache`'s `identity`) and the provider's own stdin
     (`build_identity_stdin`) -- the same value, so a cache entry answered
     under one identity is never served under another.
+
+    `cache=False` (HORO-1603) skips both the read and the write, for a probe
+    that must observe a provider's *live* answer under a specific identity
+    without reading a stale entry written under a different one, and without
+    leaving an entry behind for a real render to read back. The render path
+    never passes this; its default keeps every existing call site's
+    behavior exactly as it was before this parameter existed.
     """
-    cached = read_cache(entry, home, identity=provider_session_id)
-    if cached is not None:
-        return cached
+    if cache:
+        cached = read_cache(entry, home, identity=provider_session_id)
+        if cached is not None:
+            return cached
     if timeout_ms <= 0:
         return _host_not_available(
             entry, contract.Availability.UNKNOWN, "deadline_exhausted", "No time left to ask"
@@ -888,7 +907,8 @@ def run_provider(
         return _host_not_available(
             entry, contract.Availability.ERROR, "identity_mismatch", "Answered as another provider"
         )
-    write_cache(entry, status, home, identity=provider_session_id)
+    if cache:
+        write_cache(entry, status, home, identity=provider_session_id)
     return status
 
 
