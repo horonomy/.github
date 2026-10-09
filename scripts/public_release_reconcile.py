@@ -318,6 +318,17 @@ def check_company_registry(evidence: dict[str, Any]) -> SurfaceResult:
         return SurfaceResult(REQUIRED, f"claimed_lifecycle={lifecycle!r} but no metadata/company.yaml catalog entry exists")
     catalog_lifecycle = entry.get("lifecycle")
     if catalog_lifecycle != lifecycle:
+        # company.yaml's schema (scripts/generate_company_metadata.py) has no
+        # "experimental" tier — "coming_soon" is its only valid stand-in
+        # (HORO-1811). That specific substitution is an accepted structural
+        # fallback, not a stale/conflicting entry; every other mismatch still
+        # fails exact-match validation.
+        if lifecycle == "experimental" and catalog_lifecycle == "coming_soon":
+            return SurfaceResult(
+                DEFERRED,
+                "metadata/company.yaml lists lifecycle='coming_soon', the schema's accepted "
+                "stand-in for claimed 'experimental' — no dedicated experimental tier exists",
+            )
         return SurfaceResult(
             FAILED,
             f"metadata/company.yaml lists lifecycle={catalog_lifecycle!r}, product claims {lifecycle!r} — stale/conflicting catalog entry",

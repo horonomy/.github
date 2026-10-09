@@ -273,6 +273,22 @@ class CompanyRegistryTest(unittest.TestCase):
             result = prr.check_company_registry(_evidence(product="widget", claimed_lifecycle="beta"))
         self.assertEqual(result.state, prr.VERIFIED)
 
+    def test_deferred_when_experimental_and_catalog_coming_soon(self) -> None:
+        """HORO-1811: company.yaml has no 'experimental' tier — 'coming_soon' is
+        its accepted stand-in, not a stale/conflicting entry."""
+        catalog = _company_yaml_with([{"name": "widget", "lifecycle": "coming_soon"}])
+        with mock.patch.object(prr, "COMPANY_YAML_PATH", catalog):
+            result = prr.check_company_registry(_evidence(product="widget", claimed_lifecycle="experimental"))
+        self.assertEqual(result.state, prr.DEFERRED)
+
+    def test_failed_when_experimental_and_catalog_mismatched_other_value(self) -> None:
+        """HORO-1811: only the experimental/coming_soon pair is special-cased —
+        any other mismatch against an 'experimental' claim still fails."""
+        catalog = _company_yaml_with([{"name": "widget", "lifecycle": "available"}])
+        with mock.patch.object(prr, "COMPANY_YAML_PATH", catalog):
+            result = prr.check_company_registry(_evidence(product="widget", claimed_lifecycle="experimental"))
+        self.assertEqual(result.state, prr.FAILED)
+
 
 def _company_yaml_with(products: list[dict]) -> Path:
     d = Path(tempfile.mkdtemp())
