@@ -66,15 +66,10 @@ security_policy:
 # level only. `website` and `github_org` may be null for a product without a
 # public presence yet.
 #
-# `lifecycle` vocabulary, in maturity order:
+# `lifecycle` vocabulary, in maturity order (enforced by
+# scripts/generate_company_metadata.py's _LIFECYCLES enum — exactly these
+# four, nothing else validates):
 #   coming_soon        — in design/estimation, nothing shipped
-#   experimental       — shipped and publishable, pre-beta (matches
-#                        ProductMaturity/`claimed_lifecycle`'s "experimental"
-#                        tier — scripts/public_release_reconcile.py's
-#                        check_company_registry does an exact string match
-#                        against this field, so it must say "experimental"
-#                        verbatim for an experimental product, not
-#                        "coming_soon")
 #   beta               — shipped, still taking breaking changes
 #   release_candidate  — a tagged `-rc` build, feature-frozen, awaiting GA
 #   available          — generally available
@@ -82,6 +77,23 @@ security_policy:
 # Pick the entry that matches what the product's own docs publish today, not
 # the most conservative one available: understating maturity misrepresents a
 # product just as much as overstating it.
+#
+# NOTE (HORO-1700, 2026-10-09): this enum has no "experimental" tier, so a
+# live, publicly-reachable product whose own claimed_lifecycle is
+# "experimental" (richer vocabulary — see horonom-site's
+# productRegistry.ts ProductMaturity, and each product's own
+# metadata/release-evidence/<product>.yaml) has no valid value here that
+# equals its real claim. `coming_soon` is the closest available fit for
+# "shipped but pre-beta" in THIS narrower schema (same precedent as the
+# horologium entry below) — it is not a stale leftover for such products,
+# it's the schema's actual ceiling. scripts/public_release_reconcile.py's
+# check_company_registry does a literal string match against
+# claimed_lifecycle and will therefore permanently report FAILED for any
+# "experimental" product that has a company.yaml entry at all — this is a
+# structural gap in the reconcile contract, not a per-product metadata
+# bug; do not "fix" it by inventing an "experimental" value here (that
+# breaks the generator, confirmed live: "ERROR: invalid metadata/
+# company.yaml — products[N].lifecycle: 'experimental' invalid").
 products:
   - id: "ai-agent-assembly"
     name: "AI Agent Assembly"
@@ -96,36 +108,41 @@ products:
     website: "https://octans.horonom.com"
     github_org: null
     # Live, publicly reachable Experimental MVP (HORO-1700 reconciliation,
-    # 2026-10-09) — "coming_soon" was stale; the site has real content, not
-    # a placeholder, and the product's own repo description/registry entry
-    # already say "experimental".
-    lifecycle: "experimental"
+    # 2026-10-09) — website/docs below were null and are now populated
+    # from the live site. `lifecycle` stays "coming_soon": this schema has
+    # no "experimental" tier (see the vocabulary note above) and
+    # "coming_soon" is its closest valid fit for a shipped-but-pre-beta
+    # product, not a stale value to "correct".
+    lifecycle: "coming_soon"
   - id: "circinus"
     name: "Circinus"
     website: "https://circinus.horonom.com"
     github_org: null
     # Live, publicly reachable Experimental MVP (HORO-1700 reconciliation,
-    # 2026-10-09) — "coming_soon" was stale; matches the product's own
-    # README ("Experimental MVP (v0.0.0)") and registry entry.
-    lifecycle: "experimental"
+    # 2026-10-09) — website/docs/hosted_service below were null and are
+    # now populated from the live site/API. `lifecycle` stays
+    # "coming_soon" for the same structural reason noted on Octans above.
+    lifecycle: "coming_soon"
   - id: "ophiuchus"
     name: "Ophiuchus"
     website: "https://ophiuchus.horonom.com"
     github_org: null
     # Live, publicly reachable Experimental MVP (HORO-1700 reconciliation,
-    # 2026-10-09) — "coming_soon" was stale; matches the product's own
-    # README/repo description and registry entry.
-    lifecycle: "experimental"
+    # 2026-10-09) — website/docs below were null and are now populated
+    # from the live site. `lifecycle` stays "coming_soon" for the same
+    # structural reason noted on Octans above.
+    lifecycle: "coming_soon"
   - id: "fornax"
     name: "Fornax"
     website: "https://fornax.horonom.com"
     github_org: null
     # Live, publicly reachable Experimental product (HORO-1700
-    # reconciliation, 2026-10-09) — "coming_soon" was stale; the marketing
-    # site, docs site (docs.fornax.horonom.com), and the FORNX-241-approved
-    # live SaaS app (fornax.horo.run) are all real and live. Matches the
-    # registry entry's `maturity: 'experimental'`.
-    lifecycle: "experimental"
+    # reconciliation, 2026-10-09) — website/docs/hosted_service below were
+    # null and are now populated from the live marketing site, docs site
+    # (docs.fornax.horonom.com), and the FORNX-241-approved live SaaS app
+    # (fornax.horo.run). `lifecycle` stays "coming_soon" for the same
+    # structural reason noted on Octans above.
+    lifecycle: "coming_soon"
   - id: "horologium"
     name: "Horologium"
     website: "https://horologium.horonom.com"
