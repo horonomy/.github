@@ -113,6 +113,24 @@ the whole thing.
   identity context and every provider's stdin is `b""`, exactly as if this
   section did not exist. A provider must never receive a fabricated or
   default session id.
+
+  **One narrow, explicit exception (HORO-1603):** `statusline doctor
+  --probe`'s own session-scope diagnostic is permitted to send a
+  synthetic identity, because its entire purpose is observing whether a
+  provider's *scope* changes when an identity shows up at all — something
+  no real render-path invocation can be made to demonstrate on demand.
+  This is the only caller anywhere in the host allowed to do this, and
+  only when every one of these holds: never on the render path (the
+  compositor's `run_provider` default stays identity-absent for every
+  existing caller; the diagnostic passes one explicitly, once); the id is
+  random per doctor run with the fixed, recognisable prefix
+  `horonom-doctor-probe-` (never colliding with a real Claude Code
+  session UUID, and identifiable as synthetic if it ever leaked into a
+  log or cache entry); it is never cached (the diagnostic's own probes
+  pass `cache=False`); and it is never printed, logged, or written to any
+  file — doctor's text and JSON output name only *verdicts*
+  (`narrows_with_identity`, `did_not_narrow`, etc.), never the probe id
+  itself.
 - The provider cache (`cache_version: 1` cache entries) now additionally
   records the identity a provider answered under. **Identity gates the
   cache only when `Scope.SESSION` appears anywhere in the answer** — either
@@ -154,6 +172,18 @@ attaches it to anything (see
 "Partial adoption is expected" — knowing the current session's id and
 *attributing stored data* to it are two different, separately-earned
 capabilities).
+
+### Diagnosing whether a provider actually narrows (HORO-1603)
+
+`doctor` and `explain` normally run from a shell with no live Claude Code
+input, so they can only ever observe a provider's host-wide fallback —
+never whether it narrows under a real session identity. `statusline
+doctor --probe` closes that gap: for each registered provider it runs two
+further, uncached probes (one with no identity, one with the synthetic
+identity described above) and reports, per segment, whether that
+provider's effective scope actually changed. This never answers whether
+any specific *past* live render carried an identity — only whether the
+provider is capable of narrowing when one is sent.
 
 ## Hot-path containment
 
