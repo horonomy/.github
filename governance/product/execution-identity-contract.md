@@ -317,13 +317,33 @@ populates `provider_session_id` for in its own envelope) still shows the
 same value across two sessions with genuinely different
 `provider_session_id`s. Making this check without reading source requires
 a `doctor`/`explain` surface that reports a segment's declared scope
-alongside its value; no product has built that cross-cutting surface yet.
-What exists today is narrower: Circinus's own `execution_identity_capture`
-check (HORO-1603 AC2, `src/circinus/diagnostics/checks.py`) reports which
-dimensions its write path captures at all — a static capability report,
-not a live per-segment scope-plus-value display. Building the latter, for
-any product, is separately tracked work, not something this document
-claims already exists.
+alongside its value.
+
+Two narrower pieces of this exist today, neither of which is yet the full
+live per-segment scope-plus-value display this paragraph describes. Each
+is cross-referenced here rather than described in full — see its own
+source for the exact behavior:
+
+- Circinus's `execution_identity_capture` check (HORO-1603 AC2,
+  `src/circinus/diagnostics/checks.py`) is a static capability report: it
+  states which execution-identity dimensions that product's write path
+  captures *at all*, not a live reading of any particular stored row's
+  scope-plus-value.
+- `statusline doctor --probe` (HORO-1603 AC2, `scripts/statusline_lifecycle.py`'s
+  `_session_scope_check`) runs each registered provider with and without a
+  synthetic identity and reports whether its segments actually narrow when
+  given one. This is a cross-provider *capability* check analogous to
+  Circinus's, not a comparison of two real past sessions' recorded values —
+  it answers "can this provider narrow at all," not "did this specific
+  historical repeat happen because attribution broke." It does not require
+  reading source, unlike Circinus's check, since it drives the provider
+  live rather than reporting from a hardcoded summary.
+
+Building the full live per-segment scope-plus-value display this
+paragraph originally asked for — one that reads a product's own recorded
+history and shows a specific segment's declared scope next to its actual
+recorded value for a real past session — remains separately tracked work
+for any product, not something this document claims already exists.
 
 **No guessed backfill, restated for an upgrade, not just a cold read.**
 Upgrading a running product to a newer `envelope_version` does not trigger
