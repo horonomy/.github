@@ -2022,6 +2022,184 @@ class DoctorTest(LifecycleCase):
         self.assertEqual(self.settings.read_bytes(), before)
 
 
+class SessionScopeDoctorProbeTest(LifecycleCase):
+    """HORO-1603 AC2: `doctor --probe` compares a provider's answer with and
+    without an identity, to show whether it actually narrows to a session --
+    something neither `doctor` nor `explain` can otherwise observe, since
+    both run from a shell with no live Claude Code input.
+    """
+
+    PROBE_IDENTITY = "horonom-doctor-probe-deadbeef00000000"
+
+    def _fixture(self, name: str, decide: str) -> pathlib.Path:
+        """A provider whose answer is computed in `decide`, a python expression
+        (or statements) that may read `identity` (the decoded
+        `provider_session_id`, or `None`) and must assign `segments`.
+        """
+        path = self.root / name
+        path.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            "raw = sys.stdin.buffer.read()\n"
+            "try:\n"
+            "    identity = json.loads(raw).get('provider_session_id') if raw else None\n"
+            "except Exception:\n"
+            "    identity = None\n"
+            f"{decide}\n"
+            "print(json.dumps({\n"
+            "    'contract_version': 1, 'provider': 'fornax', 'provider_version': '1.0.0',\n"
+            "    'scope': scope if 'scope' in dir() else 'host',\n"
+            "    'availability': 'available', 'segments': segments,\n"
+            "}))\n"
+        )
+        path.chmod(0o755)
+        subprocess.run([str(path)], input=b"", capture_output=True, timeout=30, check=False)
+        return path
+
+    def _probe(self, provider_path: pathlib.Path) -> dict:
+        self.enable("fornax", argv=(str(provider_path),), timeout_ms=2000)
+        report = lifecycle.doctor(
+            self.settings, self.home, probe=True, probe_identity=self.PROBE_IDENTITY
+        )
+        return report["providers"][0]
+
+    def test_probe_a_sends_no_identity_and_probe_b_sends_the_injected_one(self) -> None:
+        captured_a = self.root / "a.stdin"
+        captured_b = self.root / "b.stdin"
+        decide = (
+            "import pathlib\n"
+            f"pathlib.Path({str(captured_a)!r}).write_bytes(raw) if not identity "
+            f"else pathlib.Path({str(captured_b)!r}).write_bytes(raw)\n"
+            "segments = [{'key': 'latest_finding', 'state': 'ok', 'label': 'ok'}]\n"
+        )
+        path = self._fixture("captures.py", decide)
+        self._probe(path)
+
+        self.assertEqual(captured_a.read_bytes(), b"")
+        self.assertEqual(
+            json.loads(captured_b.read_text()),
+            {
+                "identity_stdin_version": 1,
+                "provider_session_id": self.PROBE_IDENTITY,
+                "host_capabilities": ["segment_scope"],
+            },
+        )
+
+    def test_one_segment_narrows_others_do_not(self) -> None:
+        decide = (
+            "segments = [\n"
+            "    {'key': 'latest_decision', 'state': 'ok', 'label': 'ok', "
+            "'scope': 'session'} if identity else "
+            "{'key': 'latest_decision', 'state': 'ok', 'label': 'ok'},\n"
+            "    {'key': 'install', 'state': 'ok', 'label': 'ok'},\n"
+            "]\n"
+        )
+        path = self._fixture("one_narrows.py", decide)
+        provider = self._probe(path)
+
+        segments = provider["session_scope"]["segments"]
+        self.assertEqual(segments["latest_decision"]["verdict"], "narrows_with_identity")
+        self.assertEqual(segments["install"]["verdict"], "did_not_narrow")
+
+    def test_document_level_narrowing_is_detected(self) -> None:
+        # Fornax-shaped: no per-segment scope, the whole document narrows.
+        decide = (
+            "scope = 'session' if identity else 'host'\n"
+            "segments = [{'key': 'latest_finding', 'state': 'ok', 'label': 'ok'}]\n"
+        )
+        path = self._fixture("document_level.py", decide)
+        provider = self._probe(path)
+
+        segments = provider["session_scope"]["segments"]
+        self.assertEqual(segments["latest_finding"]["verdict"], "narrows_with_identity")
+
+    def test_ignoring_stdin_entirely_is_reported_for_every_segment(self) -> None:
+        decide = (
+            "segments = [{\n"
+            "    'key': 'latest_decision', 'state': 'ok', 'label': 'ok',\n"
+            "    'reason_code': 'no_identity_support', 'reason_label': 'identity not read',\n"
+            "}]\n"
+        )
+        path = self._fixture("ignores_stdin.py", decide)
+        provider = self._probe(path)
+
+        verdict = provider["session_scope"]["segments"]["latest_decision"]
+        self.assertEqual(verdict["verdict"], "did_not_narrow")
+        self.assertEqual(verdict["reason_code"], "no_identity_support")
+        self.assertEqual(verdict["reason_label"], "identity not read")
+
+    def test_session_scope_with_no_identity_sent_is_flagged_dangerous(self) -> None:
+        decide = (
+            "segments = [{'key': 'latest_decision', 'state': 'ok', 'label': 'ok', "
+            "'scope': 'session'}]\n"
+        )
+        path = self._fixture("already_session.py", decide)
+        provider = self._probe(path)
+
+        verdict = provider["session_scope"]["segments"]["latest_decision"]
+        self.assertEqual(verdict["verdict"], "session_without_identity")
+        full_report = lifecycle.doctor(
+            self.settings, self.home, probe=True, probe_identity=self.PROBE_IDENTITY
+        )
+        self.assertTrue(
+            any("latest_decision" in step for step in full_report["remediation"])
+        )
+
+    def test_an_unavailable_provider_never_yields_a_narrowing_verdict(self) -> None:
+        path = self.root / "down.py"
+        path.write_text("#!/usr/bin/env python3\nimport sys\nsys.exit(1)\n")
+        path.chmod(0o755)
+        subprocess.run([str(path)], input=b"", capture_output=True, timeout=30, check=False)
+        provider = self._probe(path)
+
+        self.assertEqual(provider["session_scope"]["verdict"], "provider_not_available")
+        self.assertEqual(provider["session_scope"]["segments"], {})
+
+    def test_the_probe_identity_never_leaks_into_any_output_or_cache_file(self) -> None:
+        decide = (
+            "segments = [{'key': 'latest_decision', 'state': 'ok', 'label': 'ok', "
+            "'scope': 'session'} if identity else "
+            "{'key': 'latest_decision', 'state': 'ok', 'label': 'ok'}]\n"
+        )
+        path = self._fixture("leak_check.py", decide)
+        self.enable("fornax", argv=(str(path),), timeout_ms=2000)
+
+        cache_dir = compositor.cache_dir(self.home)
+        before = (
+            sorted((p, p.read_bytes()) for p in cache_dir.rglob("*") if p.is_file())
+            if cache_dir.exists()
+            else []
+        )
+
+        report = lifecycle.doctor(
+            self.settings, self.home, probe=True, probe_identity=self.PROBE_IDENTITY
+        )
+        text = lifecycle._describe_doctor(report)
+        as_json = json.dumps(report)
+
+        self.assertNotIn(self.PROBE_IDENTITY, text)
+        self.assertNotIn(self.PROBE_IDENTITY, as_json)
+        after = (
+            sorted((p, p.read_bytes()) for p in cache_dir.rglob("*") if p.is_file())
+            if cache_dir.exists()
+            else []
+        )
+        self.assertEqual(before, after)
+        for _, content in after:
+            self.assertNotIn(self.PROBE_IDENTITY.encode(), content)
+
+    def test_doctor_without_probe_is_byte_identical_to_before(self) -> None:
+        decide = "segments = [{'key': 'latest_decision', 'state': 'ok', 'label': 'ok'}]\n"
+        path = self._fixture("plain.py", decide)
+        self.enable("fornax", argv=(str(path),), timeout_ms=2000)
+
+        without_probe = lifecycle.doctor(self.settings, self.home)
+
+        self.assertNotIn("identity_context", without_probe)
+        for provider in without_probe["providers"]:
+            self.assertNotIn("session_scope", provider)
+
+
 def segment(key: str, state: str, label: str, **fields) -> contract.Segment:
     """A segment built from wire values, the way a provider's output arrives.
 

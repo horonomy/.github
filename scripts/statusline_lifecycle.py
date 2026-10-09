@@ -50,6 +50,7 @@ import json
 import os
 import pathlib
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -1815,7 +1816,117 @@ def _drift(ownership: Ownership, registry: RegistryDocument) -> tuple[bool, str 
     return False, None
 
 
-def _doctor_providers(registry: RegistryDocument, home: pathlib.Path | None, probe: bool) -> list[dict]:
+#: One fixed, random-looking id per `doctor --probe` run, used only for the
+#: diagnostic's own second probe (HORO-1603) -- never on the render path,
+#: never cached, never printed. The prefix is deliberately recognisable: if
+#: this value ever turned up in a log or a cache file, that would itself be
+#: the bug it exists to help diagnose, and the prefix is what makes it
+#: identifiable as this diagnostic's own synthetic id rather than a real
+#: Claude Code session id (which this host never fabricates on the render
+#: path -- see `governance/product/statusline-host-compositor.md`'s narrow
+#: exception for exactly this probe).
+_DOCTOR_PROBE_PREFIX = "horonom-doctor-probe-"
+
+
+def _default_probe_identity() -> str:
+    return _DOCTOR_PROBE_PREFIX + secrets.token_hex(8)
+
+
+def _effective_scopes(status: contract.ProviderStatus) -> dict[str, contract.Scope]:
+    """Each segment's *effective* scope: its own, if it narrows, else the
+    document's.
+
+    Checking only `Segment.scope` would wrongly report a provider that
+    narrows at the *document* level (declares `ProviderStatus.scope ==
+    SESSION` itself, never sets a per-segment `scope`) as never narrowing
+    at all -- Fornax does exactly this. `Segment.scope` only ever appears
+    when it genuinely differs from the document's own scope (the contract
+    refuses a restatement), so a segment with no scope of its own always
+    means "same breadth as the document."
+    """
+    return {segment.key: (segment.scope or status.scope) for segment in status.segments}
+
+
+def _session_scope_check(
+    entry: compositor.ProviderEntry,
+    probe_identity: str,
+    home: pathlib.Path | None,
+) -> dict:
+    """Whether a provider's segments actually narrow to session scope when
+    the host sends an identity, versus what they report with none (HORO-1603
+    AC2).
+
+    Runs two fresh, uncached probes of the *same* provider: one exactly as
+    today's `doctor --probe` already does (no identity), one with a
+    synthetic probe identity that exercises the same `build_identity_stdin`
+    path a real render would use. Neither probe is ever cached -- a cached
+    entry answered under one identity must never be read back under the
+    other (see `read_cache`'s own invariant), and this diagnostic must not
+    leave an entry behind for a real render to read.
+
+    This answers a question no existing surface can: `doctor`/`explain`
+    today never send an identity at all (there is no live Claude Code input
+    to take one from in a terminal), so they can only ever observe a
+    provider's host-wide fallback -- never whether it narrows. Comparing
+    two *live* probes, one with and one without an identity, is the only way
+    to tell "doesn't qualify right now" apart from "ignores the identity
+    entirely" apart from "already claims session scope regardless," without
+    adding a new wire field or a new persistent record of live renders.
+    """
+    without = compositor.run_provider(entry, entry.timeout_ms, home, cache=False)
+    with_identity = compositor.run_provider(
+        entry, entry.timeout_ms, home, provider_session_id=probe_identity, cache=False
+    )
+    verdicts: dict[str, dict] = {}
+    if (
+        without.availability is not contract.Availability.AVAILABLE
+        or with_identity.availability is not contract.Availability.AVAILABLE
+    ):
+        return {
+            "verdict": "provider_not_available",
+            "availability_without_identity": without.availability.value,
+            "availability_with_identity": with_identity.availability.value,
+            "segments": {},
+        }
+    scopes_without = _effective_scopes(without)
+    scopes_with = _effective_scopes(with_identity)
+    reasons_with = {segment.key: segment for segment in with_identity.segments}
+    for key in sorted(set(scopes_without) | set(scopes_with)):
+        if key not in scopes_without or key not in scopes_with:
+            verdicts[key] = {"verdict": "not_comparable"}
+            continue
+        scope_without, scope_with = scopes_without[key], scopes_with[key]
+        if scope_without is contract.Scope.SESSION:
+            # Already session-scoped with no identity sent at all -- the
+            # dangerous case. The host cannot know which session that
+            # reading belongs to.
+            verdicts[key] = {
+                "verdict": "session_without_identity",
+                "scope": scope_without.value,
+            }
+        elif scope_with is contract.Scope.SESSION:
+            verdicts[key] = {"verdict": "narrows_with_identity", "scope": scope_with.value}
+        else:
+            entry_detail: dict = {"verdict": "did_not_narrow", "scope": scope_with.value}
+            reason_segment = reasons_with.get(key)
+            if reason_segment is not None and reason_segment.reason_code is not None:
+                entry_detail["reason_code"] = reason_segment.reason_code
+                entry_detail["reason_label"] = reason_segment.reason_label
+            verdicts[key] = entry_detail
+    return {
+        "verdict": "ok",
+        "availability_without_identity": without.availability.value,
+        "availability_with_identity": with_identity.availability.value,
+        "segments": verdicts,
+    }
+
+
+def _doctor_providers(
+    registry: RegistryDocument,
+    home: pathlib.Path | None,
+    probe: bool,
+    probe_identity: str | None = None,
+) -> list[dict]:
     """One report line per registered provider, optionally by actually asking it.
 
     Probing runs each provider exactly as the statusline would, which means it
@@ -1823,6 +1934,11 @@ def _doctor_providers(registry: RegistryDocument, home: pathlib.Path | None, pro
     touches host configuration, and it reports availability rather than the
     rendered text, because a diagnostic that showed the line would invite reading
     presentation problems as provider problems.
+
+    `probe_identity` (HORO-1603) additionally runs each provider's own
+    `_session_scope_check` -- two further, uncached probes that never touch
+    this same cache, so the cache-backed probe above and the identity
+    comparison below can never contaminate one another.
     """
     if not registry.usable or not registry.data:
         return []
@@ -1839,6 +1955,8 @@ def _doctor_providers(registry: RegistryDocument, home: pathlib.Path | None, pro
             status = compositor.run_provider(entry, entry.timeout_ms, home)
             report["availability"] = status.availability.value
             report["segments"] = len(status.segments)
+            if probe_identity is not None:
+                report["session_scope"] = _session_scope_check(entry, probe_identity, home)
         reports.append(report)
     return reports
 
@@ -1892,6 +2010,7 @@ def doctor(
     *,
     probe: bool = False,
     owner: external.ExternalOwner | None = None,
+    probe_identity: str | None = None,
 ) -> dict:
     """A read-only account of who owns the statusline and what would change it.
 
@@ -1909,9 +2028,19 @@ def doctor(
     `owner` is supplied by the caller for the same reason the plan functions take
     it: detection reads another tool's database, and a report run against a
     throwaway settings file in a test must not reach the real one.
+
+    `probe_identity` (HORO-1603) is injectable for the same reason: a test
+    asserting the session-scope check's own behavior needs a known value to
+    look for, not a fresh random one every run. Left `None` with `probe=True`,
+    one is generated per call (`_default_probe_identity`) -- one identity for
+    every provider in this one doctor invocation, never reused across runs.
+    Ignored entirely when `probe=False`, since nothing is probed at all.
     """
     path = pathlib.Path(settings_path or DEFAULT_SETTINGS_PATH).expanduser()
     registry = read_registry(home)
+    resolved_probe_identity = (
+        (probe_identity or _default_probe_identity()) if probe else None
+    )
     report: dict = {
         "host": {
             "tool": "claude-code",
@@ -1922,6 +2051,20 @@ def doctor(
         },
         "registry_path": str(registry.path),
     }
+    if probe:
+        # Fixed, non-probe-specific facts about the identity-stdin contract
+        # itself (HORO-1603) -- never the probe identity, never anything
+        # that varies between runs. `live_session_observable: false` is the
+        # honest limit of this diagnostic: it proves a provider *can*
+        # narrow given an identity, never whether any specific past live
+        # render actually carried one, since neither doctor nor explain run
+        # inside a real Claude Code statusline invocation.
+        report["identity_context"] = {
+            "document_version": compositor.IDENTITY_STDIN_VERSION,
+            "host_capabilities": list(compositor.HOST_CAPABILITIES),
+            "sent_when": "host_input_has_session_id",
+            "live_session_observable": False,
+        }
     # Before the settings file is read, so the unreadable-settings path below
     # reports it too. The preference lives in our own registry, so a broken
     # settings file is no reason to be unable to say which depth is in force --
@@ -1942,11 +2085,11 @@ def doctor(
         report["settings"] = {"exists": path.exists(), "readable": False, "problem": str(exc)}
         report["slot"] = {"owner": Ownership.UNSUPPORTED_SHAPE.value, "horonom_owned": False}
         report["drift"] = {"detected": True, "reason": str(exc)}
-        report["providers"] = _doctor_providers(registry, home, probe)
+        report["providers"] = _doctor_providers(registry, home, probe, resolved_probe_identity)
         report["external_owner"] = _doctor_external(owner, None)
         report["remediation"] = [
             f"repair {path} by hand; no lifecycle operation will write to it until it parses"
-        ]
+        ] + _session_scope_remediation(report["providers"])
         return report
 
     ownership = classify(document)
@@ -1970,17 +2113,47 @@ def doctor(
         else None,
         "created_status_line": _lifecycle_of(registry).get("created_status_line"),
     }
-    report["providers"] = _doctor_providers(registry, home, probe)
+    report["providers"] = _doctor_providers(registry, home, probe, resolved_probe_identity)
     report["drift"] = {"detected": detected, "reason": reason}
     report["external_owner"] = _doctor_external(owner, document.status_line if owned else None)
     report["mutation_outlook"] = {
         "enabling_another_provider_changes_settings": not owned,
         "disabling_one_provider_changes_settings": owned and len(_provider_ids(registry)) == 1,
     }
-    report["remediation"] = _remediation(ownership, registry, owned) + _external_remediation(
-        report["external_owner"]
+    report["remediation"] = (
+        _remediation(ownership, registry, owned)
+        + _external_remediation(report["external_owner"])
+        + _session_scope_remediation(report["providers"])
     )
     return report
+
+
+def _session_scope_remediation(providers: list[dict]) -> list[str]:
+    """One remediation line per provider caught sending session-scoped content
+    with no identity at all (HORO-1603) -- the dangerous `session_without_identity`
+    verdict.
+
+    Everything else `--probe` finds is informational; this is the one finding
+    that means a provider is already narrowing to *something* it is calling a
+    session without the host having said which one.
+    """
+    lines = []
+    for provider in providers:
+        scope = provider.get("session_scope")
+        if not scope or scope["verdict"] != "ok":
+            continue
+        culprits = sorted(
+            key
+            for key, verdict in scope["segments"].items()
+            if verdict["verdict"] == "session_without_identity"
+        )
+        if culprits:
+            lines.append(
+                f"ask {provider['provider']} why {', '.join(culprits)} reports [session] scope "
+                "when its probe without an identity got no provider_session_id -- that scope "
+                "cannot be honest about whose session it is"
+            )
+    return lines
 
 
 def _external_remediation(section: dict) -> list[str]:
@@ -2524,6 +2697,55 @@ def _external_lines(section: dict) -> list[str]:
     return lines
 
 
+def _session_scope_line(provider_report: dict) -> str | None:
+    """One prose line summarizing a provider's session-scope probe (HORO-1603).
+
+    `None` when the provider was never probed for scope at all (no `--probe`, or
+    `--probe` without a probe identity) -- distinct from "probed and found
+    nothing to say", which is a real line (`"no reading narrows to a session"`).
+    """
+    scope = provider_report.get("session_scope")
+    if scope is None:
+        return None
+    if scope["verdict"] == "provider_not_available":
+        return "session scope: not checked (provider unavailable during probe)"
+    segments = scope["segments"]
+    narrows = sorted(k for k, v in segments.items() if v["verdict"] == "narrows_with_identity")
+    without_identity = sorted(
+        k for k, v in segments.items() if v["verdict"] == "session_without_identity"
+    )
+    not_comparable = sorted(k for k, v in segments.items() if v["verdict"] == "not_comparable")
+    stays, stay_reason = [], {}
+    for key, verdict in segments.items():
+        if verdict["verdict"] == "did_not_narrow":
+            stays.append(key)
+            if "reason_label" in verdict:
+                stay_reason[key] = verdict["reason_label"]
+    stays.sort()
+
+    if not narrows and not without_identity and not not_comparable:
+        if len(stays) == 1 and stays[0] in stay_reason:
+            return (
+                f"session scope: {stays[0]} stays [host] with an identity "
+                f"(provider says: {stay_reason[stays[0]]})"
+            )
+        return "session scope: no reading narrows to a session"
+
+    parts = []
+    for key in without_identity:
+        parts.append(
+            f"{key} is ALREADY [session] with no identity sent -- dangerous, see `next:` below"
+        )
+    if narrows:
+        verb = "narrows" if len(narrows) == 1 else "narrow"
+        parts.append(f"{', '.join(narrows)} {verb} to [session] when the host sends an identity")
+    if stays:
+        parts.append(f"{', '.join(stays)} stay [host]")
+    if not_comparable:
+        parts.append(f"{', '.join(not_comparable)} not comparable between probes")
+    return "session scope: " + "; ".join(parts)
+
+
 def _describe_doctor(report: dict) -> str:
     """The doctor report as prose, in the order a confused user asks the questions."""
     host, slot = report["host"], report["slot"]
@@ -2553,11 +2775,25 @@ def _describe_doctor(report: dict) -> str:
         )
     providers = report["providers"]
     lines.append(f"providers registered: {len(providers)}")
+    any_session_scope = False
     for provider in providers:
         detail = f"  - {provider['provider']} [{provider['scope']}] {provider['command_name']}"
         if "availability" in provider:
             detail += f" -> {provider['availability']} ({provider['segments']} segment(s))"
         lines.append(detail)
+        scope_line = _session_scope_line(provider)
+        if scope_line is not None:
+            any_session_scope = True
+            lines.append(f"      {scope_line}")
+    identity_context = report.get("identity_context")
+    if any_session_scope and identity_context:
+        lines.append(
+            "session identity: forwarded only when Claude Code's statusline input carries "
+            f"session_id (identity document v{identity_context['document_version']}, "
+            f"capabilities: {', '.join(identity_context['host_capabilities'])}); whether a given "
+            "live session's input did cannot be observed from a terminal. The probe identity is "
+            "random, never cached, never shown."
+        )
     drift = report["drift"]
     lines.append(f"drift: {'yes -- ' + drift['reason'] if drift['detected'] else 'none'}")
     lines.extend(_external_lines(report.get("external_owner") or {"detected": False}))
