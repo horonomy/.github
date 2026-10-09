@@ -887,6 +887,57 @@ class TestRunProvider(FixtureCase):
         status = compositor.run_provider(self.entry("fornax", path), GENEROUS_MS, self.home)
         self.assertIn("malformed_output", self.reasons(status))
 
+    def test_cache_false_neither_reads_nor_writes(self):
+        # HORO-1603: the session-scope doctor probe must see each provider's
+        # live answer, never a cached one -- and must not leave a trace behind
+        # for a real render to pick up afterward.
+        counter = self.home / "calls"
+        path = self.script(
+            "uncached",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        counter.write_text("")
+        entry = self.entry("fornax", path)
+        compositor.run_provider(entry, GENEROUS_MS, self.home, cache=False)
+        compositor.run_provider(entry, GENEROUS_MS, self.home, cache=False)
+        # Both calls actually ran the provider -- no read ever short-circuited.
+        self.assertEqual(counter.read_text(), "xx")
+        # And neither call left anything for a later cache-backed render to find.
+        self.assertIsNone(compositor.read_cache(entry, self.home))
+
+    def test_cache_true_is_the_default_and_behaves_exactly_as_before(self):
+        counter = self.home / "calls"
+        path = self.script(
+            "default-cached",
+            f"printf x >> {counter}\ncat <<'HORONOM_EOF'\n"
+            + json.dumps(wire(cache_ttl_seconds=30))
+            + "\nHORONOM_EOF\n",
+        )
+        counter.write_text("")
+        entry = self.entry("fornax", path)
+        for _ in range(3):
+            compositor.run_provider(entry, GENEROUS_MS, self.home)
+        self.assertEqual(counter.read_text(), "x")
+        self.assertIsNotNone(compositor.read_cache(entry, self.home))
+
+
+class TestPublicIdentityConstants(unittest.TestCase):
+    """HORO-1603: `statusline_lifecycle`'s doctor probe asserts against these
+    directly, so they must be public and must match what the compositor
+    actually sends -- a private re-implementation in the test would only prove
+    the test agrees with itself.
+    """
+
+    def test_identity_stdin_version_matches_the_wire_document(self):
+        produced = json.loads(compositor.build_identity_stdin("claude-sess-7e21"))
+        self.assertEqual(produced["identity_stdin_version"], compositor.IDENTITY_STDIN_VERSION)
+
+    def test_host_capabilities_matches_the_wire_document(self):
+        produced = json.loads(compositor.build_identity_stdin("claude-sess-7e21"))
+        self.assertEqual(produced["host_capabilities"], list(compositor.HOST_CAPABILITIES))
+
 
 class TestExtractProviderSessionId(unittest.TestCase):
     """HORO-1602: the one field the host is permitted to read out of its own
