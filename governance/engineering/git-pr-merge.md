@@ -62,9 +62,21 @@ Develop each ticket in its own git worktree off the verified default branch
 of the verified canonical remote — never assume `origin` points at
 `horonomy/<repo>` (check `git remote -v`); never assume the default branch
 is `main` without confirming (`git ls-remote --symref <remote> HEAD`).
-Remove the worktree (and its branch, once merged) after merge. Never
-force-migrate, move, or delete a worktree or branch that belongs to another
-active session merely for tidiness — confirm it's yours and merged first.
+Remove the worktree (and its branch, once merged) after merge.
+
+**Before any destructive worktree operation** (`rm -rf` on a worktree
+directory, `git worktree remove`, `git worktree prune`, or any cleanup
+sweep) — not only "for tidiness," but during verification, disk-space
+cleanup, or any other automated pass — check `git worktree list` and
+confirm the worktree's branch name matches the ticket you are actively
+assigned. A worktree whose branch doesn't match your own ticket is
+unexpected repository state: leave it, report it, never delete it,
+regardless of how stale or unrelated it looks. This applies with extra
+force to a subagent dispatched for "cleanup," whose scope must be
+explicitly bounded to its own dispatching ticket, never "whatever is
+lying around." A real incident (HORO-1871, `horonomy/horologium`)
+involved a dispatched subagent broadly `rm -rf`-ing a worktree directory
+and deleting an unrelated, unmerged ticket's working copy this way.
 
 ## Commit granularity
 
