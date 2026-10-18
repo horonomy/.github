@@ -161,6 +161,19 @@ class PublicSurfaceTest(unittest.TestCase):
             self.write(name, body)
         self.assertEqual(self.secret_scan_paths(), set(bodies))
 
+    def test_aws_key_boundary_is_alphanumeric_only(self) -> None:
+        # Pins the lookbehind on its own and the accepted gaps documented in
+        # public_surface.py: an underscore is not alphanumeric (still flagged);
+        # an alphanumeric neighbour on the left (xAKIA..., %3DAKIA...) is not.
+        key = "AKIA1234567890ABCDEF"
+        self.valid_site()
+        self.write("underscore.js", f"x=_{key}_")
+        self.assertEqual(self.secret_scan_paths(), {"underscore.js"})
+        self.write("underscore.js", "x=1")
+        self.write("glued.js", f"x=x{key}")
+        self.write("encoded.js", f"?k%3D{key}")
+        self.assertEqual(self.secret_scan_paths(), set())
+
     def test_detects_secret_private_origin_and_encoded_traversal_without_echo(self) -> None:
         self.valid_site()
         self.write(
