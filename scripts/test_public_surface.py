@@ -123,6 +123,31 @@ class PublicSurfaceTest(unittest.TestCase):
         self.write("rustdoc/search.index/other.js", 'x="AKIAABCDEFGHIJKLMNOPQRSTU";')
         self.assertEqual(self.secret_scan_paths(), set())
 
+    def test_real_aws_key_ids_still_fail_in_every_delimited_context(self) -> None:
+        # HORO-1924 positive controls: the boundary fix must not hide a key that
+        # is delimited the way real keys are, wherever the file lives.
+        key = "AKIA1234567890ABCDEF"
+        contexts = {
+            "quoted.js": f'const k = "{key}";',
+            "equals.txt": f"aws_access_key_id={key}\n",
+            "colon.json": f'{{"k":"{key}"}}',
+            "space.txt": f"key {key} end",
+            "line_start.txt": f"{key}\nrest",
+            "line_end.txt": f"first\n{key}",
+            "attr.html": f'<a data-k="{key}">x</a>',
+            # Not exempted by being under rustdoc, by file name, or by directory shape.
+            "rustdoc/src/lib.rs.html": f'<pre>let k = "{key}";</pre>',
+            "rustdoc/search.index/root.js.txt": f'x="{key}"',
+            "rustdoc/search.index/sub/x.js": f'x="{key}"',
+            "search.index/root.js": f'x="{key}"',
+            # "+" and "/" are base64 characters but not alphanumerics: still flagged (conservative).
+            "plus.js": f"x=+{key}/y",
+        }
+        self.valid_site()
+        for name, body in contexts.items():
+            self.write(name, body)
+        self.assertEqual(self.secret_scan_paths(), set(contexts))
+
     def test_detects_secret_private_origin_and_encoded_traversal_without_echo(self) -> None:
         self.valid_site()
         self.write(
