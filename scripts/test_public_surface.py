@@ -148,6 +148,19 @@ class PublicSurfaceTest(unittest.TestCase):
             self.write(name, body)
         self.assertEqual(self.secret_scan_paths(), set(contexts))
 
+    def test_other_secret_shapes_are_still_found_inside_the_search_index(self) -> None:
+        # The fix narrows exactly one pattern; it must not create a blind spot at the
+        # path that produced the false positive.
+        self.valid_site()
+        bodies = {
+            "rustdoc/search.index/a.js": "t=ghp_" + "a1" * 12 + ";",
+            "rustdoc/search.index/b.js": "t=sk-" + "Ab1" * 8 + ";",
+            "rustdoc/search.index/c.js": 'p="-----BEGIN RSA PRIVATE KEY-----";',
+        }
+        for name, body in bodies.items():
+            self.write(name, body)
+        self.assertEqual(self.secret_scan_paths(), set(bodies))
+
     def test_detects_secret_private_origin_and_encoded_traversal_without_echo(self) -> None:
         self.valid_site()
         self.write(
