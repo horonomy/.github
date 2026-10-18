@@ -102,6 +102,27 @@ class PublicSurfaceTest(unittest.TestCase):
         self.valid_site()
         self.assertIn("docs-link", self.rules(self.manifest(docs_url="/reference/")))
 
+    def secret_scan_paths(self) -> set[str]:
+        return {
+            item.detail
+            for item in validate(self.manifest(required_navigation=[]), self.root)
+            if item.rule == "secret-scan"
+        }
+
+    def test_rustdoc_search_index_base64_run_is_not_an_aws_key(self) -> None:
+        # HORO-1924: rustdoc's generated search index is base64 bitmap data.
+        # Offset 61095 of a real 121,042-character root.js held AKIA plus 16
+        # upper-case characters with upper-case neighbours on both sides.
+        self.valid_site()
+        self.write(
+            "rustdoc/search.index/root.js",
+            'rd_("gAAEAZAABeGgAAKIAAAAQAQEQAAAPKAAQJkZ3DygAEBLBwAAIsdAAD3HQ");',
+        )
+        self.assertEqual(self.secret_scan_paths(), set())
+        # A longer alphanumeric token that merely starts with AKIA is not a key id either.
+        self.write("rustdoc/search.index/other.js", 'x="AKIAABCDEFGHIJKLMNOPQRSTU";')
+        self.assertEqual(self.secret_scan_paths(), set())
+
     def test_detects_secret_private_origin_and_encoded_traversal_without_echo(self) -> None:
         self.valid_site()
         self.write(
