@@ -16,8 +16,18 @@ from pathlib import Path
 from urllib.parse import ParseResult, parse_qsl, unquote, urljoin, urlparse
 
 SCANNED_SUFFIXES = {".css", ".html", ".js", ".json", ".map", ".txt", ".xml"}
+# An AWS access key id is exactly 20 characters and, in source, configuration
+# or documentation, is delimited (quote, "=", ":", whitespace, line edge). The
+# AKIA alternative therefore requires a non-alphanumeric neighbour on both
+# sides. Without it, a run of 16 upper-case characters that happens to follow
+# "AKIA" inside the base64 bitmap data of rustdoc's generated
+# search.index/root.js is reported as a credential (HORO-1924). "=", "+" and
+# "/" still count as delimiters on purpose: "key=AKIA..." must keep failing.
+# Accepted residual gaps (a key glued to an alphanumeric): "xAKIA...", a JSON
+# escaped newline before it ("\\nAKIA...") and a URL-encoded "%3DAKIA...".
 SECRET = re.compile(
-    r"(?:ghp_[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|"
+    r"(?:ghp_[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{20,}|"
+    r"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}(?![A-Za-z0-9])|"
     r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)"
 )
 EXECUTABLE_URL = re.compile(

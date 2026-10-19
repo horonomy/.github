@@ -102,6 +102,78 @@ class PublicSurfaceTest(unittest.TestCase):
         self.valid_site()
         self.assertIn("docs-link", self.rules(self.manifest(docs_url="/reference/")))
 
+    def secret_scan_paths(self) -> set[str]:
+        return {
+            item.detail
+            for item in validate(self.manifest(required_navigation=[]), self.root)
+            if item.rule == "secret-scan"
+        }
+
+    def test_rustdoc_search_index_base64_run_is_not_an_aws_key(self) -> None:
+        # HORO-1924: rustdoc's generated search index is base64 bitmap data.
+        # Offset 61095 of a real 121,042-character root.js held AKIA plus 16
+        # upper-case characters with upper-case neighbours on both sides.
+        self.valid_site()
+        self.write(
+            "rustdoc/search.index/root.js",
+            'rd_("gAAEAZAABeGgAAKIAAAAQAQEQAAAPKAAQJkZ3DygAEBLBwAAIsdAAD3HQ");',
+        )
+        self.assertEqual(self.secret_scan_paths(), set())
+        # A longer alphanumeric token that merely starts with AKIA is not a key id either.
+        self.write("rustdoc/search.index/other.js", 'x="AKIAABCDEFGHIJKLMNOPQRSTU";')
+        self.assertEqual(self.secret_scan_paths(), set())
+
+    def test_real_aws_key_ids_still_fail_in_every_delimited_context(self) -> None:
+        # HORO-1924 positive controls: the boundary fix must not hide a key that
+        # is delimited the way real keys are, wherever the file lives.
+        key = "AKIA1234567890ABCDEF"
+        contexts = {
+            "quoted.js": f'const k = "{key}";',
+            "equals.txt": f"aws_access_key_id={key}\n",
+            "colon.json": f'{{"k":"{key}"}}',
+            "space.txt": f"key {key} end",
+            "line_start.txt": f"{key}\nrest",
+            "line_end.txt": f"first\n{key}",
+            "attr.html": f'<a data-k="{key}">x</a>',
+            # Not exempted by being under rustdoc, by file name, or by directory shape.
+            "rustdoc/src/lib.rs.html": f'<pre>let k = "{key}";</pre>',
+            "rustdoc/search.index/root.js.txt": f'x="{key}"',
+            "rustdoc/search.index/sub/x.js": f'x="{key}"',
+            "search.index/root.js": f'x="{key}"',
+            # "+" and "/" are base64 characters but not alphanumerics: still flagged (conservative).
+            "plus.js": f"x=+{key}/y",
+        }
+        self.valid_site()
+        for name, body in contexts.items():
+            self.write(name, body)
+        self.assertEqual(self.secret_scan_paths(), set(contexts))
+
+    def test_other_secret_shapes_are_still_found_inside_the_search_index(self) -> None:
+        # The fix narrows exactly one pattern; it must not create a blind spot at the
+        # path that produced the false positive.
+        self.valid_site()
+        bodies = {
+            "rustdoc/search.index/a.js": "t=ghp_" + "a1" * 12 + ";",
+            "rustdoc/search.index/b.js": "t=sk-" + "Ab1" * 8 + ";",
+            "rustdoc/search.index/c.js": 'p="-----BEGIN RSA PRIVATE KEY-----";',
+        }
+        for name, body in bodies.items():
+            self.write(name, body)
+        self.assertEqual(self.secret_scan_paths(), set(bodies))
+
+    def test_aws_key_boundary_is_alphanumeric_only(self) -> None:
+        # Pins the lookbehind on its own and the accepted gaps documented in
+        # public_surface.py: an underscore is not alphanumeric (still flagged);
+        # an alphanumeric neighbour on the left (xAKIA..., %3DAKIA...) is not.
+        key = "AKIA1234567890ABCDEF"
+        self.valid_site()
+        self.write("underscore.js", f"x=_{key}_")
+        self.assertEqual(self.secret_scan_paths(), {"underscore.js"})
+        self.write("underscore.js", "x=1")
+        self.write("glued.js", f"x=x{key}")
+        self.write("encoded.js", f"?k%3D{key}")
+        self.assertEqual(self.secret_scan_paths(), set())
+
     def test_detects_secret_private_origin_and_encoded_traversal_without_echo(self) -> None:
         self.valid_site()
         self.write(
