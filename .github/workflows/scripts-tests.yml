@@ -22,6 +22,7 @@ on:
       - governance/product/host-adapter/**
       - governance/product/host-adapter-contract.md
       - governance/product/execution-identity-contract.md
+      - governance/product/execution-identity-conformance-vectors.json
       - agents/common/**
       - agents/adapters/**
       - agents/skills/**
@@ -35,6 +36,7 @@ on:
       - governance/product/host-adapter/**
       - governance/product/host-adapter-contract.md
       - governance/product/execution-identity-contract.md
+      - governance/product/execution-identity-conformance-vectors.json
       - agents/common/**
       - agents/adapters/**
       - agents/skills/**
@@ -62,6 +64,8 @@ jobs:
         run: 'python3 -m pip install --only-binary :all: jsonschema==4.26.0 rfc3339-validator==0.1.4'
       - name: Run scripts/ tests
         run: python3 -m unittest discover -s scripts
+      - name: Check execution identity vectors in a second language
+        run: node scripts/execution_identity_vectors_check.mjs governance/product/execution-identity-conformance-vectors.json
       - name: Run agents/common/ tests
         run: python3 -m unittest discover -s agents/common
       - name: Run agents/adapters/codex/ tests

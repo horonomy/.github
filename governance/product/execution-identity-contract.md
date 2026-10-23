@@ -418,15 +418,17 @@ later, never by backfilling a guess now. This is the same principle as
 it: what a *coding-agent tool* itself exposes, which is a capability ceiling
 no capturer can code around, not a capturer bug to fix.
 
-**Claude Code** exposes a stable `provider_session_id` to hooks. A Task
-subagent's `PostToolUse` payload additionally carries `agent_id`/`agent_type`
-while the main session's carries neither (live-verified 2026-10-11, FORNX-433
-AC3 Step 0). No captured payload shows a **parent** link, so a subagent's
-`lineage_status` is `unknown`, not `child`, and `turn_id` is not mapped (it
-has not been seen; `prompt_id`, which is sent, is not shown to be a turn
-identity). The `child` envelope under [the subagent example](#a-provider-that-exposes-the-parent-a-subagent-with-proven-lineage)
-is what a capturer emits **if** a provider exposes the parent; it is not
-what today's Claude Code hooks support.
+**Claude Code** (live-observed on 2.1.306, 2026-10-23; see
+[`execution-identity-live-evidence.md`](./execution-identity-live-evidence.md)) sends `session_id` on every
+hook event. A Task subagent's events (`SubagentStart`, `SubagentStop` and its own tool-call hooks) carry
+`agent_id` and `agent_type` **together with the parent's `session_id`**; the main session's events carry
+neither, so a subagent is named by the `(provider_session_id, agent_id)` pair. No event carries a parent link,
+so a subagent's `lineage_status` is `unknown`, not `child`. There is no `turn_id`; `prompt_id`, which is
+constant across one user prompt, is a prompt-cycle id and is not mapped to `turn_id` unless a product owner
+decides a prompt cycle is the turn it needs. The `child` envelope under
+[the subagent example](#a-provider-that-exposes-the-parent-a-subagent-with-proven-lineage) is what a capturer
+emits **if** a provider exposes the parent; it is not what today's Claude Code hooks support. Statusline stdin
+`session_id` is documented but not yet live-observed (headless mode never renders the statusline).
 
 **Codex** (0.160.0, HORO-1711 probe, 2026-10-12) lists `session_id` and
 `turn_id` as hook payload fields, and `agent_id`/`agent_type` on subagent
@@ -567,10 +569,15 @@ table above for why the two cases are handled differently).
    provider does not expose a dimension, that dimension is absent.
 4. Set `lineage_status` explicitly — `unknown` is the correct default when
    the provider exposes `agent_id` but not parent linkage, not `root`.
-5. Mirror the reference suite's correlation, scope-narrowing, and
-   redaction assertions in your own language against your own real values —
-   reference this document and the property names by URL; do not copy its
-   prose into your repo.
+5. Run your implementation over
+   [`execution-identity-conformance-vectors.json`](./execution-identity-conformance-vectors.json)
+   (valid and refused envelopes, `cache_key` per scope with `null` meaning
+   "refuse, never widen", `display_id`, correlation, and the payload
+   normalizers) and compare every expected value. A second-language runner,
+   `scripts/execution_identity_vectors_check.mjs`, runs in CI against the
+   same file; if two implementations ever disagree, this document is
+   ambiguous and gets fixed here. Reference this document and the property
+   names by URL; do not copy its prose into your repo.
 6. Key your own cache/query layer off [`cache_key(scope)`](#cache-keys-never-widen-on-their-own),
    not off whatever fields happen to be convenient. The table there is
    normative for *every* product consuming this contract, not just the
