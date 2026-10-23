@@ -70,10 +70,11 @@ def normalize_codex_hook(
 ) -> ei.ExecutionIdentity:
     """Envelope for a Codex hook payload.
 
-    `session_id`, `turn_id` and (subagent events only) `agent_id` are all
-    provider-native (HORO-1711 probe, Codex 0.160.0, 2026-10-12). A subagent's
-    hooks carry the *parent's* `session_id` and a distinct `agent_id`, so the
-    pair, not the session alone, names the agent.
+    `session_id`, `turn_id` and (subagent events only) `agent_id` are the
+    payload fields the HORO-1711 probe lists for Codex 0.160.0. Whether a
+    subagent's `session_id` equals its parent's is not established from a
+    live capture, so the value is copied as sent and the pair, not the
+    session alone, names a subagent.
     """
     return ei.ExecutionIdentity(
         envelope_version=ei.ENVELOPE_VERSION,

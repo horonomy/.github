@@ -62,13 +62,23 @@ class CodexTest(unittest.TestCase):
         # TURN_TASK keying needs an agent too, so a main-agent turn is session-scoped.
         self.assertEqual(norm.narrowest_attributable_scope(ident), ei.Scope.SESSION)
 
-    def test_subagent_keeps_parent_session_and_distinct_agent(self) -> None:
+    def test_subagent_with_shared_session_is_keyed_by_the_agent_pair(self) -> None:
+        # Fixture assumption (not a live capture): the subagent reuses the parent's session_id.
+        # Holds either way because the AGENT key includes agent_id.
         parent = codex({"session_id": "c-1", "turn_id": "t-7"})
         child = codex({"session_id": "c-1", "turn_id": "t-8", "agent_id": "a-2"})
         self.assertEqual(child.provider_session_id, parent.provider_session_id)
         self.assertNotEqual(child.cache_key(ei.Scope.AGENT), parent.cache_key(ei.Scope.SESSION))
         self.assertEqual(norm.narrowest_attributable_scope(child), ei.Scope.TURN_TASK)
         self.assertIs(child.lineage_status, ei.LineageStatus.UNKNOWN)
+
+
+class AgentIdWithoutSessionTest(unittest.TestCase):
+    def test_agent_id_alone_is_unattributable(self) -> None:
+        for normalize in (claude, codex):
+            ident = normalize({"agent_id": "a-1"})
+            self.assertEqual(ident.agent_id, "a-1")
+            self.assertEqual(norm.narrowest_attributable_scope(ident), ei.Scope.UNKNOWN)
 
 
 class UnknownStaysUnknownTest(unittest.TestCase):

@@ -428,17 +428,25 @@ identity). The `child` envelope under [the subagent example](#a-provider-that-ex
 is what a capturer emits **if** a provider exposes the parent; it is not
 what today's Claude Code hooks support.
 
-**Codex** (0.160.0, HORO-1711 probe, 2026-10-12) exposes `session_id` and
-`turn_id` on its hook payloads, and `agent_id`/`agent_type` on subagent events
-(`SubagentStart`/`SubagentStop` fire; no separate child `SessionStart`). A
-subagent's hooks carry the **parent's** `session_id` with a distinct
-`agent_id`, so the pair, not the session alone, names the agent. A parent
-link appears only in the rollout (`parent_thread_id`), not in hook payloads,
-so hook-derived `lineage_status` is `unknown`. `SessionEnd` is recognised but
-has not been observed to fire. A capturer must still never synthesize
-`agent_id`/`turn_id`/`parent_agent_id` for a provider that does not send them
-(see [Implementing a capturer](#implementing-a-capturer), rule 2), and a
+**Codex** (0.160.0, HORO-1711 probe, 2026-10-12) lists `session_id` and
+`turn_id` as hook payload fields, and `agent_id`/`agent_type` on subagent
+events (`SubagentStart`/`SubagentStop` fire; the probe matrix records
+`identity.agent` as `limited`, the subagent reference matching the spawned
+thread, and no separate child `SessionStart`). Whether a subagent's hooks
+carry the **parent's** `session_id` or their own has **not** been established
+from a recorded live capture; a capturer must copy whatever `session_id` the
+payload carries and key a subagent on the `(provider_session_id, agent_id)`
+pair, never assume either. A parent link appears only in the rollout
+(`parent_thread_id`), not in hook payloads, so hook-derived `lineage_status`
+is `unknown`. `SessionEnd` is recognised but has not been observed to fire. A
+capturer must still never synthesize `agent_id`/`turn_id`/`parent_agent_id`
+for a provider that does not send them (see
+[Implementing a capturer](#implementing-a-capturer), rule 2), and a
 provider's capability never infers another's.
+
+A provider-native id that is empty or whitespace-only is treated as **absent**
+(unknown), since it cannot name a session; any other value, including one with
+leading or trailing whitespace, is copied verbatim.
 
 The reference normalizers `scripts/execution_identity_normalize.py` apply
 exactly these rules: native fields verbatim, a missing or malformed value
