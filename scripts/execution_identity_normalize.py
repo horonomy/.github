@@ -50,9 +50,11 @@ def normalize_claude_code_hook(
 
     `session_id` -> `provider_session_id`. `agent_id` is present only on a
     Task subagent's events (live-observed on PostToolUse, FORNX-433 AC3 Step
-    0, 2026-10-11) and absent for the main session. `turn_id` is **not**
-    mapped: no capture shows Claude Code sending one, and `prompt_id`, which
-    it does send, has not been shown to be a turn identity.
+    0, 2026-10-11; re-observed on 2.1.306, 2026-10-23, with the *parent's*
+    `session_id`) and absent for the main session. `turn_id` is **not** mapped:
+    Claude Code sends no `turn_id`; its `prompt_id` is constant across one user
+    prompt (including subagent events) but is a prompt-cycle id, and whether
+    that counts as a turn identity is a pending owner decision, not assumed.
     """
     return ei.ExecutionIdentity(
         envelope_version=ei.ENVELOPE_VERSION,
