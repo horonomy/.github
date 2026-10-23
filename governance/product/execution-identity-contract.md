@@ -418,25 +418,41 @@ later, never by backfilling a guess now. This is the same principle as
 it: what a *coding-agent tool* itself exposes, which is a capability ceiling
 no capturer can code around, not a capturer bug to fix.
 
-**Claude Code** exposes a stable `provider_session_id` to hooks, and a
-Task-tool subagent invocation is attributable to its parent — the full
-`SESSION` → `AGENT` → `TURN_TASK` lineage chain in [Scope](#scope) is
-reachable (see [the subagent example](#claude-code-a-subagent-with-proven-lineage)).
+**Claude Code** exposes a stable `provider_session_id` to hooks. A Task
+subagent's `PostToolUse` payload additionally carries `agent_id`/`agent_type`
+while the main session's carries neither (live-verified 2026-10-11, FORNX-433
+AC3 Step 0). No captured payload shows a **parent** link, so a subagent's
+`lineage_status` is `unknown`, not `child`, and `turn_id` is not mapped (it
+has not been seen; `prompt_id`, which is sent, is not shown to be a turn
+identity). The `child` envelope under [the subagent example](#a-provider-that-exposes-the-parent-a-subagent-with-proven-lineage)
+is what a capturer emits **if** a provider exposes the parent; it is not
+what today's Claude Code hooks support.
 
-**Codex**, as of this writing, exposes a stable session identifier and
-nothing below it — no subagent/turn/lineage concept at all (see
-[the Codex example](#codex-session-identity-only-no-lineage-support-yet),
-which already states this correctly as `lineage_status: unknown` without
-claiming to know whether the gap is permanent). Whether that absence is a
-durable provider ceiling or a capability Codex has simply not shipped yet
-is not something this document can verify from here, and it doesn't need
-to be resolved to state the rule: a capturer must never synthesize
-`agent_id`/`turn_id`/`parent_agent_id` for Codex to make its envelope shape
-resemble Claude Code's (see [Implementing a capturer](#implementing-a-capturer),
-rule 2) — doing so would misrepresent whichever of the two is actually true
-as captured data. If a later Codex version adds subagent/turn exposure,
-that is a new fact a capturer can then start reporting; it is never
-retroactively true of past envelopes.
+**Codex** (0.160.0, HORO-1711 probe, 2026-10-12) lists `session_id` and
+`turn_id` as hook payload fields, and `agent_id`/`agent_type` on subagent
+events (`SubagentStart`/`SubagentStop` fire; the probe matrix records
+`identity.agent` as `limited`, the subagent reference matching the spawned
+thread, and no separate child `SessionStart`). Whether a subagent's hooks
+carry the **parent's** `session_id` or their own has **not** been established
+from a recorded live capture; a capturer must copy whatever `session_id` the
+payload carries and key a subagent on the `(provider_session_id, agent_id)`
+pair, never assume either. A parent link appears only in the rollout
+(`parent_thread_id`), not in hook payloads, so hook-derived `lineage_status`
+is `unknown`. `SessionEnd` is recognised but has not been observed to fire. A
+capturer must still never synthesize `agent_id`/`turn_id`/`parent_agent_id`
+for a provider that does not send them (see
+[Implementing a capturer](#implementing-a-capturer), rule 2), and a
+provider's capability never infers another's.
+
+A provider-native id that is empty or whitespace-only is treated as **absent**
+(unknown), since it cannot name a session; any other value, including one with
+leading or trailing whitespace, is copied verbatim.
+
+The reference normalizers `scripts/execution_identity_normalize.py` apply
+exactly these rules: native fields verbatim, a missing or malformed value
+stays absent (never a placeholder such as `unknown-session`), lineage stays
+`unknown`, and an envelope with no `provider_session_id` is `Scope.UNKNOWN`,
+never `HOST`.
 
 **A host/tool this contract has never seen** (an unrecognised
 `tool_provider` string, or a provider with *no* session-identity exposure at
@@ -464,11 +480,11 @@ being unexposed by a lagging capturer).
 
 ## Concrete examples
 
-### Claude Code, a subagent with proven lineage
+### A provider that exposes the parent: a subagent with proven lineage
 
-Claude Code exposes a stable provider session id to hooks, and a Task-tool
-subagent invocation is attributable to a parent. This is the `lineage_status:
-child` case:
+This is the `lineage_status: child` case a capturer emits **only when the
+provider itself exposes the parent agent**. Illustrative: neither Claude Code
+nor Codex hook payloads do today (see above).
 
 ```json
 {
@@ -486,7 +502,7 @@ child` case:
 }
 ```
 
-### Codex, session identity only (no lineage support yet)
+### Codex, session identity only (no lineage in hook payloads)
 
 A provider may expose a stable session identifier without exposing any
 agent/subagent distinction at all. This is **not** an error or a
