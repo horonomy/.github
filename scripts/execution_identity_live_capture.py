@@ -7,7 +7,7 @@ settings). Writes one JSON line per event to $QA_OUT: field *names* present,
 writes prompts, tool input/output, transcript contents or paths. $QA_RUN
 labels a run; $QA_KIND labels the hook type.
 """
-import datetime, hashlib, json, os, sys
+import datetime, hashlib, json, os, re, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import execution_identity_normalize as norm
 
@@ -25,7 +25,8 @@ if isinstance(p, dict):
     rec["event"] = p.get("hook_event_name")
     rec["fields"] = sorted(p.keys())
     rec["ids"] = {k: h(p[k]) for k in ("session_id", "agent_id", "turn_id", "prompt_id", "tool_use_id", "parent_agent_id", "parent_session_id") if isinstance(p.get(k), str)}
-    rec["agent_type"] = p.get("agent_type") if isinstance(p.get("agent_type"), str) else None
+    _at = p.get("agent_type")
+    rec["agent_type"] = _at if isinstance(_at, str) and re.fullmatch(r"[a-z0-9_-]{1,40}", _at) else ("other" if _at is not None else None)
     now = datetime.datetime.now(datetime.timezone.utc)
     idn = norm.normalize_claude_code_hook(p, host_id="qa-host", observed_at=now)
     scope = norm.narrowest_attributable_scope(idn)
@@ -35,4 +36,7 @@ if isinstance(p, dict):
         rec["normalized"]["key_hash"] = h(idn.cache_key(scope))
     except Exception:
         rec["normalized"]["key_hash"] = None
-open(os.environ["QA_OUT"], "a").write(json.dumps(rec, sort_keys=True) + "\n")
+out = os.environ.get("QA_OUT")
+if not out:
+    sys.exit("QA_OUT is required")
+open(out, "a").write(json.dumps(rec, sort_keys=True) + "\n")

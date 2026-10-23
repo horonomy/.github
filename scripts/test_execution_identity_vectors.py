@@ -79,6 +79,13 @@ class LiteralExpectationsTest(unittest.TestCase):
         by = {case["name"]: case["expect"]["correlates"] for case in self.document["correlations"]}
         self.assertTrue(by["same-session"])
         self.assertFalse(by["claude-vs-codex-session"])
+        for name in ("different-session", "different-agent", "different-host"):
+            self.assertFalse(by[name], name)
+
+    def test_empty_string_id_is_not_a_session(self) -> None:
+        case = _case(self.document, "valid", "empty-session-id")["expect"]
+        self.assertIsNone(case["cache_keys"]["session"])
+        self.assertEqual(case["narrowest_attributable_scope"], "unknown")
 
     def test_normalizers(self) -> None:
         by = {case["name"]: case["expect"] for case in self.document["normalizers"]}

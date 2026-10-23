@@ -65,7 +65,7 @@ jobs:
       - name: Run scripts/ tests
         run: python3 -m unittest discover -s scripts
       - name: Check execution identity vectors in a second language
-        run: node scripts/execution_identity_vectors_check.mjs governance/product/execution-identity-conformance-vectors.json
+        run: node scripts/execution_identity_vectors_check.mjs
       - name: Run agents/common/ tests
         run: python3 -m unittest discover -s agents/common
       - name: Run agents/adapters/codex/ tests

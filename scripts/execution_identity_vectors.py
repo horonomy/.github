@@ -64,6 +64,10 @@ VALID = [
     ("worktree-over-repo", _wire(repo_id="repo-1", worktree_id="wt-1")),
     ("verbatim-unicode-and-padding", _wire(provider_session_id=" Sess/ID:ü-1  ", agent_id="a:b/c")),
     ("unknown-field-ignored", _wire(provider_session_id="s-1", cost_center_id="cc-9")),
+    ("session-2", _wire(provider_session_id="s-2")),
+    ("agent-2", _wire(provider_session_id="s-1", agent_id="a-2")),
+    ("other-host", _wire(host_id="host-2", provider_session_id="s-1")),
+    ("empty-session-id", _wire(provider_session_id="")),
 ]
 
 # (name, document) — each must be refused by `from_wire`.
@@ -89,6 +93,9 @@ CORRELATIONS = [
     ("session-vs-agent", "session", "agent"),
     ("agent-vs-turn", "agent", "turn-task"),
     ("claude-vs-codex-session", "session", "turn-without-agent"),
+    ("different-session", "session", "session-2"),
+    ("different-agent", "agent", "agent-2"),
+    ("different-host", "session", "other-host"),
 ]
 
 # (name, provider, payload) — raw provider hook payloads for the normalizers.

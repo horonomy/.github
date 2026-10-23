@@ -420,7 +420,7 @@ no capturer can code around, not a capturer bug to fix.
 
 **Claude Code** (live-observed on 2.1.306, 2026-10-23; see
 [`execution-identity-live-evidence.md`](./execution-identity-live-evidence.md)) sends `session_id` on every
-hook event. A Task subagent's events (`SubagentStart`, `SubagentStop` and its own tool-call hooks) carry
+observed hook event type (eight were captured). A Task subagent's events (`SubagentStart`, `SubagentStop` and its own tool-call hooks) carry
 `agent_id` and `agent_type` **together with the parent's `session_id`**; the main session's events carry
 neither, so a subagent is named by the `(provider_session_id, agent_id)` pair. No event carries a parent link,
 so a subagent's `lineage_status` is `unknown`, not `child`. There is no `turn_id`; `prompt_id`, which is
