@@ -61,6 +61,10 @@ Product truth & integrity — Keeps what a product claims and what a product act
 > More systems are awaiting stars. Additional research tracks — governance runtimes, change intelligence, and workflow primitives for autonomous software — are uncharted for now.
 <!-- END GENERATED: products_section -->
 
+## Support Development
+
+This project is free and open source. If it is useful to you and you would like to, you can voluntarily support its development on [Ko-fi](https://ko-fi.com/chisanan232). Horonom is not yet an incorporated company: contributions go to the individual maintainer's personal Ko-fi account, not to a registered company. Support is optional, is not a charitable donation, and does not come with priority support or other benefits.
+
 ## Learn more
 
 <!-- BEGIN GENERATED: company_footer -->
