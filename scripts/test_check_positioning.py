@@ -104,6 +104,20 @@ class CircinusRegression(unittest.TestCase):
             check_text("Currently supports Claude Code", "availability", self.record, location="t"), []
         )
 
+    def test_true_negative_both_hosts_availability_clause(self) -> None:
+        text = (
+            "A local-first Agent Trust Runtime for AI agents. Circinus "
+            "tracks provenance and authority across agent transformations "
+            "and enforces at the point of action. Today's MVP runs on "
+            "Claude Code, with narrower Codex coverage."
+        )
+        self.assertEqual(check_text(text, "identity", self.record, location="t"), [])
+
+    def test_true_positive_codex_in_identity(self) -> None:
+        text = "A local-first Agent Trust Runtime for Codex."
+        findings = check_text(text, "identity", self.record, location="t")
+        self.assertTrue(any(f.term.lower() == "codex" for f in findings))
+
 
 class LibraRegression(unittest.TestCase):
     def setUp(self) -> None:
