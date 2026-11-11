@@ -19,12 +19,12 @@ boundary:
     - "Not an identity system — no SSO, no SCIM, no RBAC"
     - "Not a SIEM or a log-shipping pipeline"
     - "Not a Kubernetes-deployed service"
-    - "Not a runtime for every agent framework — Claude Code only, today"
+    - "Not a runtime for every agent framework — Claude Code and Codex only, today (Codex with narrower coverage)"
   source: {repo: "horonomy/circinus", path: "site/docs/limitations.md"}
 
 current_hosts:
-  text: "Today's MVP runs on Claude Code only."
-  hosts: ["Claude Code"]
+  text: "Today's MVP runs on Claude Code, with narrower Codex coverage."
+  hosts: ["Claude Code", "Codex"]
   source: {repo: "horonomy/circinus", path: "site/src/pages/index.js"}
 
 wedge:
@@ -47,5 +47,5 @@ forbidden_shorthand:
   - phrase: "Developers running Claude Code"
     reason: "States the ICP in host-exclusive terms instead of AI-agent-general terms with Claude Code as current availability"
 
-verified_at: "2026-10-08"
-verified_against: {repo: "horonomy/circinus", sha: "a7e3cde4edf143f9999d1c00d0269ceb725b0792"}
+verified_at: "2026-11-11"
+verified_against: {repo: "horonomy/circinus", sha: "8333b8fd5095d9fe7c6905b48f6adde5d67d7d07"}
